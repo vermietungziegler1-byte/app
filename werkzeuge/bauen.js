@@ -16,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 
 const OEFFENTLICH = path.join(__dirname, '..', 'public');
-const DATEIEN = ['schriften.css', 'app.css', 'app.js'];
+const DATEIEN = ['schriften.css', 'app.css', 'apple.css', 'app.js'];
 
 function pruefsumme(datei) {
   return crypto.createHash('sha256').update(fs.readFileSync(path.join(OEFFENTLICH, datei))).digest('hex').slice(0, 10);
