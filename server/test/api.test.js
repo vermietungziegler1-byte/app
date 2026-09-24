@@ -139,6 +139,19 @@ test('Rechnungen: Nummern sind eindeutig', async function () {
   assert.equal(a.json.liste.length, 0);
 });
 
+test('Rechnungen: Solarstrom hat eigene Nummern (JJJJ-PV-NN)', async function () {
+  let a = await louis.get('/api/rechnungen');
+  const nummer = a.json.naechste.pv;
+  assert.match(nummer, /^\d{4}-PV-01$/);
+  a = await louis.post('/api/rechnungen', { nummer: nummer, art: 'pv', objekt: 'Tribergle 22', brutto: 120.5,
+    inhalt: { standAlt: '1000', standNeu: '2500', preis: '8' } });
+  assert.equal(a.status, 200);
+  assert.equal(a.json.liste[0].art, 'pv');
+  assert.match(a.json.naechste.pv, /-PV-02$/);
+  assert.match(a.json.naechste.as, /-AS-01$/, 'Allgemeinstrom zählt getrennt');
+  await louis.del('/api/rechnungen/' + a.json.id);
+});
+
 test('Google: Rücksprung ohne passenden state wird abgelehnt', async function () {
   const a = await louis.get('/api/google/zurueck?code=abc&state=erfunden');
   assert.equal(a.status, 400);

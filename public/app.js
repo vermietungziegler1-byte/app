@@ -526,7 +526,7 @@
   let rg = null;             // Rechnungen: Absender, gespeicherte Liste, nächste Nummer (vom Server)
   let rgForm = null;         // Entwurf der Rechnung, die gerade bearbeitet wird
   let rgStammOffen = false;  // Absenderdaten aufgeklappt
-  let rgTab = 'as';          // as = Allgemeinstrom-Rechnung | nk = Nebenkosten-Schreiben
+  let rgTab = 'as';          // as = Allgemeinstrom | pv = Solarstrom | nk = Nebenkosten-Schreiben
   let nkForm = null;         // Entwurf des Nebenkosten-Schreibens
   let nkStammOffen = false;
   let alleAufgaben = null;   // alle offenen Todoist-Aufgaben - die eine Quelle für Heute, Objekte und Aufgaben
@@ -3263,6 +3263,7 @@
     if (ansicht === 'rechnungen') {
       html += '<div class="rg-tabs">'
         + '<button data-act="rg-tab" data-tab="as" class="' + (rgTab === 'as' ? 'aktiv' : '') + '">Allgemeinstrom</button>'
+        + '<button data-act="rg-tab" data-tab="pv" class="' + (rgTab === 'pv' ? 'aktiv' : '') + '">Solarstrom</button>'
         + '<button data-act="rg-tab" data-tab="nk" class="' + (rgTab === 'nk' ? 'aktiv' : '') + '">Nebenkosten</button>'
         + '</div>';
       html += rgTab === 'nk' ? nebenkostenAbschnitt() : rechnungenAbschnitt();
@@ -4040,19 +4041,58 @@
     return (t || data.objects[0] || { name: '' }).name;
   }
 
-  function rgNeu() {
+  // Was die Rechnungsarten unterscheidet: Kürzel, Name und die Texte auf dem Blatt
+  const RG_ARTEN = {
+    as: { kuerzel: 'AS', name: 'Allgemeinstrom', zaehler: 'Allgemeinstromzähler',
+      betreff: 'Rechnung über Stromlieferung für den Allgemeinbedarf',
+      einleitung: function (z, o) { return 'Für den im Zeitraum ' + z + ' gelieferten Strom für den Allgemeinbedarf der Liegenschaft ' + o + ' berechne ich wie folgt:'; },
+      posten: 'Lieferung Allgemeinstrom' },
+    pv: { kuerzel: 'PV', name: 'Solarstrom', zaehler: 'PV-Zähler',
+      betreff: 'Rechnung über die Lieferung von Solarstrom',
+      einleitung: function (z, o) { return 'Für den im Zeitraum ' + z + ' aus der Photovoltaikanlage der Liegenschaft ' + o + ' gelieferten Solarstrom berechne ich wie folgt:'; },
+      posten: 'Lieferung Solarstrom' }
+  };
+  function rgArt(f) { return RG_ARTEN[(f && f.art) || 'as'] ? (f && f.art) || 'as' : 'as'; }
+
+  function rgNeu(art) {
+    art = RG_ARTEN[art] ? art : 'as';
     const jahr = new Date().getFullYear();
     rgForm = {
-      id: null,
+      id: null, art: art,
       objekt: rgObjektStandard(),
       von: jahr + '-01-01', bis: jahr + '-12-31',
       zaehler: '', standAlt: '', standNeu: '', menge: '',
       preis: '', ustSatz: '19',
       extraText: '', extraBetrag: '',
-      nummer: (rg && rg.naechste && rg.naechste.as) || (jahr + '-AS-01'),
+      nummer: (rg && rg.naechste && rg.naechste[art]) || (jahr + '-' + RG_ARTEN[art].kuerzel + '-01'),
       datum: rgHeute(), frist: '14',
       empfaenger: rgStamm().empfaenger || ''
     };
+    // Solarstrom wird einmal im Jahr fürs Vorjahr abgerechnet: aus der letzten Rechnung weitermachen
+    if (art === 'pv') {
+      const letzte = rg && rg.liste.filter(function (e) { return e.art === 'pv'; })
+        .sort(function (a, b) { return String(b.inhalt && b.inhalt.bis || b.datum).localeCompare(String(a.inhalt && a.inhalt.bis || a.datum)); })[0];
+      if (letzte) rgFolgejahr(letzte);
+      else { rgForm.von = (jahr - 1) + '-01-01'; rgForm.bis = (jahr - 1) + '-12-31'; }
+    }
+  }
+
+  // Aus einer gespeicherten Rechnung die fürs nächste Jahr vorbereiten:
+  // Zeitraum ein Jahr weiter, alter Stand = letzter neuer Stand, Preis und Empfänger bleiben
+  function rgFolgejahr(e) {
+    const alt = e.inhalt || {};
+    const art = RG_ARTEN[e.art] ? e.art : 'as';
+    const plusJahr = function (d) {
+      return /^\d{4}-/.test(d || '') ? (Number(d.slice(0, 4)) + 1) + d.slice(4) : d;
+    };
+    rgForm = Object.assign({}, alt, {
+      id: null, art: art,
+      objekt: e.objekt || alt.objekt,
+      von: plusJahr(alt.von), bis: plusJahr(alt.bis),
+      standAlt: alt.standNeu || '', standNeu: '', menge: '',
+      nummer: (rg && rg.naechste && rg.naechste[art]) || '',
+      datum: rgHeute()
+    });
   }
 
   async function rgLaden() {
@@ -4061,9 +4101,9 @@
       rg = { stamm: Object.assign({}, RG_STAMM_LEER, e.stamm || {}),
              nkStamm: Object.assign({}, NK_STAMM_LEER, e.nkStamm || {}),
              liste: e.liste || [], naechste: e.naechste || {} };
-      if (!rgForm) rgNeu();
+      if (!rgForm || (!rgForm.id && rgArt(rgForm) !== (rgTab === 'nk' ? 'as' : rgTab))) rgNeu(rgTab === 'nk' ? 'as' : rgTab);
       else if (!rgForm.id) {
-        if (rg.naechste.as) rgForm.nummer = rg.naechste.as;
+        if (rg.naechste[rgArt(rgForm)]) rgForm.nummer = rg.naechste[rgArt(rgForm)];
         if (!rgForm.empfaenger.trim()) rgForm.empfaenger = rg.stamm.empfaenger;
       }
       if (!nkForm) nkNeu();
@@ -4097,8 +4137,9 @@
   }
 
   function rechnungenAbschnitt() {
-    if (!rgForm) rgNeu();
+    if (!rgForm || rgArt(rgForm) !== rgTab) rgNeu(rgTab);
     const f = rgForm, s = rgStamm();
+    const art = RG_ARTEN[rgArt(f)];
     const r = rgRechnen(f);
     const feld = function (key, label, typ, extra) {
       return '<label class="feldchen"><span>' + label + '</span>'
@@ -4111,7 +4152,7 @@
     };
 
     let html = '<div class="tafel"><h3>' + (f.id ? 'Rechnung ' + esc(f.nummer) : 'Neue Rechnung')
-      + ' <span class="anzahl">Allgemeinstrom</span></h3>';
+      + ' <span class="anzahl">' + art.name + '</span></h3>';
     html += '<div class="rg-grid">'
       + '<label class="feldchen breit"><span>Objekt</span><select data-rg="objekt">'
       + data.objects.map(function (o) {
@@ -4144,7 +4185,7 @@
       + '</div>';
     html += '<div class="rg-summe" id="rg-summe">' + rgSummeHtml(r) + '</div>';
     html += '<div class="modal-actions" style="margin-top:14px">'
-      + (f.id ? '<button data-act="rg-neu">Neue Rechnung</button>' : '')
+      + (f.id ? '<button data-act="rg-neu" data-art="' + rgArt(f) + '">Neue Rechnung</button>' : '')
       + '<span class="spacer"></span>'
       + '<button data-act="rg-vorschau">Vorschau &amp; Drucken</button>'
       + '<button class="primary" data-act="rg-speichern">' + (f.id ? 'Änderung speichern' : 'Speichern') + '</button>'
@@ -4173,7 +4214,7 @@
     }
     html += '</div>';
 
-    const gespeichert = rg ? rg.liste.filter(function (e) { return (e.art || 'as') === 'as'; }) : [];
+    const gespeichert = rg ? rg.liste.filter(function (e) { return (e.art || 'as') === rgArt(f); }) : [];
     html += '<div class="tafel rg-liste"><h3>Gespeicherte Rechnungen'
       + (gespeichert.length ? ' <span class="anzahl">' + gespeichert.length + '</span>' : '') + '</h3>';
     if (!rg) html += '<div class="unit-type">Wird geladen …</div>';
@@ -4183,6 +4224,7 @@
         + '<span class="num">' + rgEur(e.brutto) + '</span>'
         + '<span class="wer">' + rgDatum(e.datum) + (e.wer ? ' · ' + esc(e.wer) : '') + '</span>'
         + '<span class="knoepfe"><button class="tiny" data-act="rg-laden" data-id="' + e.id + '">Öffnen</button>'
+        + '<button class="tiny" data-act="rg-folgejahr" data-id="' + e.id + '" title="Neue Rechnung mit den Daten dieser, ein Jahr weiter">Fürs nächste Jahr</button>'
         + '<button class="tiny danger" data-act="rg-loeschen" data-id="' + e.id + '">Löschen</button></span></div>';
     });
     html += '</div>';
@@ -4227,7 +4269,7 @@
     if (!r.preis) { toast('Arbeitspreis fehlt'); return; }
     try {
       const e = await api('rechnungen', { method: 'POST',
-        body: { id: f.id, art: 'as', nummer: f.nummer.trim(), objekt: f.objekt, datum: f.datum, brutto: r.brutto, inhalt: f } });
+        body: { id: f.id, art: rgArt(f), nummer: f.nummer.trim(), objekt: f.objekt, datum: f.datum, brutto: r.brutto, inhalt: f } });
       if (!rg) rg = { stamm: Object.assign({}, RG_STAMM_LEER), nkStamm: Object.assign({}, NK_STAMM_LEER), liste: [], naechste: {} };
       rg.liste = e.liste; rg.naechste = e.naechste;
       rgForm.id = e.id;
@@ -4238,7 +4280,7 @@
   function rgAusListe(id) {
     const e = rg && rg.liste.find(function (x) { return String(x.id) === String(id); });
     if (!e) return;
-    rgForm = Object.assign({}, e.inhalt || {}, { id: e.id, nummer: e.nummer, objekt: e.objekt, datum: e.datum });
+    rgForm = Object.assign({}, e.inhalt || {}, { id: e.id, art: e.art || 'as', nummer: e.nummer, objekt: e.objekt, datum: e.datum });
     if (!rgForm.empfaenger) rgForm.empfaenger = '';
     render(); window.scrollTo(0, 0);
   }
@@ -4249,7 +4291,7 @@
     try {
       const a = await api('rechnungen/' + id, { method: 'DELETE' });
       rg.liste = a.liste; rg.naechste = a.naechste;
-      if (rgForm && String(rgForm.id) === String(id)) rgNeu();
+      if (rgForm && String(rgForm.id) === String(id)) rgNeu(rgArt(rgForm));
       if (nkForm && String(nkForm.id) === String(id)) nkNeu();
       toast(art === 'nk' ? 'Schreiben gelöscht' : 'Rechnung gelöscht'); render();
     } catch (err) { toast(err.message); }
@@ -4258,6 +4300,7 @@
   // Das fertige Blatt (DIN A4) — dieselbe Ansicht für Vorschau und Druck
   function rgBlattHtml(f, s) {
     const r = rgRechnen(f);
+    const art = RG_ARTEN[rgArt(f)];
     const zeitraum = rgDatum(f.von) + ' – ' + rgDatum(f.bis);
     const absender = [s.name, s.strasse, s.ort].filter(Boolean).map(esc).join(' · ');
     const steuer = s.ustId ? ['USt-IdNr.', s.ustId] : ['Steuernummer', s.steuernummer];
@@ -4271,16 +4314,15 @@
     const konto = [s.kontoinhaber || s.name, s.iban, s.bank].filter(Boolean).map(esc).join(' · ');
     return '<div class="absenderzeile">' + (absender || 'Absender fehlt — unter Rechnungen › Absender eintragen') + '</div>'
       + '<div class="anschrift"><div class="empf">' + esc(f.empfaenger) + '</div><div class="meta">' + meta + '</div></div>'
-      + '<h2 class="betreff">Rechnung über Stromlieferung für den Allgemeinbedarf – ' + esc(f.objekt) + '</h2>'
-      + '<p>Für den im Zeitraum ' + zeitraum + ' gelieferten Strom für den Allgemeinbedarf der Liegenschaft '
-      + esc(f.objekt) + ' berechne ich wie folgt:</p>'
+      + '<h2 class="betreff">' + art.betreff + ' – ' + esc(f.objekt) + '</h2>'
+      + '<p>' + art.einleitung(zeitraum, esc(f.objekt)) + '</p>'
       + (r.mitZaehler
           ? '<table class="stand"><tr><th>Zähler</th><th>Stand alt</th><th>Stand neu</th><th>Verbrauch</th></tr>'
-            + '<tr><td>' + esc(f.zaehler || 'Allgemeinstromzähler') + '</td><td>' + rgKwh(r.alt) + ' kWh</td>'
+            + '<tr><td>' + esc(f.zaehler || art.zaehler) + '</td><td>' + rgKwh(r.alt) + ' kWh</td>'
             + '<td>' + rgKwh(r.neu) + ' kWh</td><td>' + rgKwh(r.neu - r.alt) + ' kWh</td></tr></table>'
           : '')
       + '<table class="posten"><tr><th>Leistung</th><th class="z">Menge</th><th class="z">Einzelpreis</th><th class="z">Betrag netto</th></tr>'
-      + '<tr><td>Lieferung Allgemeinstrom<span class="klein">Abrechnungszeitraum ' + zeitraum + '</span></td>'
+      + '<tr><td>' + art.posten + '<span class="klein">Abrechnungszeitraum ' + zeitraum + '</span></td>'
       + '<td class="z">' + rgKwh(r.menge) + ' kWh</td><td class="z">' + rgCt(r.preis) + ' ct/kWh</td><td class="z">' + rgEur(r.strom) + '</td></tr>'
       + (r.extra || f.extraText
           ? '<tr><td>' + esc(f.extraText || 'Weitere Position') + '</td><td class="z">1</td>'
@@ -4288,8 +4330,11 @@
           : '')
       + '</table>'
       + '<table class="summen"><tr><td>Summe netto</td><td>' + rgEur(r.netto) + '</td></tr>'
-      + '<tr><td>zzgl. ' + r.satz.toLocaleString('de-DE') + ' % Umsatzsteuer</td><td>' + rgEur(r.ust) + '</td></tr>'
+      + (r.satz
+          ? '<tr><td>zzgl. ' + r.satz.toLocaleString('de-DE') + ' % Umsatzsteuer</td><td>' + rgEur(r.ust) + '</td></tr>'
+          : '')
       + '<tr class="gesamt"><td>Rechnungsbetrag</td><td>' + rgEur(r.brutto) + '</td></tr></table>'
+      + (r.satz ? '' : '<p class="klein">Gemäß § 19 UStG wird keine Umsatzsteuer berechnet.</p>')
       + '<p class="zahlung">Bitte überweisen Sie den Rechnungsbetrag von <b>' + rgEur(r.brutto) + '</b> bis zum <b>'
       + faelligText + '</b> unter Angabe der Rechnungsnummer ' + esc(f.nummer) + '.'
       + (konto ? '<br>' + konto : '') + '</p>'
@@ -6431,7 +6476,11 @@
       ansicht = 'rechnungen'; render(); window.scrollTo(0, 0);
       if (!rg) rgLaden();
     }
-    else if (act === 'rg-tab') { rgTab = el.getAttribute('data-tab') || 'as'; render(); window.scrollTo(0, 0); }
+    else if (act === 'rg-tab') {
+      rgTab = el.getAttribute('data-tab') || 'as';
+      if (rgTab !== 'nk' && (!rgForm || rgArt(rgForm) !== rgTab)) rgNeu(rgTab);
+      render(); window.scrollTo(0, 0);
+    }
     else if (act === 'nk-stamm') { nkStammOffen = !nkStammOffen; render(); }
     else if (act === 'nk-stamm-speichern') { nkStammSpeichern(); }
     else if (act === 'nk-vorschau') { nkVorschau(); }
@@ -6446,7 +6495,11 @@
     else if (act === 'rg-stamm-speichern') { rgStammSpeichern(); }
     else if (act === 'rg-vorschau') { rgVorschau(); }
     else if (act === 'rg-speichern') { rgSpeichern(); }
-    else if (act === 'rg-neu') { rgNeu(); render(); window.scrollTo(0, 0); }
+    else if (act === 'rg-neu') { rgNeu(el.getAttribute('data-art') || rgTab); render(); window.scrollTo(0, 0); }
+    else if (act === 'rg-folgejahr') {
+      const e = rg && rg.liste.find(function (x) { return String(x.id) === el.getAttribute('data-id'); });
+      if (e) { rgFolgejahr(e); toast('Neue Rechnung vorbereitet — nur noch den neuen Zählerstand eintragen'); render(); window.scrollTo(0, 0); }
+    }
     else if (act === 'rg-laden') { rgAusListe(el.getAttribute('data-id')); }
     else if (act === 'rg-loeschen') { rgLoeschen(el.getAttribute('data-id')); }
     else if (act === 'seite') { seiteOffen = true; render(); }
