@@ -248,7 +248,8 @@ if [ "$MODUS" = "einrichten" ]; then
   command -v git >/dev/null || { echo "Installiere git …"; apt-get install -y -q git >/dev/null; }
   mkdir -p "$SSH_ORDNER" && chmod 700 "$SSH_ORDNER"
   if [ ! -f "$SCHLUESSEL" ]; then
-    ssh-keygen -q -t ed25519 -N '' -C "vermietung-server" -f "$SCHLUESSEL"
+    ssh-keygen -q -t ed25519 -N '' -C "vermietung-server" -f "$SCHLUESSEL" \
+      || { fehler "Schlüssel ließ sich nicht erzeugen"; exit 1; }
     ok "Schlüssel für GitHub erzeugt"
   fi
   if ! grep -q "Host github-vermietung" "$SSH_ORDNER/config" 2>/dev/null; then
