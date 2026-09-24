@@ -20,11 +20,11 @@ function freierPort() {
   });
 }
 
-async function serverStarten() {
+async function serverStarten(zusatz) {
   const port = await freierPort();
   const daten = fs.mkdtempSync(path.join(os.tmpdir(), 'vermietung-test-'));
   const kind = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-    env: Object.assign({}, process.env, { PORT: String(port), DATEN: daten }),
+    env: Object.assign({}, process.env, { PORT: String(port), DATEN: daten }, zusatz || {}),
     stdio: ['ignore', 'pipe', 'pipe']
   });
   let ausgabe = '';
