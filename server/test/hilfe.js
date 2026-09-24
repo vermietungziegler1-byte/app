@@ -97,6 +97,11 @@ function fakeTodoist(aufgaben) {
       if (req.method === 'GET' && req.url.startsWith('/sections')) {
         return res.end(JSON.stringify({ results: [], next_cursor: null }));
       }
+      const z = /^\/tasks\/([^/?]+)\/(close|reopen)$/.exec(req.url);
+      if (req.method === 'POST' && z) {
+        aenderungen.push({ id: z[1], aktion: z[2] });
+        res.statusCode = 204; return res.end();
+      }
       const m = /^\/tasks\/([^/?]+)$/.exec(req.url);
       if (req.method === 'POST' && m) {
         const a = aufgaben.find(function (x) { return String(x.id) === m[1]; });
