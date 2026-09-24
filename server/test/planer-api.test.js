@@ -119,3 +119,35 @@ test('Tagesplan-Einstellungen: nur der Verwalter ändert sie, Unsinn wird abgefa
     await server.stoppen();
   }
 });
+
+test('Automatik plant einmal am Tag, die Mitteilung bekommt eine kurze Zeile', async function () {
+  const fs = require('fs'), os = require('os'), path = require('path');
+  const aufgaben = [
+    { id: '1', content: 'Stadtwerke anrufen', priority: 4, due: { date: '2030-01-02', is_recurring: false } },
+    { id: '2', content: 'Nebenkosten wegschicken', priority: 1, due: { date: '2030-01-03', is_recurring: false } }
+  ];
+  const todoist = await fakeTodoist(aufgaben);
+  // Den Baustein direkt laden — mit eigener Wegwerf-Datenbank und dem nachgebauten Todoist
+  process.env.DATEN = fs.mkdtempSync(path.join(os.tmpdir(), 'vermietung-auto-'));
+  process.env.TODOIST_BASIS = todoist.basis;
+  try {
+    const { einstellungSetzen } = require('../lib/kern');
+    const planer = require('../lib/planer');
+    einstellungSetzen('todoist_token', 'test');
+
+    assert.equal(await planer.automatischPlanen(MONTAG), null, 'ohne Automatik passiert nichts');
+    einstellungSetzen('planer', JSON.stringify({ automatisch: true }));
+
+    const [a, b] = await Promise.all([planer.automatischPlanen(MONTAG), planer.automatischPlanen(MONTAG)]);
+    assert.equal(a.bloecke.length, 2);
+    assert.deepEqual(b, a);
+    assert.equal(todoist.aenderungen.length, 2, 'gleichzeitige Aufrufe planen nur einmal');
+    await planer.automatischPlanen(MONTAG);
+    assert.equal(todoist.aenderungen.length, 2, 'am selben Tag kein zweites Mal');
+
+    assert.equal(planer.planKurztext(a.bloecke, 5),
+      '08:00 Stadtwerke anrufen · 08:25 Nebenkosten wegschicken · 5 Aufgaben auf die nächsten Tage verteilt');
+  } finally {
+    todoist.stoppen();
+  }
+});

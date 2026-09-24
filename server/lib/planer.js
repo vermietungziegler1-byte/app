@@ -176,6 +176,48 @@ async function rueckgaengig(datum) {
   return { zurueck: letzte.aenderungen.length - fehler.length, fehler: fehler };
 }
 
+// ---------------- Automatik ----------------
+// Ist "jeden Morgen automatisch" eingeschaltet, plant der Server einmal am Tag
+// selbst — spätestens eine Stunde vor Arbeitsbeginn, die Morgenmitteilung wartet darauf.
+
+let automatikLaeuft = null;
+async function automatischPlanen(datum) {
+  const e = planerEinstellungen();
+  if (!e.automatisch || !einstellung('todoist_token')) return null;
+  // Läuft die Planung gerade? Dann auf dasselbe Ergebnis warten statt ein zweites Mal zu planen
+  if (automatikLaeuft) return automatikLaeuft;
+  if (einstellung('planer_auto_datum') === datum) {
+    try { return JSON.parse(einstellung('planer_auto_ergebnis') || 'null'); } catch (x) { return null; }
+  }
+  automatikLaeuft = (async function () {
+    einstellungSetzen('planer_auto_datum', datum);   // vorher setzen: bei Fehlern nicht jede Minute neu versuchen
+    const r = await uebernehmen(datum, 'Automatik');
+    const kurz = { bloecke: r.plan.bloecke, verschoben: r.plan.verschoben.length, fehler: r.fehler.length };
+    einstellungSetzen('planer_auto_ergebnis', JSON.stringify(kurz));
+    return kurz;
+  })();
+  try { return await automatikLaeuft; } finally { automatikLaeuft = null; }
+}
+
+setInterval(function () {
+  const t = berlinJetzt();
+  const e = planerEinstellungen();
+  if (!e.automatisch) return;
+  if (kern.minuten(t.zeit) < kern.minuten(e.start) - 60 || kern.minuten(t.zeit) >= kern.minuten(e.ende)) return;
+  automatischPlanen(t.datum).catch(function (fehler) { console.log('Automatische Tagesplanung fehlgeschlagen:', fehler.message); });
+}, 60 * 1000).unref();
+
+// Eine Zeile für die Morgenmitteilung: "08:00 Stadtwerke anrufen · 08:25 Nebenkosten … (+3) · 5 auf die nächsten Tage"
+function planKurztext(bloecke, verschoben) {
+  const teile = [];
+  if (bloecke.length) {
+    const erste = bloecke.slice(0, 3).map(function (b) { return b.von + ' ' + b.inhalt; }).join(' · ');
+    teile.push(erste + (bloecke.length > 3 ? ' (+' + (bloecke.length - 3) + ')' : ''));
+  }
+  if (verschoben) teile.push(verschoben + (verschoben === 1 ? ' Aufgabe' : ' Aufgaben') + ' auf die nächsten Tage verteilt');
+  return teile.join(' · ');
+}
+
 // ---------------- Schnittstellen ----------------
 
 app.get('/api/plan', nurAngemeldet, mitFehler(async function (req, res) {
@@ -200,4 +242,4 @@ app.put('/api/plan/einstellungen', nurAngemeldet, nurVerwalter, function (req, r
   res.json(e);
 });
 
-module.exports = { router: app, vorschlag, uebernehmen, rueckgaengig, planerEinstellungen };
+module.exports = { router: app, vorschlag, uebernehmen, rueckgaengig, planerEinstellungen, automatischPlanen, planKurztext };
