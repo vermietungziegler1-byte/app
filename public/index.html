@@ -302,7 +302,7 @@
   }
   #app .zeitachse { position: relative; }
   /* Luft oben, damit die Beschriftung der obersten Stunde nicht abgeschnitten wird */
-  #app .zeitrahmen { padding-top: 9px; }
+  #app .zeitrahmen { padding-top: 9px; isolation: isolate; }   /* Jetzt-Linie und Termine bleiben unter Fenstern */
   #app .kalleer {
     margin-top: 12px; padding: 14px 0; text-align: center; color: var(--muted); font-size: 13px;
     border-top: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft);
@@ -7405,8 +7405,8 @@
 
     } else if (modal.kind === 'sicherung') {
       body = '<h2>Daten sichern</h2>'
-        + '<div class="hint">Downloads sind in diesem Fenster gesperrt. Kopier den Text und speichere ihn '
-        + 'in einer Textdatei — zum Beispiel im Drive-Ordner. Zum Zurückholen fügst du ihn unten wieder ein.</div>'
+        + '<div class="hint">Eine zusätzliche Kopie deiner Daten für dieses Gerät — normalerweise nicht nötig, '
+        + 'denn der Server sichert jede Nacht selbst (Menü → Server-Sicherung). Zum Zurückholen fügst du den Text unten wieder ein.</div>'
         + '<div class="field"><label>Deine Daten</label>'
         + '<textarea id="m-json" rows="6" readonly>' + esc(JSON.stringify(data)) + '</textarea></div>'
         + '<div class="modal-actions" style="justify-content:flex-start;margin-top:0">'
@@ -7449,7 +7449,7 @@
         + '<button data-act="pw-aendern">Eigenes Passwort ändern</button>'
         + '<div class="modal-actions"><div class="spacer"></div>'
         + '<button data-act="close">Schließen</button></div>';
-    } else if (modal.kind === 'sicherung') {
+    } else if (modal.kind === 'serversicherung') {
       const si = sicherungInfo;
       const zeit = function (ms) {
         return ms ? new Date(ms).toLocaleString('de-DE', { day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }) + ' Uhr' : 'noch nie';
@@ -7469,7 +7469,8 @@
         body += '<div class="docempty">Wird geladen …</div>';
       } else {
         body += '<div class="doclist">'
-          + zeile('Auf dem Server', si.lokal, si.lokalFehler, si.dateien.length + ' Sicherungen vorhanden')
+          + zeile('Auf dem Server', si.lokal, si.lokalFehler,
+              si.dateien.length + (si.dateien.length === 1 ? ' Sicherung' : ' Sicherungen') + ' vorhanden')
           + zeile('In Google Drive', si.drive,
               si.googleVerbunden ? si.driveFehler : 'Erst das Postfach verbinden (Menü → Postfach), dann geht es auch in Drive.',
               '')
@@ -7522,7 +7523,7 @@
     const titel = {
       unit: 'Einheit', object: 'Objekt', strom: 'Stromabrechnung', konto: 'Mietkonto',
       wartung: 'Prüfungen', aufgabe: 'Aufgabe', todoist: 'Todoist', zugaenge: 'Zugänge',
-      sicherung: 'Daten sichern', staende: 'Verlauf', menue: 'Menü', google: 'Postfach',
+      sicherung: 'Daten sichern', serversicherung: 'Server-Sicherung', staende: 'Verlauf', menue: 'Menü', google: 'Postfach',
       schreiben: 'Schreiben', nk: 'Betriebskosten', auszug: 'Kontoauszug', beleg: 'Beleg ablegen',
       schnell: 'Aufgabe hinzufügen'
     }[modal.kind] || '';
@@ -8322,8 +8323,8 @@
     }
     else if (act === 'verlauf-laden') { verlaufLaden(el.getAttribute('data-id')); }
     else if (act === 'server-sicherung') {
-      modal = { kind: 'sicherung' }; render();
-      api('sicherung').then(function (i) { sicherungInfo = i; if (modal && modal.kind === 'sicherung') render(); })
+      modal = { kind: 'serversicherung' }; render();
+      api('sicherung').then(function (i) { sicherungInfo = i; if (modal && modal.kind === 'serversicherung') render(); })
         .catch(function (e) { toast(e.message); });
     }
     else if (act === 'sicherung-jetzt') {
@@ -8336,7 +8337,7 @@
         })
         .then(function (i) { sicherungInfo = i; })
         .catch(function (e) { toast(e.message); })
-        .then(function () { sicherungLaeuftJetzt = false; if (modal && modal.kind === 'sicherung') render(); });
+        .then(function () { sicherungLaeuftJetzt = false; if (modal && modal.kind === 'serversicherung') render(); });
     }
     else if (act === 'zugaenge') {
       modal = { kind: 'zugaenge' }; render();
