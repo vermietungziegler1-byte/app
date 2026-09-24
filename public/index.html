@@ -2263,6 +2263,7 @@
     if (!antwort.ok) {
       const fehler = new Error((inhalt && inhalt.fehler) || ('Fehler ' + antwort.status));
       fehler.status = antwort.status;
+      fehler.inhalt = inhalt;
       throw fehler;
     }
     return inhalt;
@@ -3341,22 +3342,41 @@
     eingabe.click();
   }
 
-  async function save(msg) {
+  async function save(msg, erzwingen) {
     if (phase !== 'app') return;
     if (speicherLaeuft) { nochmalSpeichern = true; return; }
     speicherLaeuft = true;
+    let erzwungenNochmal = false;
     try {
-      const res = await api('data', { method: 'PUT', body: { data: data } });
+      // basis: der Stand, auf dem diese Änderung aufbaut. Hat inzwischen jemand
+      // anderes gespeichert, lehnt der Server mit 409 ab statt still zu überschreiben.
+      const res = await api('data', { method: 'PUT', body: {
+        data: data, basis: zuletztGeaendert ? zuletztGeaendert.wann : null, erzwingen: !!erzwingen
+      } });
       zuletztGeaendert = { wer: res.wer, wann: res.wann };
       letzteSpeicher = ['Server'];
       if (msg) toast(msg);
     } catch (e) {
       letzteSpeicher = [];
       if (e.status === 401) { phase = 'anmelden'; render(); toast('Bitte neu anmelden'); }
+      else if (e.status === 409) {
+        nochmalSpeichern = false;
+        const wer = (e.inhalt && e.inhalt.wer) || 'Jemand anderes';
+        const wann = e.inhalt && e.inhalt.wann ? new Date(e.inhalt.wann).toLocaleString('de-DE') : '';
+        if (confirm(wer + ' hat ' + (wann ? 'am ' + wann + ' ' : '') + 'inzwischen gespeichert.\n\n'
+          + 'OK: Deinen Stand trotzdem speichern (die andere Änderung wird überschrieben, bleibt aber im Verlauf).\n'
+          + 'Abbrechen: Den neuen Stand vom Server laden (deine letzte Änderung geht verloren).')) {
+          erzwungenNochmal = true;
+        } else {
+          try { await datenHolen(); render(); toast('Neuer Stand geladen'); }
+          catch (fehler) { toast('Laden fehlgeschlagen: ' + fehler.message); }
+        }
+      }
       else toast('Nicht gespeichert: ' + e.message);
     } finally {
       speicherLaeuft = false;
-      if (nochmalSpeichern) { nochmalSpeichern = false; save(); }
+      if (erzwungenNochmal) save(msg, true);
+      else if (nochmalSpeichern) { nochmalSpeichern = false; save(); }
     }
   }
 
@@ -7328,7 +7348,8 @@
               + (nu.rolle === 'verwalter' ? 'Verwalter · ' : '')
               + 'seit ' + new Date(nu.angelegt).toLocaleDateString('de-DE') + '</div></div>'
               + (nu.name === nutzerName || nutzerRolle !== 'verwalter' ? ''
-                  : '<button class="tiny ghost" data-act="nutzer-weg" data-name="' + esc(nu.name) + '">Entfernen</button>')
+                  : '<button class="tiny ghost" data-act="nutzer-pw" data-name="' + esc(nu.name) + '">Passwort neu</button>'
+                    + '<button class="tiny ghost" data-act="nutzer-weg" data-name="' + esc(nu.name) + '">Entfernen</button>')
               + '</div>';
           }).join('') : '<div class="docempty">Wird geladen …</div>') + '</div>'
         + (nutzerRolle !== 'verwalter' ? '' : '<div class="divider"></div>'
@@ -7339,6 +7360,12 @@
         + '<button class="primary" data-act="nutzer-neu">Zugang anlegen</button>'
         + '<div class="legal">Gib die Zugangsdaten persönlich weiter. Ein entfernter Zugang wird sofort '
         + 'abgemeldet und kommt nicht mehr rein.</div>')
+        + '<div class="divider"></div>'
+        + '<div class="two">'
+        + f('Bisheriges Passwort', '<input type="password" id="pw-alt" autocomplete="current-password">')
+        + f('Neues Passwort', '<input type="password" id="pw-neu" placeholder="mind. 8 Zeichen" autocomplete="new-password">')
+        + '</div>'
+        + '<button data-act="pw-aendern">Eigenes Passwort ändern</button>'
         + '<div class="modal-actions"><div class="spacer"></div>'
         + '<button data-act="close">Schließen</button></div>';
     } else if (modal.kind === 'staende') {
@@ -8196,6 +8223,24 @@
       nutzerAnlegen(name, pw);
     }
     else if (act === 'nutzer-weg') { nutzerLoeschen(el.getAttribute('data-name')); }
+    else if (act === 'nutzer-pw') {
+      const wer = el.getAttribute('data-name');
+      const neu = prompt('Neues Passwort für ' + wer + ' (mind. 8 Zeichen):');
+      if (neu === null) return;
+      if (neu.length < 8) { toast('Mindestens acht Zeichen'); return; }
+      api('users/' + encodeURIComponent(wer) + '/passwort', { method: 'PUT', body: { passwort: neu } })
+        .then(function () { toast('Passwort für ' + wer + ' geändert'); })
+        .catch(function (e) { toast(e.message); });
+    }
+    else if (act === 'pw-aendern') {
+      // Passwörter ungekürzt nehmen — Leerzeichen am Rand zählen mit
+      const roh = function (id) { const f = root.querySelector('#' + id); return f ? f.value : ''; };
+      const alt = roh('pw-alt'), neu = roh('pw-neu');
+      if (neu.length < 8) { toast('Mindestens acht Zeichen'); return; }
+      api('passwort', { method: 'POST', body: { alt: alt, neu: neu } })
+        .then(function () { toast('Passwort geändert'); modal = null; render(); })
+        .catch(function (e) { toast(e.message); });
+    }
 
 
     else if (act === 'miete-monat') {

@@ -59,15 +59,54 @@ db.exec(`
 try { db.exec("ALTER TABLE nutzer ADD COLUMN rolle TEXT NOT NULL DEFAULT 'nutzer'"); }
 catch (e) { /* Spalte ist schon da */ }
 
+// ---------------- Hilfen ----------------
+// Anfragen an fremde Dienste bekommen ein Zeitlimit, sonst hängt die App mit, wenn ein Dienst hängt.
+const ZEITLIMIT = 20000;
+function holen(url, optionen) {
+  return fetch(url, Object.assign({ signal: AbortSignal.timeout(ZEITLIMIT) }, optionen || {}));
+}
+
+// Todoist liefert Listen mal direkt, mal als { results: [...] }
+function alsListe(antwort) {
+  return Array.isArray(antwort) ? antwort : (antwort && antwort.results) || [];
+}
+
+function htmlSicher(text) {
+  return String(text).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+
+// Für Schnittstellen, die fremde Dienste fragen: Fehler landen als 502 mit Klartext beim Browser.
+function mitFehler(fn) {
+  return async function (req, res) {
+    try { await fn(req, res); }
+    catch (e) { res.status(e.status && e.status < 500 ? e.status : 502).json({ fehler: e.message }); }
+  };
+}
+
 // ---------------- Passwörter ----------------
 // scrypt kommt in Node mit, dadurch keine zusätzliche Abhängigkeit.
+// Asynchron, damit eine Anmeldung nicht den ganzen Server anhält.
+const SCRYPT_OPTIONEN = { N: 16384, r: 8, p: 1 };
 function hashen(passwort, salz) {
-  return crypto.scryptSync(passwort, salz, 64, { N: 16384, r: 8, p: 1 }).toString('hex');
+  return new Promise(function (ok, fehler) {
+    crypto.scrypt(passwort, salz, 64, SCRYPT_OPTIONEN, function (e, schluessel) {
+      if (e) fehler(e); else ok(schluessel.toString('hex'));
+    });
+  });
 }
-function passwortSetzen(name, passwort, rolle) {
+async function passwortSetzen(name, passwort, rolle) {
   const salz = crypto.randomBytes(16).toString('hex');
+  const hash = await hashen(passwort, salz);
   db.prepare('INSERT OR REPLACE INTO nutzer (name, salz, hash, angelegt, rolle) VALUES (?,?,?,?,?)')
-    .run(name, salz, hashen(passwort, salz), Date.now(), rolle || 'nutzer');
+    .run(name, salz, hash, Date.now(), rolle || 'nutzer');
+}
+// Nur das Passwort tauschen — Rolle und Anlagedatum bleiben
+async function passwortAendern(name, passwort) {
+  const salz = crypto.randomBytes(16).toString('hex');
+  const hash = await hashen(passwort, salz);
+  db.prepare('UPDATE nutzer SET salz = ?, hash = ? WHERE lower(name) = lower(?)').run(salz, hash, name);
 }
 
 function rolleVon(name) {
@@ -78,14 +117,16 @@ function rolleVon(name) {
 // Nur der Verwalter darf Zugänge vergeben oder entziehen.
 function nurVerwalter(req, res, next) {
   if (rolleVon(req.nutzer) !== 'verwalter') {
-    return res.status(403).json({ fehler: 'Nur der Verwalter darf Zugänge ändern' });
+    return res.status(403).json({ fehler: 'Das darf nur der Verwalter' });
   }
   next();
 }
-function passwortPruefen(name, passwort) {
+// Auch bei unbekanntem Namen wird gerechnet, sonst verrät die Antwortzeit, welche Namen es gibt.
+const BLIND_SALZ = crypto.randomBytes(16).toString('hex');
+async function passwortPruefen(name, passwort) {
   const n = db.prepare('SELECT * FROM nutzer WHERE lower(name) = lower(?)').get(name);
+  const versuch = Buffer.from(await hashen(passwort, n ? n.salz : BLIND_SALZ), 'hex');
   if (!n) return null;
-  const versuch = Buffer.from(hashen(passwort, n.salz), 'hex');
   const echt = Buffer.from(n.hash, 'hex');
   if (versuch.length !== echt.length) return null;
   return crypto.timingSafeEqual(versuch, echt) ? n : null;
@@ -112,11 +153,26 @@ function sitzungLesen(id) {
 }
 setInterval(function () {
   db.prepare('DELETE FROM sitzungen WHERE laeuft < ?').run(Date.now());
+  // Alte Fehlversuche vergessen, sonst wächst die Liste endlos
+  const grenze = Date.now() - 15 * 60 * 1000;
+  versuche.forEach(function (eintrag, ip) { if (eintrag.zeit < grenze) versuche.delete(ip); });
 }, 1000 * 60 * 60).unref();
 
 // ---------------- Anwendung ----------------
 const app = express();
+app.disable('x-powered-by');
 if (HINTER_PROXY) app.set('trust proxy', 1);
+
+// Grundlegende Schutz-Kopfzeilen für alle Antworten
+app.use(function (req, res, next) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+  res.setHeader('Strict-Transport-Security', 'max-age=15552000');
+  next();
+});
+
 app.use(express.json({ limit: '4mb' }));
 
 // Einfacher Bremsklotz gegen Durchprobieren von Passwörtern.
@@ -170,29 +226,59 @@ app.get('/api/status', function (req, res) {
 });
 
 // Erster Zugang — geht nur, solange es noch keinen gibt.
-app.post('/api/setup', function (req, res) {
-  if (anzahlNutzer() > 0) return res.status(403).json({ fehler: 'schon eingerichtet' });
+let setupLaeuft = false;
+app.post('/api/setup', async function (req, res) {
+  if (setupLaeuft || anzahlNutzer() > 0) return res.status(403).json({ fehler: 'schon eingerichtet' });
   const { name, passwort } = req.body || {};
-  if (!name || !passwort || passwort.length < 8) {
+  if (!name || typeof passwort !== 'string' || passwort.length < 8) {
     return res.status(400).json({ fehler: 'Name und Passwort mit mindestens acht Zeichen nötig' });
   }
-  passwortSetzen(String(name).trim(), passwort, 'verwalter');
-  const id = sitzungAnlegen(String(name).trim());
-  keksSetzen(res, id);
-  res.json({ ok: true, nutzer: String(name).trim() });
+  setupLaeuft = true;
+  try {
+    await passwortSetzen(String(name).trim(), passwort, 'verwalter');
+    const id = sitzungAnlegen(String(name).trim());
+    keksSetzen(res, id);
+    res.json({ ok: true, nutzer: String(name).trim() });
+  } catch (e) {
+    res.status(500).json({ fehler: e.message });
+  } finally { setupLaeuft = false; }
 });
 
-app.post('/api/login', function (req, res) {
+app.post('/api/login', async function (req, res) {
   const ip = req.ip;
   if (zuVieleVersuche(ip)) {
     return res.status(429).json({ fehler: 'Zu viele Versuche. Warte 15 Minuten.' });
   }
+  // Schon vor dem Rechnen zählen, damit viele gleichzeitige Versuche nicht an der Bremse vorbeikommen
+  versuchZaehlen(ip);
   const { name, passwort } = req.body || {};
-  const n = passwortPruefen(String(name || '').trim(), String(passwort || ''));
-  if (!n) { versuchZaehlen(ip); return res.status(401).json({ fehler: 'Falsche Zugangsdaten' }); }
-  versuche.delete(ip);
-  keksSetzen(res, sitzungAnlegen(n.name));
-  res.json({ ok: true, nutzer: n.name, rolle: n.rolle || 'nutzer' });
+  try {
+    const n = await passwortPruefen(String(name || '').trim(), String(passwort || ''));
+    if (!n) return res.status(401).json({ fehler: 'Falsche Zugangsdaten' });
+    versuche.delete(ip);
+    keksSetzen(res, sitzungAnlegen(n.name));
+    res.json({ ok: true, nutzer: n.name, rolle: n.rolle || 'nutzer' });
+  } catch (e) {
+    res.status(500).json({ fehler: e.message });
+  }
+});
+
+// Eigenes Passwort ändern — mit dem alten als Nachweis
+app.post('/api/passwort', nurAngemeldet, async function (req, res) {
+  const { alt, neu } = req.body || {};
+  if (typeof neu !== 'string' || neu.length < 8) {
+    return res.status(400).json({ fehler: 'Das neue Passwort braucht mindestens acht Zeichen' });
+  }
+  try {
+    if (!(await passwortPruefen(req.nutzer, String(alt || '')))) {
+      return res.status(403).json({ fehler: 'Das bisherige Passwort stimmt nicht' });
+    }
+    await passwortAendern(req.nutzer, neu);
+    // Alle anderen Sitzungen dieses Zugangs beenden, die eigene bleibt
+    db.prepare('DELETE FROM sitzungen WHERE lower(nutzer) = lower(?) AND id != ?')
+      .run(req.nutzer, keksLesen(req, 'sid'));
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ fehler: e.message }); }
 });
 
 app.post('/api/logout', function (req, res) {
@@ -209,16 +295,37 @@ app.get('/api/data', nurAngemeldet, function (req, res) {
     : { data: null });
 });
 
-app.put('/api/data', nurAngemeldet, function (req, res) {
-  const inhalt = JSON.stringify(req.body && req.body.data);
-  if (!inhalt || inhalt === 'undefined') return res.status(400).json({ fehler: 'keine Daten' });
-  const jetzt = Date.now();
-  db.prepare('INSERT OR REPLACE INTO stand (id, inhalt, wer, wann) VALUES (1,?,?,?)')
-    .run(inhalt, req.nutzer, jetzt);
-  db.prepare('INSERT INTO verlauf (inhalt, wer, wann) VALUES (?,?,?)')
-    .run(inhalt, req.nutzer, jetzt);
+// Speichern in einem Rutsch: Stand und Verlauf gemeinsam oder gar nicht
+const standSpeichern = db.transaction(function (inhalt, wer, jetzt) {
+  db.prepare('INSERT OR REPLACE INTO stand (id, inhalt, wer, wann) VALUES (1,?,?,?)').run(inhalt, wer, jetzt);
+  db.prepare('INSERT INTO verlauf (inhalt, wer, wann) VALUES (?,?,?)').run(inhalt, wer, jetzt);
   // Verlauf auf die letzten 50 Stände begrenzen
   db.prepare('DELETE FROM verlauf WHERE id NOT IN (SELECT id FROM verlauf ORDER BY id DESC LIMIT 50)').run();
+});
+
+app.put('/api/data', nurAngemeldet, function (req, res) {
+  const body = req.body || {};
+  const inhalt = JSON.stringify(body.data);
+  if (!inhalt || inhalt === 'undefined' || inhalt === 'null') return res.status(400).json({ fehler: 'keine Daten' });
+
+  // Schutz vor gegenseitigem Überschreiben: Der Browser schickt mit, auf welchem Stand
+  // (basis = dessen "wann") seine Änderung aufbaut. Ist der Server inzwischen weiter, gibt es 409.
+  // Ältere Oberflächen schicken keine basis mit — die werden wie bisher durchgelassen.
+  if (body.basis !== undefined && !body.erzwingen) {
+    const aktuell = db.prepare('SELECT wer, wann FROM stand WHERE id = 1').get();
+    if (aktuell && aktuell.wann !== body.basis) {
+      return res.status(409).json({
+        fehler: 'Inzwischen hat ' + (aktuell.wer || 'jemand') + ' gespeichert',
+        wer: aktuell.wer, wann: aktuell.wann
+      });
+    }
+  }
+
+  // Nie denselben Zeitstempel zweimal vergeben, er dient als Versionsnummer
+  const vorher = db.prepare('SELECT wann FROM stand WHERE id = 1').get();
+  const jetzt = Math.max(Date.now(), vorher ? vorher.wann + 1 : 0);
+  standSpeichern(inhalt, req.nutzer, jetzt);
+  postCache.clear();   // Suchbegriffe hängen an Mietern und Objekten
   res.json({ ok: true, wann: jetzt, wer: req.nutzer });
 });
 
@@ -229,22 +336,44 @@ app.get('/api/verlauf', nurAngemeldet, function (req, res) {
 app.get('/api/verlauf/:id', nurAngemeldet, function (req, res) {
   const e = db.prepare('SELECT * FROM verlauf WHERE id = ?').get(req.params.id);
   if (!e) return res.status(404).json({ fehler: 'nicht gefunden' });
-  res.json({ data: JSON.parse(e.inhalt), wer: e.wer, wann: e.wann });
+  let daten;
+  try { daten = JSON.parse(e.inhalt); }
+  catch (fehler) { return res.status(500).json({ fehler: 'Dieser Stand ist beschädigt' }); }
+  res.json({ data: daten, wer: e.wer, wann: e.wann });
 });
 
 app.get('/api/users', nurAngemeldet, function (req, res) {
   res.json(db.prepare('SELECT name, angelegt, rolle FROM nutzer ORDER BY angelegt').all());
 });
 
-app.post('/api/users', nurAngemeldet, nurVerwalter, function (req, res) {
+app.post('/api/users', nurAngemeldet, nurVerwalter, async function (req, res) {
   const { name, passwort } = req.body || {};
-  if (!name || !passwort || passwort.length < 8) {
+  if (!name || typeof passwort !== 'string' || passwort.length < 8) {
     return res.status(400).json({ fehler: 'Name und Passwort mit mindestens acht Zeichen nötig' });
   }
   const da = db.prepare('SELECT 1 FROM nutzer WHERE lower(name) = lower(?)').get(String(name).trim());
   if (da) return res.status(409).json({ fehler: 'Diesen Benutzernamen gibt es schon' });
-  passwortSetzen(String(name).trim(), passwort, 'nutzer');
-  res.json({ ok: true });
+  try {
+    await passwortSetzen(String(name).trim(), passwort, 'nutzer');
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ fehler: e.message }); }
+});
+
+// Verwalter setzt das Passwort eines anderen Zugangs neu (z. B. wenn es vergessen wurde)
+app.put('/api/users/:name/passwort', nurAngemeldet, nurVerwalter, async function (req, res) {
+  const neu = (req.body || {}).passwort;
+  if (typeof neu !== 'string' || neu.length < 8) {
+    return res.status(400).json({ fehler: 'Das Passwort braucht mindestens acht Zeichen' });
+  }
+  const da = db.prepare('SELECT name FROM nutzer WHERE lower(name) = lower(?)').get(req.params.name);
+  if (!da) return res.status(404).json({ fehler: 'Diesen Zugang gibt es nicht' });
+  try {
+    await passwortAendern(da.name, neu);
+    // Dort überall abmelden — nur die eigene, gerade laufende Sitzung bleibt
+    db.prepare('DELETE FROM sitzungen WHERE lower(nutzer) = lower(?) AND id != ?')
+      .run(da.name, keksLesen(req, 'sid'));
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ fehler: e.message }); }
 });
 
 app.delete('/api/users/:name', nurAngemeldet, nurVerwalter, function (req, res) {
@@ -272,7 +401,7 @@ function einstellungSetzen(schluessel, wert) {
 async function todoist(pfad, optionen) {
   const token = einstellung('todoist_token');
   if (!token) throw new Error('Kein Todoist-Token hinterlegt');
-  const antwort = await fetch('https://api.todoist.com/api/v1' + pfad, Object.assign({
+  const antwort = await holen('https://api.todoist.com/api/v1' + pfad, Object.assign({
     headers: {
       'Authorization': 'Bearer ' + token,
       'Content-Type': 'application/json'
@@ -300,7 +429,7 @@ async function todoistListe(pfad) {
   do {
     const antwort = await todoist(pfad + (pfad.indexOf('?') === -1 ? '?' : '&') + 'limit=200'
       + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''));
-    const teil = Array.isArray(antwort) ? antwort : (antwort && antwort.results) || [];
+    const teil = alsListe(antwort);
     alles = alles.concat(teil);
     cursor = (antwort && !Array.isArray(antwort) && antwort.next_cursor) || null;
     runden++;
@@ -349,24 +478,19 @@ app.put('/api/todoist', nurAngemeldet, nurVerwalter, function (req, res) {
   res.json({ ok: true, verbunden: !!einstellung('todoist_token') });
 });
 
-app.get('/api/todoist/projekte', nurAngemeldet, async function (req, res) {
-  try {
-    const antwort = await todoist('/projects?limit=200');
-    const liste = Array.isArray(antwort) ? antwort : (antwort && antwort.results) || [];
-    res.json(liste.map(function (p) {
-      return { id: String(p.id), name: p.name, farbe: TODOIST_FARBEN[p.color] || '#808080' };
-    }));
-  } catch (e) { res.status(502).json({ fehler: e.message }); }
-});
+app.get('/api/todoist/projekte', nurAngemeldet, mitFehler(async function (req, res) {
+  const liste = await todoistListe('/projects');
+  res.json(liste.map(function (p) {
+    return { id: String(p.id), name: p.name, farbe: TODOIST_FARBEN[p.color] || '#808080' };
+  }));
+}));
 
 // Offene Aufgaben eines Projekts holen
-app.get('/api/todoist/aufgaben', nurAngemeldet, async function (req, res) {
+app.get('/api/todoist/aufgaben', nurAngemeldet, mitFehler(async function (req, res) {
   const projekt = req.query.projekt;
-  try {
-    const liste = await todoistListe('/tasks' + (projekt ? '?project_id=' + encodeURIComponent(projekt) : ''));
-    res.json(liste.map(function (t) { return aufgabeMappen(t, null); }));
-  } catch (e) { res.status(502).json({ fehler: e.message }); }
-});
+  const liste = await todoistListe('/tasks' + (projekt ? '?project_id=' + encodeURIComponent(projekt) : ''));
+  res.json(liste.map(function (t) { return aufgabeMappen(t, null); }));
+}));
 
 // Die ganze Übersicht auf einmal: alle offenen Aufgaben, Projekte mit Farbe, Abschnitte
 async function todoistUebersicht() {
@@ -390,48 +514,42 @@ async function todoistUebersicht() {
   };
 }
 
-app.get('/api/todoist/uebersicht', nurAngemeldet, async function (req, res) {
-  try { res.json(await todoistUebersicht()); }
-  catch (e) { res.status(502).json({ fehler: e.message }); }
-});
+app.get('/api/todoist/uebersicht', nurAngemeldet, mitFehler(async function (req, res) {
+  res.json(await todoistUebersicht());
+}));
 
 // Alle offenen Aufgaben über alle Projekte hinweg (ältere Form, bleibt für alle Fälle)
-app.get('/api/todoist/alle', nurAngemeldet, async function (req, res) {
-  try { res.json((await todoistUebersicht()).aufgaben); }
-  catch (e) { res.status(502).json({ fehler: e.message }); }
-});
+app.get('/api/todoist/alle', nurAngemeldet, mitFehler(async function (req, res) {
+  res.json((await todoistUebersicht()).aufgaben);
+}));
+
+// Ein Kalendertag "JJJJ-MM-TT" um n Tage verschoben
+function tagPlus(datum, n) {
+  const d = new Date(Date.UTC(Number(datum.slice(0, 4)), Number(datum.slice(5, 7)) - 1, Number(datum.slice(8, 10)) + n));
+  return d.toISOString().slice(0, 10);
+}
 
 // Alles, was diese Woche ansteht - über alle Projekte hinweg
-app.get('/api/todoist/woche', nurAngemeldet, async function (req, res) {
-  try {
-    const [liste, pl] = await Promise.all([todoistListe('/tasks'), todoistListe('/projects')]);
-    const namen = {};
-    pl.forEach(function (p) { namen[String(p.id)] = p.name; });
+app.get('/api/todoist/woche', nurAngemeldet, mitFehler(async function (req, res) {
+  const [liste, pl] = await Promise.all([todoistListe('/tasks'), todoistListe('/projects')]);
+  const namen = {};
+  pl.forEach(function (p) { namen[String(p.id)] = p.name; });
 
-    // Die laufende Kalenderwoche, Montag bis Sonntag
-    const jetzt = new Date();
-    const tag = (jetzt.getDay() + 6) % 7;           // Montag = 0
-    const montag = new Date(jetzt);
-    montag.setDate(jetzt.getDate() - tag);
-    montag.setHours(0, 0, 0, 0);
-    const sonntag = new Date(montag);
-    sonntag.setDate(montag.getDate() + 6);
-    sonntag.setHours(23, 59, 59, 999);
+  // Die laufende Kalenderwoche nach Berliner Zeit, Montag bis Sonntag, als reine Kalendertage.
+  // So hängt nichts davon ab, in welcher Zeitzone der Server selbst läuft.
+  const heute = berlinJetzt().datum;
+  const wochentag = (new Date(heute + 'T00:00:00Z').getUTCDay() + 6) % 7;   // Montag = 0
+  const montag = tagPlus(heute, -wochentag);
+  const sonntag = tagPlus(montag, 6);
 
-    // Diese Woche und alles, was aus früheren Wochen offen geblieben ist
-    const woche = liste.filter(function (t) {
-      const d = t.due && (t.due.date || t.due.datetime);
-      if (!d) return false;
-      return new Date(d) <= sonntag;
-    }).map(function (t) {
-      const a = aufgabeMappen(t, namen);
-      a.alt = new Date(t.due.date || t.due.datetime) < montag;
-      return a;
-    }).sort(function (a, b) { return new Date(a.faellig) - new Date(b.faellig); });
+  // Diese Woche und alles, was aus früheren Wochen offen geblieben ist
+  const woche = liste.map(function (t) { return aufgabeMappen(t, namen); })
+    .filter(function (a) { return a.faellig && a.faellig <= sonntag; })
+    .map(function (a) { a.alt = a.faellig < montag; return a; })
+    .sort(function (a, b) { return a.faellig < b.faellig ? -1 : (a.faellig > b.faellig ? 1 : 0); });
 
-    res.json(woche);
-  } catch (e) { res.status(502).json({ fehler: e.message }); }
-});
+  res.json(woche);
+}));
 
 // Neue Aufgabe anlegen
 app.post('/api/todoist/aufgabe', nurAngemeldet, async function (req, res) {
@@ -492,8 +610,7 @@ app.delete('/api/todoist/aufgabe/:id', nurAngemeldet, async function (req, res) 
 // Kommentare lesen
 app.get('/api/todoist/aufgabe/:id/kommentare', nurAngemeldet, async function (req, res) {
   try {
-    const antwort = await todoist('/comments?task_id=' + encodeURIComponent(req.params.id));
-    const liste = Array.isArray(antwort) ? antwort : (antwort && antwort.results) || [];
+    const liste = alsListe(await todoist('/comments?task_id=' + encodeURIComponent(req.params.id)));
     res.json(liste.map(function (k) {
       return {
         id: String(k.id),
@@ -590,10 +707,15 @@ function googleEinstellungen() {
   };
 }
 
+// Das Zugriffs-Token gilt eine Stunde — so lange wird es wiederverwendet statt jedes Mal neu geholt
+let googleZugriff = { token: null, bis: 0 };
+function googleZugriffVergessen() { googleZugriff = { token: null, bis: 0 }; }
+
 async function googleToken() {
   const g = googleEinstellungen();
   if (!g.clientId || !g.refresh) throw new Error('Google ist nicht verbunden');
-  const antwort = await fetch('https://oauth2.googleapis.com/token', {
+  if (googleZugriff.token && Date.now() < googleZugriff.bis) return googleZugriff.token;
+  const antwort = await holen('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -605,8 +727,26 @@ async function googleToken() {
   });
   if (!antwort.ok) throw new Error('Google lehnt das Zugriffsrecht ab (' + antwort.status + ')');
   const daten = await antwort.json();
+  googleZugriff = {
+    token: daten.access_token,
+    bis: Date.now() + Math.max(60, (Number(daten.expires_in) || 3600) - 120) * 1000
+  };
   return daten.access_token;
 }
+
+// Eine Gmail-Abfrage. Wirft bei Fehlern, statt still eine leere Antwort zu liefern.
+async function gmail(token, pfad) {
+  const antwort = await holen('https://gmail.googleapis.com/gmail/v1/users/me' + pfad, {
+    headers: { Authorization: 'Bearer ' + token }
+  });
+  if (!antwort.ok) {
+    if (antwort.status === 401) googleZugriffVergessen();
+    const grund = await antwort.text().catch(function () { return ''; });
+    throw new Error('Gmail antwortet mit ' + antwort.status + (grund ? ': ' + grund.slice(0, 160) : ''));
+  }
+  return antwort.json();
+}
+const MAIL_KOPF = '?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date';
 
 app.get('/api/google', nurAngemeldet, function (req, res) {
   const g = googleEinstellungen();
@@ -628,6 +768,7 @@ app.put('/api/post/filter', nurAngemeldet, nurVerwalter, function (req, res) {
   const { stichworte, ausschluss } = req.body || {};
   if (stichworte !== undefined) einstellungSetzen('post_stichworte', String(stichworte));
   if (ausschluss !== undefined) einstellungSetzen('post_ausschluss', String(ausschluss));
+  postCache.clear();
   res.json({ ok: true });
 });
 
@@ -642,33 +783,56 @@ app.delete('/api/google', nurAngemeldet, nurVerwalter, function (req, res) {
   ['google_refresh', 'google_adresse'].forEach(function (k) {
     db.prepare('DELETE FROM einstellungen WHERE schluessel = ?').run(k);
   });
+  googleZugriffVergessen();
+  postCache.clear();
   res.json({ ok: true });
 });
+
+// Rücksprungadresse für Google. Am besten fest über die Umgebungsvariable ADRESSE
+// (z. B. ADRESSE=https://zieglerverwaltung.immobilien), sonst aus der Anfrage abgeleitet.
+function googleRueckweg(req) {
+  const basis = process.env.ADRESSE ? process.env.ADRESSE.replace(/\/+$/, '') : 'https://' + req.get('host');
+  return basis + '/api/google/zurueck';
+}
+
+// Offene Anmeldevorgänge bei Google: Zufallswert -> wer, wann.
+// Nur ein Rücksprung mit einem Wert, den wir selbst vergeben haben, wird angenommen (Schutz vor CSRF).
+const googleVorgaenge = new Map();
 
 // Schritt 1: zu Google schicken
 app.get('/api/google/start', nurAngemeldet, nurVerwalter, function (req, res) {
   const g = googleEinstellungen();
   if (!g.clientId) return res.status(400).send('Erst Client-ID hinterlegen');
-  const ziel = 'https://' + req.get('host') + '/api/google/zurueck';
+  const grenze = Date.now() - 10 * 60 * 1000;
+  googleVorgaenge.forEach(function (v, k) { if (v.zeit < grenze) googleVorgaenge.delete(k); });
+  const state = crypto.randomBytes(24).toString('hex');
+  googleVorgaenge.set(state, { nutzer: req.nutzer, zeit: Date.now() });
   const url = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
     client_id: g.clientId,
-    redirect_uri: ziel,
+    redirect_uri: googleRueckweg(req),
     response_type: 'code',
     scope: GOOGLE_SCOPE,
     access_type: 'offline',
-    prompt: 'consent'
+    prompt: 'consent',
+    state: state
   });
   res.redirect(url);
 });
 
 // Schritt 2: Google schickt zurück
-app.get('/api/google/zurueck', nurAngemeldet, async function (req, res) {
+app.get('/api/google/zurueck', nurAngemeldet, nurVerwalter, async function (req, res) {
   const g = googleEinstellungen();
+  const state = String(req.query.state || '');
+  const vorgang = googleVorgaenge.get(state);
+  googleVorgaenge.delete(state);
+  if (!vorgang || vorgang.nutzer !== req.nutzer || Date.now() - vorgang.zeit > 10 * 60 * 1000) {
+    return res.status(400).send('Dieser Rücksprung gehört zu keiner laufenden Anmeldung. Bitte in der App neu verbinden.');
+  }
   const code = req.query.code;
   if (!code) return res.status(400).send('Kein Code von Google');
   try {
-    const ziel = 'https://' + req.get('host') + '/api/google/zurueck';
-    const antwort = await fetch('https://oauth2.googleapis.com/token', {
+    const ziel = googleRueckweg(req);
+    const antwort = await holen('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -679,12 +843,12 @@ app.get('/api/google/zurueck', nurAngemeldet, async function (req, res) {
     const daten = await antwort.json();
     if (!daten.refresh_token) throw new Error(daten.error_description || 'Kein dauerhaftes Zugriffsrecht erhalten');
     einstellungSetzen('google_refresh', daten.refresh_token);
+    googleZugriffVergessen();
+    postCache.clear();
 
     // Adresse merken, damit man sieht, welches Postfach hängt
     try {
-      const profil = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
-        headers: { Authorization: 'Bearer ' + daten.access_token }
-      }).then(function (a) { return a.json(); });
+      const profil = await gmail(daten.access_token, '/profile');
       if (profil.emailAddress) einstellungSetzen('google_adresse', profil.emailAddress);
     } catch (e) { /* nicht schlimm */ }
 
@@ -692,7 +856,7 @@ app.get('/api/google/zurueck', nurAngemeldet, async function (req, res) {
       + '<h2>Postfach verbunden</h2><p>Du kannst dieses Fenster schließen.</p>'
       + '<script>setTimeout(function(){ location.href = "/"; }, 1500)</script></body>');
   } catch (e) {
-    res.status(502).send('Fehlgeschlagen: ' + e.message);
+    res.status(502).send('<meta charset="utf-8">Fehlgeschlagen: ' + htmlSicher(e.message));
   }
 });
 
@@ -704,21 +868,13 @@ app.get('/api/post/suche', nurAngemeldet, async function (req, res) {
     const token = await googleToken();
 
     // Welches Postfach hängt eigentlich dran?
-    const profil = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
-      headers: { Authorization: 'Bearer ' + token }
-    }).then(function (a) { return a.json(); });
+    const profil = await gmail(token, '/profile');
     if (profil.emailAddress) einstellungSetzen('google_adresse', profil.emailAddress);
 
-    const liste = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=20&q='
-      + encodeURIComponent(q), {
-      headers: { Authorization: 'Bearer ' + token }
-    }).then(function (a) { return a.json(); });
+    const liste = await gmail(token, '/messages?maxResults=20&q=' + encodeURIComponent(q));
 
     const treffer = await Promise.all(((liste.messages || []).slice(0, 20)).map(function (m) {
-      return fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/' + m.id
-        + '?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date', {
-        headers: { Authorization: 'Bearer ' + token }
-      }).then(function (a) { return a.json(); }).catch(function () { return null; });
+      return gmail(token, '/messages/' + m.id + MAIL_KOPF).catch(function () { return null; });
     }));
 
     res.json({
@@ -742,10 +898,7 @@ app.get('/api/post/suche', nurAngemeldet, async function (req, res) {
 app.get('/api/post/:id/anhaenge', nurAngemeldet, async function (req, res) {
   try {
     const token = await googleToken();
-    const mail = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/'
-      + encodeURIComponent(req.params.id) + '?format=full', {
-      headers: { Authorization: 'Bearer ' + token }
-    }).then(function (a) { return a.json(); });
+    const mail = await gmail(token, '/messages/' + encodeURIComponent(req.params.id) + '?format=full');
 
     const gefunden = [];
     const durchgehen = function (teil) {
@@ -772,10 +925,8 @@ app.post('/api/post/:id/ablegen', nurAngemeldet, async function (req, res) {
   try {
     const token = await googleToken();
 
-    const anhang = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/'
-      + encodeURIComponent(req.params.id) + '/attachments/' + encodeURIComponent(anhangId), {
-      headers: { Authorization: 'Bearer ' + token }
-    }).then(function (a) { return a.json(); });
+    const anhang = await gmail(token, '/messages/' + encodeURIComponent(req.params.id)
+      + '/attachments/' + encodeURIComponent(anhangId));
 
     const daten = Buffer.from(String(anhang.data || '').replace(/-/g, '+').replace(/_/g, '/'), 'base64');
 
@@ -788,7 +939,8 @@ app.post('/api/post/:id/ablegen', nurAngemeldet, async function (req, res) {
       Buffer.from('\r\n--' + grenze + '--')
     ]);
 
-    const antwort = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+    const antwort = await holen('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+      signal: AbortSignal.timeout(120000),   // große Anhänge brauchen länger
       method: 'POST',
       headers: {
         Authorization: 'Bearer ' + token,
@@ -898,9 +1050,7 @@ app.get('/api/post', nurAngemeldet, async function (req, res) {
     // Wer ist eigentlich verbunden?
     let postfach = null, gesamt = null;
     try {
-      const profil = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
-        headers: { Authorization: 'Bearer ' + token }
-      }).then(function (a) { return a.json(); });
+      const profil = await gmail(token, '/profile');
       postfach = profil.emailAddress || null;
       gesamt = profil.messagesTotal || null;
       if (postfach) einstellungSetzen('google_adresse', postfach);
@@ -909,10 +1059,7 @@ app.get('/api/post', nurAngemeldet, async function (req, res) {
     const tage = Math.min(365, Math.max(7, Number(req.query.tage) || 90));
     // Im breiten Modus fliegen Werbung, Soziales und Foren gleich bei Google raus
     const frage = 'newer_than:' + tage + 'd -in:trash';
-    const liste = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=150&q=' +
-      encodeURIComponent(frage), {
-      headers: { Authorization: 'Bearer ' + token }
-    }).then(function (a) { return a.json(); });
+    const liste = await gmail(token, '/messages?maxResults=150&q=' + encodeURIComponent(frage));
 
     const ergebnis = [];
     const ohneTreffer = [];
@@ -922,10 +1069,7 @@ app.get('/api/post', nurAngemeldet, async function (req, res) {
     const mails = [];
     for (let i = 0; i < ids.length; i += 10) {
       const block = await Promise.all(ids.slice(i, i + 10).map(function (m) {
-        return fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/' + m.id
-          + '?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date', {
-          headers: { Authorization: 'Bearer ' + token }
-        }).then(function (a) { return a.json(); }).catch(function () { return null; });
+        return gmail(token, '/messages/' + m.id + MAIL_KOPF).catch(function () { return null; });
       }));
       block.forEach(function (b) { if (b) mails.push(b); });
     }
@@ -1068,11 +1212,21 @@ app.post('/api/push/abmelden', nurAngemeldet, function (req, res) {
   res.json({ ok: true });
 });
 
+// Jeder sieht und entfernt seine eigenen Geräte, der Verwalter alle
 app.get('/api/push/geraete', nurAngemeldet, function (req, res) {
-  res.json(db.prepare('SELECT id, nutzer, geraet, endpoint, angelegt FROM push_abos ORDER BY id').all());
+  if (rolleVon(req.nutzer) === 'verwalter') {
+    return res.json(db.prepare('SELECT id, nutzer, geraet, endpoint, angelegt FROM push_abos ORDER BY id').all());
+  }
+  res.json(db.prepare('SELECT id, nutzer, geraet, endpoint, angelegt FROM push_abos WHERE lower(nutzer) = lower(?) ORDER BY id')
+    .all(req.nutzer));
 });
 
 app.delete('/api/push/geraete/:id', nurAngemeldet, function (req, res) {
+  const abo = db.prepare('SELECT nutzer FROM push_abos WHERE id = ?').get(req.params.id);
+  if (!abo) return res.json({ ok: true });
+  if (rolleVon(req.nutzer) !== 'verwalter' && String(abo.nutzer || '').toLowerCase() !== req.nutzer.toLowerCase()) {
+    return res.status(403).json({ fehler: 'Nur eigene Geräte lassen sich entfernen' });
+  }
   db.prepare('DELETE FROM push_abos WHERE id = ?').run(req.params.id);
   res.json({ ok: true });
 });
@@ -1095,7 +1249,8 @@ app.get('/api/push/einstellungen', nurAngemeldet, function (req, res) {
   res.json(pushEinstellungenAntwort(pushEinstellungenLesen()));
 });
 
-app.put('/api/push/einstellungen', nurAngemeldet, function (req, res) {
+// Gilt für alle Geräte — deshalb nur für den Verwalter
+app.put('/api/push/einstellungen', nurAngemeldet, nurVerwalter, function (req, res) {
   const { zeit, morgen, termine, anfragen } = req.body || {};
   const e = pushEinstellungenLesen();
   if (typeof zeit === 'string' && /^\d{2}:\d{2}$/.test(zeit)) e.zeit = zeit;
@@ -1136,6 +1291,17 @@ fs.mkdirSync(STIMMORDNER, { recursive: true });
 
 const STIMMEN = ['onyx', 'ash', 'echo', 'ballad', 'verse', 'alloy', 'sage', 'coral', 'nova', 'shimmer'];
 const STIMM_MODELLE = ['gpt-4o-mini-tts', 'tts-1-hd', 'tts-1'];
+// Nur wenn OpenAI ausdrücklich sagt, dass es das Modell nicht gibt, lohnt ein anderes.
+// Ein gewöhnlicher 400er (z. B. wegen des Textes) darf das eingestellte Modell nicht umstellen.
+function openaiModellFehlt(status, grund) {
+  if (status === 404) return true;
+  if (status !== 400) return false;
+  try {
+    const f = (JSON.parse(grund) || {}).error || {};
+    return f.code === 'model_not_found' || f.param === 'model';
+  } catch (e) { return false; }
+}
+
 const STIMM_ANWEISUNG = 'Sprich auf Deutsch, ruhig und freundlich, wie jemand, der morgens '
   + 'in Ruhe den Tag durchgeht. Deutliche Pausen zwischen den Punkten, keine Hektik.';
 
@@ -1211,7 +1377,8 @@ app.post('/api/stimme/sprechen', nurAngemeldet, async function (req, res) {
     if (modell.indexOf('gpt-') === 0) koerper.instructions = e.anweisung;
     let antwort;
     try {
-      antwort = await fetch('https://api.openai.com/v1/audio/speech', {
+      antwort = await holen('https://api.openai.com/v1/audio/speech', {
+        signal: AbortSignal.timeout(60000),
         method: 'POST',
         headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
         body: JSON.stringify(koerper)
@@ -1233,8 +1400,8 @@ app.post('/api/stimme/sprechen', nurAngemeldet, async function (req, res) {
     if (antwort.status === 429) {
       return res.status(429).json({ fehler: 'Das Guthaben ist aufgebraucht oder das Limit erreicht.' });
     }
-    // 400/404: Modell gibt es so nicht mehr — nächstes versuchen
-    if (antwort.status !== 400 && antwort.status !== 404) break;
+    // Modell gibt es so nicht mehr — nächstes versuchen, sonst aufhören
+    if (!openaiModellFehlt(antwort.status, letzterGrund)) break;
   }
   res.status(502).json({ fehler: 'Die Stimme antwortet nicht' + (letzterGrund ? ': ' + letzterGrund.slice(0, 160) : '') });
 });
@@ -1286,7 +1453,8 @@ app.post('/api/assistent/hoeren', nurAngemeldet,
       formular.append('language', 'de');
       let antwort;
       try {
-        antwort = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+        antwort = await holen('https://api.openai.com/v1/audio/transcriptions', {
+          signal: AbortSignal.timeout(120000),
           method: 'POST', headers: { 'Authorization': 'Bearer ' + token }, body: formular
         });
       } catch (fehler) {
@@ -1298,7 +1466,7 @@ app.post('/api/assistent/hoeren', nurAngemeldet,
       }
       const grund = await antwort.text().catch(function () { return ''; });
       if (antwort.status === 401) return res.status(401).json({ fehler: 'Der Schlüssel wird nicht angenommen' });
-      if (antwort.status !== 400 && antwort.status !== 404) {
+      if (!openaiModellFehlt(antwort.status, grund)) {
         return res.status(502).json({ fehler: 'Das Zuhören klappt gerade nicht: ' + grund.slice(0, 160) });
       }
     }
@@ -1435,7 +1603,8 @@ async function assistentWerkzeug(name, eingabe, lage) {
 async function claude(koerper) {
   const token = einstellung('anthropic_token');
   if (!token) { const e = new Error('Es ist noch kein Assistent eingerichtet'); e.status = 400; throw e; }
-  const antwort = await fetch('https://api.anthropic.com/v1/messages', {
+  const antwort = await holen('https://api.anthropic.com/v1/messages', {
+    signal: AbortSignal.timeout(90000),
     method: 'POST',
     headers: {
       'x-api-key': token,
@@ -1452,6 +1621,7 @@ async function claude(koerper) {
         : 'Der Assistent antwortet nicht: ' + grund.slice(0, 160)));
     e.status = antwort.status;
     e.grund = grund;
+    try { e.typ = ((JSON.parse(grund) || {}).error || {}).type || null; } catch (x) { e.typ = null; }
     throw e;
   }
   return antwort.json();
@@ -1479,8 +1649,8 @@ app.post('/api/assistent/sagen', nurAngemeldet, async function (req, res) {
   }).map(function (n) { return { role: n.role, content: n.content }; });
   nachrichten.push({ role: 'user', content: text });
 
-  const reihe = [assistentLesen().modell].concat(
-    ASSISTENT_MODELLE.filter(function (m) { return m !== assistentLesen().modell; }));
+  const eingestellt = assistentLesen().modell;
+  const reihe = [eingestellt].concat(ASSISTENT_MODELLE.filter(function (m) { return m !== eingestellt; }));
 
   let modell = reihe[0];
   const getan = [];
@@ -1496,7 +1666,9 @@ app.post('/api/assistent/sagen', nurAngemeldet, async function (req, res) {
         if (versuch !== reihe[0]) einstellungSetzen('assistent_modell', versuch);
         break;
       } catch (fehler) {
-        if (fehler.status === 404 || fehler.status === 400) continue;   // Modell gibt es so nicht
+        // Nur ausweichen, wenn es das Modell nicht gibt — sonst würde ein beliebiger
+        // Fehler in der Anfrage das eingestellte Modell dauerhaft umstellen
+        if (fehler.status === 404 || fehler.typ === 'not_found_error') continue;
         throw fehler;
       }
     }
@@ -1547,11 +1719,10 @@ async function morgenInhalt(heute) {
   // Aufgaben aus Todoist: überfällig oder heute fällig
   try {
     if (einstellung('todoist_token')) {
-      const antwort = await todoist('/tasks?limit=200');
-      const liste = Array.isArray(antwort) ? antwort : (antwort && antwort.results) || [];
+      const liste = await todoistListe('/tasks');
       const anzahl = liste.filter(function (t) {
         const f = t.due && (t.due.date || t.due.datetime);
-        return f && f.slice(0, 10) <= heute;
+        return f && String(f).slice(0, 10) <= heute;
       }).length;
       if (anzahl) teile.push(anzahl + (anzahl === 1 ? ' Aufgabe fällig' : ' Aufgaben fällig'));
     }
@@ -1623,7 +1794,11 @@ if (webpush) {
   // --- Morgenmeldung zur eingestellten Zeit ---
   async function morgenTick(e, t) {
     if (e.morgen === false) return;
-    if (t.zeit !== (e.zeit || '07:00')) return;
+    // Nicht nur in genau der eingestellten Minute: Lief der Server da gerade nicht
+    // (Neustart, kurz beschäftigt), wird innerhalb der folgenden Stunde nachgeholt.
+    const minuten = function (hhmm) { return Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5)); };
+    const spaeter = minuten(t.zeit) - minuten(e.zeit || '07:00');
+    if (spaeter < 0 || spaeter > 60) return;
     if (einstellung('push_zuletzt') === t.datum) return;
     einstellungSetzen('push_zuletzt', t.datum);   // vor dem Senden, sonst klingelt es bei Fehlern jede halbe Minute
     const zeilen = db.prepare('SELECT * FROM push_abos').all();
@@ -1698,10 +1873,7 @@ if (webpush) {
       + ' OR from:kleinanzeigen.de OR from:ebay-kleinanzeigen.de'
       + ' OR subject:Kontaktanfrage OR subject:Mietinteressent OR subject:"Anfrage zu Ihrer"'
       + ')';
-    const liste = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages?maxResults=10&q='
-      + encodeURIComponent(suche), {
-      headers: { Authorization: 'Bearer ' + token }
-    }).then(function (a) { return a.json(); });
+    const liste = await gmail(token, '/messages?maxResults=10&q=' + encodeURIComponent(suche));
 
     const ids = (liste.messages || []).map(function (m) { return m.id; });
     if (!ids.length) return;
@@ -1713,10 +1885,7 @@ if (webpush) {
     einstellungSetzen('push_post_gesehen', JSON.stringify(gesehen.concat(neue).slice(-300)));
 
     for (const id of neue.slice(0, 3)) {
-      const mail = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/' + id
-        + '?format=metadata&metadataHeaders=From&metadataHeaders=Subject', {
-        headers: { Authorization: 'Bearer ' + token }
-      }).then(function (a) { return a.json(); }).catch(function () { return null; });
+      const mail = await gmail(token, '/messages/' + id + MAIL_KOPF).catch(function () { return null; });
       if (!mail) continue;
       const h = {};
       ((mail.payload && mail.payload.headers) || []).forEach(function (x) { h[x.name] = x.value; });
@@ -1968,7 +2137,7 @@ async function gkalHolen() {
   if (!url) throw new Error('Keine Kalender-Adresse hinterlegt');
   const frisch = gkalRoh.ereignisse && gkalRoh.url === url && (Date.now() - gkalRoh.wann) < 5 * 60 * 1000;
   if (frisch) return gkalRoh.ereignisse;
-  const antwort = await fetch(url, { redirect: 'follow' });
+  const antwort = await holen(url, { redirect: 'follow' });
   if (!antwort.ok) throw new Error('Google liefert den Kalender nicht (' + antwort.status + ')');
   const text = await antwort.text();
   if (text.indexOf('BEGIN:VCALENDAR') === -1) {
@@ -2077,6 +2246,10 @@ db.exec(`
 
 try { db.exec("ALTER TABLE rechnungen ADD COLUMN art TEXT NOT NULL DEFAULT 'as'"); } catch (e) { /* schon da */ }
 
+// Jede Rechnungsnummer nur einmal — auch wenn zwei gleichzeitig speichern
+try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS rechnungen_nummer ON rechnungen (nummer)'); }
+catch (e) { console.log('Hinweis: Es gibt doppelte Rechnungsnummern, deshalb fehlt die Eindeutigkeitsprüfung in der Datenbank:', e.message); }
+
 const RECHNUNG_ABSENDER_FELDER = {
   as: ['name', 'strasse', 'ort', 'steuernummer', 'ustId', 'kontoinhaber', 'iban', 'bank', 'kontakt', 'empfaenger'],
   nk: ['vermieter', 'strasse', 'ort', 'telefon', 'unterschrift', 'kontoText', 'anlage']
@@ -2112,7 +2285,8 @@ app.get('/api/rechnungen', nurAngemeldet, function (req, res) {
   res.json({ stamm: rechnungAbsender('as'), nkStamm: rechnungAbsender('nk'), liste: rechnungenListe(), naechste: rechnungNaechste() });
 });
 
-app.put('/api/rechnungen/absender/:art?', nurAngemeldet, function (req, res) {
+// Absender mit IBAN und Steuernummer — nur der Verwalter darf das ändern
+app.put('/api/rechnungen/absender/:art?', nurAngemeldet, nurVerwalter, function (req, res) {
   const art = RECHNUNG_ABSENDER_FELDER[req.params.art] ? req.params.art : 'as';
   const b = req.body || {};
   const stamm = {};
@@ -2136,12 +2310,17 @@ app.post('/api/rechnungen', nurAngemeldet, function (req, res) {
   const brutto = Math.round((Number(b.brutto) || 0) * 100) / 100;
   const inhalt = JSON.stringify(b.inhalt || {}).slice(0, 20000);
   const jetzt = Date.now();
-  if (id && db.prepare('SELECT id FROM rechnungen WHERE id = ?').get(id)) {
-    db.prepare('UPDATE rechnungen SET art = ?, nummer = ?, objekt = ?, datum = ?, brutto = ?, inhalt = ?, wer = ?, wann = ? WHERE id = ?')
-      .run(art, nummer, objekt, datum, brutto, inhalt, req.nutzer, jetzt, id);
-  } else {
-    id = Number(db.prepare('INSERT INTO rechnungen (art, nummer, objekt, datum, brutto, inhalt, wer, wann) VALUES (?,?,?,?,?,?,?,?)')
-      .run(art, nummer, objekt, datum, brutto, inhalt, req.nutzer, jetzt).lastInsertRowid);
+  try {
+    if (id && db.prepare('SELECT id FROM rechnungen WHERE id = ?').get(id)) {
+      db.prepare('UPDATE rechnungen SET art = ?, nummer = ?, objekt = ?, datum = ?, brutto = ?, inhalt = ?, wer = ?, wann = ? WHERE id = ?')
+        .run(art, nummer, objekt, datum, brutto, inhalt, req.nutzer, jetzt, id);
+    } else {
+      id = Number(db.prepare('INSERT INTO rechnungen (art, nummer, objekt, datum, brutto, inhalt, wer, wann) VALUES (?,?,?,?,?,?,?,?)')
+        .run(art, nummer, objekt, datum, brutto, inhalt, req.nutzer, jetzt).lastInsertRowid);
+    }
+  } catch (e) {
+    if (e.code === 'SQLITE_CONSTRAINT_UNIQUE') return res.status(400).json({ fehler: 'Die Nummer ' + nummer + ' ist schon vergeben' });
+    throw e;
   }
   res.json({ ok: true, id: id, liste: rechnungenListe(), naechste: rechnungNaechste() });
 });
@@ -2150,6 +2329,29 @@ app.delete('/api/rechnungen/:id', nurAngemeldet, function (req, res) {
   db.prepare('DELETE FROM rechnungen WHERE id = ?').run(Number(req.params.id) || 0);
   res.json({ ok: true, liste: rechnungenListe(), naechste: rechnungNaechste() });
 });
+
+// ---------------- Sicherung ----------------
+// Einmal am Tag eine Kopie der Datenbank in daten/sicherung, die letzten 14 bleiben liegen.
+// Die Kopie entsteht im laufenden Betrieb und ist trotzdem in sich stimmig (SQLite-Backup).
+const SICHERUNGSORDNER = path.join(DATENORDNER, 'sicherung');
+fs.mkdirSync(SICHERUNGSORDNER, { recursive: true });
+
+async function sichern() {
+  const ziel = path.join(SICHERUNGSORDNER, 'vermietung-' + berlinJetzt().datum + '.db');
+  if (fs.existsSync(ziel)) return;
+  try {
+    await db.backup(ziel);
+    fs.readdirSync(SICHERUNGSORDNER)
+      .filter(function (n) { return /^vermietung-\d{4}-\d{2}-\d{2}\.db$/.test(n); })
+      .sort().reverse().slice(14)
+      .forEach(function (n) { fs.unlinkSync(path.join(SICHERUNGSORDNER, n)); });
+  } catch (e) {
+    console.log('Sicherung fehlgeschlagen:', e.message);
+    try { fs.unlinkSync(ziel); } catch (x) { /* halbe Datei weg */ }
+  }
+}
+sichern();
+setInterval(sichern, 60 * 60 * 1000).unref();
 
 // ---------------- Oberfläche ----------------
 app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'] }));
