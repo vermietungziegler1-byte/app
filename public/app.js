@@ -74,12 +74,18 @@
   let fabOffen = false;
   let zuletztOffen = false;
   document.addEventListener('keydown', function (ev) {
+    if ((ev.ctrlKey || ev.metaKey) && !ev.altKey && (ev.key === 'k' || ev.key === 'K') && phase === 'app') {
+      ev.preventDefault();
+      if (modal && modal.kind === 'suche') { const f = root.querySelector('#suche-q'); if (f) f.select(); }
+      else if (!modal) sucheOeffnen();
+      return;
+    }
     if (modal || phase !== 'app') return;
     const imFeld = ['INPUT', 'TEXTAREA', 'SELECT'].indexOf(ev.target.tagName) !== -1;
     if (ev.key === '/' && !imFeld) {
       ev.preventDefault();
       const q = root.querySelector('#q');
-      if (q) q.focus();
+      if (q) q.focus(); else sucheOeffnen();
     }
     if (ev.key === 'q' && !imFeld && !ev.ctrlKey && !ev.metaKey && !ev.altKey && todoist.verbunden) {
       ev.preventDefault(); tdSchnell();
@@ -581,6 +587,7 @@
       toast('Server nicht erreichbar');
     }
     render();
+    zuletztAufgefrischt = Date.now();
     if (phase === 'app' && todoist.verbunden) {
       planLaden().then(function () {
         if (planWunsch) { planWunsch = false; modal = { kind: 'plan' }; }
@@ -629,7 +636,27 @@
   let speicherLaeuft = false;
   let nochmalSpeichern = false;
 
+  // Dünner Ladebalken oben, solange Anfragen laufen, die länger als einen Augenblick dauern
+  let laufend = 0, ladeUhr = null;
+  function ladebalken(an) {
+    let el = document.getElementById('ladebalken');
+    if (!el) { el = document.createElement('div'); el.id = 'ladebalken'; document.body.appendChild(el); }
+    el.classList.toggle('an', an);
+  }
+  function anfrageStart() {
+    laufend++;
+    if (laufend === 1) ladeUhr = setTimeout(function () { ladebalken(true); }, 350);
+  }
+  function anfrageEnde() {
+    laufend = Math.max(0, laufend - 1);
+    if (!laufend) { clearTimeout(ladeUhr); ladebalken(false); }
+  }
+
   async function api(pfad, optionen) {
+    anfrageStart();
+    try { return await apiRoh(pfad, optionen); } finally { anfrageEnde(); }
+  }
+  async function apiRoh(pfad, optionen) {
     const o = Object.assign({ credentials: 'same-origin' }, optionen || {});
     if (o.body && typeof o.body !== 'string') {
       o.body = JSON.stringify(o.body);
@@ -974,6 +1001,71 @@
   function wocheErledigt(id) { tdFertig(id, null); }
   function aufgabeErledigt(oid, id) { tdFertig(id, null); }
 
+  // ---- Dialoge im App-Stil (statt der grauen Browser-Fenster) ----
+  // Liegt außerhalb von #app, damit ein Neuzeichnen der App den Dialog nicht wegwischt.
+  // dialog({ titel, text, knoepfe: [{ label, wert, art }], feld: { typ, wert, platzhalter, nurLesen } })
+  // → Promise mit { wert, eingabe } (wert des gedrückten Knopfs, null bei Esc/Abbrechen)
+  function dialog(o) {
+    return new Promise(function (fertig) {
+      const alt = document.getElementById('dialog'); if (alt) alt.remove();
+      const bd = document.createElement('div');
+      bd.id = 'dialog';
+      bd.setAttribute('data-theme', theme);
+      const box = document.createElement('div'); box.className = 'dlg'; box.setAttribute('role', 'dialog');
+      if (o.titel) { const h = document.createElement('h3'); h.textContent = o.titel; box.appendChild(h); }
+      if (o.text) { const p = document.createElement('p'); p.textContent = o.text; box.appendChild(p); }
+      let feld = null;
+      if (o.feld) {
+        feld = document.createElement(o.feld.typ === 'textarea' ? 'textarea' : 'input');
+        if (o.feld.typ !== 'textarea') feld.type = o.feld.typ || 'text';
+        feld.value = o.feld.wert || '';
+        if (o.feld.platzhalter) feld.placeholder = o.feld.platzhalter;
+        if (o.feld.nurLesen) feld.readOnly = true;
+        if (o.feld.typ === 'textarea') feld.rows = 6;
+        box.appendChild(feld);
+      }
+      const leiste = document.createElement('div'); leiste.className = 'dlg-knoepfe';
+      const zu = function (wert) {
+        bd.remove();
+        document.removeEventListener('keydown', taste, true);
+        fertig({ wert: wert, eingabe: feld ? feld.value : null });
+      };
+      (o.knoepfe || [{ label: 'OK', wert: true, art: 'primaer' }]).forEach(function (k) {
+        const b = document.createElement('button'); b.type = 'button'; b.textContent = k.label;
+        if (k.art) b.className = k.art;
+        b.addEventListener('click', function () { zu(k.wert); });
+        leiste.appendChild(b);
+      });
+      box.appendChild(leiste);
+      bd.appendChild(box);
+      bd.addEventListener('click', function (ev) { if (ev.target === bd) zu(null); });
+      const taste = function (ev) {
+        if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); zu(null); }
+        if (ev.key === 'Enter' && (!feld || feld.tagName !== 'TEXTAREA')) {
+          const haupt = (o.knoepfe || []).find(function (k) { return k.art === 'primaer'; });
+          if (haupt) { ev.preventDefault(); ev.stopPropagation(); zu(haupt.wert); }
+        }
+      };
+      document.addEventListener('keydown', taste, true);
+      document.body.appendChild(bd);
+      if (feld) { feld.focus(); if (o.feld.nurLesen) feld.select(); }
+      else { const b = leiste.querySelector('.primaer') || leiste.querySelector('button'); if (b) b.focus(); }
+    });
+  }
+  // Text zum Kopieren anzeigen, wenn die Zwischenablage nicht erreichbar ist
+  function kopierDialog(text) {
+    return dialog({ titel: 'Zum Kopieren', text: 'Der Text ist markiert — jetzt mit Strg+C (am Mac Cmd+C) kopieren.',
+      feld: { typ: 'textarea', wert: text, nurLesen: true }, knoepfe: [{ label: 'Fertig', wert: true, art: 'primaer' }] });
+  }
+  // Löschen ohne Rückfrage: erst nach ein paar Sekunden wirklich ausführen, bis dahin "Rückgängig"
+  function spaeterLoeschen(text, ausfuehren, rueckgaengig) {
+    let abgebrochen = false;
+    const uhr = setTimeout(function () { if (!abgebrochen) ausfuehren(); }, 6000);
+    toastAktion(text, 'Rückgängig', function () { abgebrochen = true; clearTimeout(uhr); rueckgaengig(); });
+    // Seite wird geschlossen, bevor die Zeit um ist: dann jetzt ausführen
+    window.addEventListener('pagehide', function () { if (!abgebrochen) { clearTimeout(uhr); abgebrochen = true; ausfuehren(); } }, { once: true });
+  }
+
   function toastAktion(text, label, fn) {
     const old = root.querySelector('.toast'); if (old) old.remove();
     const el = document.createElement('div'); el.className = 'toast mit-aktion';
@@ -985,6 +1077,56 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { el.remove(); }, 8000);
   }
+
+  // ---- Wischen am Handy: nach rechts = erledigt, nach links = auf morgen ----
+  function tdAufMorgen(tid) {
+    const t = tdFinde(tid); if (!t) return;
+    const alt = t.faellig || '';
+    tdDatumSetzen(tid, tdPlus(1));
+    toastAktion('„' + tdKurz(t.inhalt, 36) + '“ auf morgen', 'Rückgängig', function () { tdDatumSetzen(tid, alt); });
+  }
+  (function () {
+    const SCHWELLE = 90;
+    let zeile = null, x0 = 0, y0 = 0, dx = 0, richtung = null, gewischt = false;
+    document.addEventListener('touchstart', function (ev) {
+      zeile = null;
+      if (ev.touches.length !== 1 || !ev.target.closest) return;
+      const z = ev.target.closest('.td-zeile[data-tid]');
+      if (!z || ev.target.closest('.td-menue')) return;
+      zeile = z; x0 = ev.touches[0].clientX; y0 = ev.touches[0].clientY; dx = 0; richtung = null;
+    }, { passive: true });
+    document.addEventListener('touchmove', function (ev) {
+      if (!zeile) return;
+      const mx = ev.touches[0].clientX - x0, my = ev.touches[0].clientY - y0;
+      if (!richtung) {
+        if (Math.abs(mx) < 10 && Math.abs(my) < 10) return;
+        richtung = Math.abs(mx) > Math.abs(my) * 1.3 ? 'quer' : 'hoch';
+        if (richtung === 'quer') zeile.classList.add('wischt');
+      }
+      if (richtung !== 'quer') return;
+      dx = mx;
+      zeile.style.transform = 'translateX(' + dx + 'px)';
+      zeile.classList.toggle('wisch-fertig', dx > SCHWELLE);
+      zeile.classList.toggle('wisch-morgen', dx < -SCHWELLE);
+    }, { passive: true });
+    const ende = function () {
+      if (!zeile) return;
+      const z = zeile, tid = z.getAttribute('data-tid'), weit = dx;
+      zeile = null;
+      if (richtung !== 'quer') return;
+      gewischt = true; setTimeout(function () { gewischt = false; }, 400);
+      z.classList.remove('wischt', 'wisch-fertig', 'wisch-morgen');
+      z.style.transform = '';
+      if (weit > SCHWELLE) tdFertig(tid, z);
+      else if (weit < -SCHWELLE) tdAufMorgen(tid);
+    };
+    document.addEventListener('touchend', ende);
+    document.addEventListener('touchcancel', function () { dx = 0; ende(); });
+    // Nach dem Wischen keinen Klick auf die Zeile auslösen
+    document.addEventListener('click', function (ev) {
+      if (gewischt) { ev.stopPropagation(); ev.preventDefault(); gewischt = false; }
+    }, true);
+  })();
 
   // ---- Ändern direkt aus der Liste ----
   function tdDatumSetzen(tid, datum) {
@@ -1015,14 +1157,18 @@
   function tdLoeschen(tid) {
     const t = tdFinde(tid); if (!t) return;
     tdMenue = null;
-    if (!window.confirm('„' + tdKurz(t.inhalt, 60) + '“ wirklich löschen?')) { render(); return; }
-    api('todoist/aufgabe/' + encodeURIComponent(tid), { method: 'DELETE' })
-      .then(function () {
-        if (modal && modal.kind === 'aufgabe' && modal.aufgabe.id === tid) modal = null;
-        return alleLaden();
-      })
-      .then(function () { toast('Gelöscht'); render(); })
-      .catch(function (e) { toast(e.message); render(); });
+    // Sofort aus der Liste nehmen, in Todoist erst nach ein paar Sekunden löschen
+    const vorher = alleAufgaben;
+    alleAufgaben = (alleAufgaben || []).filter(function (x) { return x.id !== tid; });
+    if (modal && modal.kind === 'aufgabe' && modal.aufgabe.id === tid) modal = null;
+    tdAbleiten(); render();
+    spaeterLoeschen('„' + tdKurz(t.inhalt, 40) + '“ gelöscht', function () {
+      api('todoist/aufgabe/' + encodeURIComponent(tid), { method: 'DELETE' })
+        .then(function () { return alleLaden(); }).then(function () { render(); })
+        .catch(function (e) { fehlerToast(e.message); alleLaden().then(function () { render(); }); });
+    }, function () {
+      alleAufgaben = vorher; tdAbleiten(); render(); toast('Wiederhergestellt');
+    });
   }
   // Alles Überfällige auf einen Schlag auf ein neues Datum setzen
   async function tdNeuplanen(datum) {
@@ -1614,7 +1760,7 @@
   function planTag(iso) {
     return new Date(iso + 'T12:00:00').toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'numeric' });
   }
-  function planKarteHtml() {
+  function planLeisteHtml() {
     if (!todoist.verbunden) return '';
     const p = planInfo;
     let zeile, knoepfe = '';
@@ -1639,11 +1785,12 @@
       knoepfe = (p.aenderungen ? '<button class="tiny primary" data-act="plan-zeigen">' + (l ? 'Neu planen' : 'Tag planen') + '</button>' : '')
         + (l ? '<button class="tiny ghost" data-act="plan-zurueck"' + (planLaeuft ? ' disabled' : '') + '>Rückgängig</button>' : '');
     }
-    return '<div class="tafel planer memo"><div class="memokopf"><h3>Tagesplan</h3>'
+    return '<div class="planleiste">'
+      + '<div class="planzeile"><span class="plansymbol" aria-hidden="true">◷</span><span>' + zeile
+      + (planEinst && planEinst.automatisch ? ' <span class="unit-type">· plant jeden Morgen automatisch</span>' : '')
+      + '</span></div>'
+      + '<div class="planknoepfe">' + knoepfe
       + '<button class="tiny ghost" data-act="plan-einst" title="Arbeitszeiten und Automatik">Einstellen</button></div>'
-      + '<div class="planzeile">' + zeile + '</div>'
-      + (planEinst && planEinst.automatisch ? '<div class="unit-type">Plant jeden Morgen automatisch.</div>' : '')
-      + (knoepfe ? '<div class="planknoepfe">' + knoepfe + '</div>' : '')
       + '</div>';
   }
   async function planNachAenderung(meldung) {
@@ -1797,9 +1944,13 @@
         nochmalSpeichern = false;
         const wer = (e.inhalt && e.inhalt.wer) || 'Jemand anderes';
         const wann = e.inhalt && e.inhalt.wann ? new Date(e.inhalt.wann).toLocaleString('de-DE') : '';
-        if (confirm(wer + ' hat ' + (wann ? 'am ' + wann + ' ' : '') + 'inzwischen gespeichert.\n\n'
-          + 'OK: Deinen Stand trotzdem speichern (die andere Änderung wird überschrieben, bleibt aber im Verlauf).\n'
-          + 'Abbrechen: Den neuen Stand vom Server laden (deine letzte Änderung geht verloren).')) {
+        const wahl = await dialog({
+          titel: wer + ' hat inzwischen gespeichert',
+          text: (wann ? 'Am ' + wann + '. ' : '') + 'Du kannst den neuen Stand laden (deine letzte Änderung geht verloren) '
+            + 'oder deinen Stand trotzdem speichern (die andere Änderung bleibt im Verlauf).',
+          knoepfe: [{ label: 'Meinen Stand speichern', wert: 'meins' }, { label: 'Neuen Stand laden', wert: 'laden', art: 'primaer' }]
+        });
+        if (wahl.wert === 'meins') {
           erzwungenNochmal = true;
         } else {
           try { await datenHolen(); render(); toast('Neuer Stand geladen'); }
@@ -1814,13 +1965,22 @@
     }
   }
 
-  function toast(text) {
+  // Kurze Hinweise. Klingt es nach einem Fehler, bleibt er stehen, bis man ihn wegtippt (höchstens 15 s).
+  const FEHLER_WORTE = /fehl|nicht |kein|antwortet|abgelehnt|abgelaufen|ungültig|zu viele|bitte|mindestens|fehlt/i;
+  function toast(text, fehler) {
+    if (fehler === undefined) fehler = FEHLER_WORTE.test(String(text || ''));
     const old = root.querySelector('.toast'); if (old) old.remove();
-    const el = document.createElement('div'); el.className = 'toast'; el.textContent = text;
+    const el = document.createElement('div'); el.className = 'toast' + (fehler ? ' fehler' : ''); el.textContent = text;
+    if (fehler) {
+      el.setAttribute('role', 'alert');
+      el.title = 'Antippen zum Schließen';
+      el.addEventListener('click', function () { el.remove(); });
+    }
     root.appendChild(el);
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { el.remove(); }, 2200);
+    toastTimer = setTimeout(function () { el.remove(); }, fehler ? 15000 : 2600);
   }
+  function fehlerToast(text) { toast(text, true); }
 
   const n = function (v) { return Number(v) || 0; };
   const netto = function (x) { return n(x.rent) + n(x.parking) + n(x.kitchen); };
@@ -3156,6 +3316,8 @@
       + '<div class="sub"><span class="nur-breit">Objektübersicht · </span>' + data.objects.length + ' Objekte · '
       + units.length + ' Einheiten</div></div></div>'
       + '<div class="top-actions">'
+      + '<button class="theme lupe" data-act="suche" title="Suchen (Strg+K)" aria-label="Suchen">'
+      + '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg></button>'
       + '<button class="theme" data-act="theme" title="Hell oder dunkel">'
       + (theme === 'dark' ? '☾' : '☀') + '</button>'
       + '</div></div>';
@@ -3336,7 +3498,6 @@
 
     if (ansicht === 'heute') {
     html += '<div class="heute-raster"><div class="heute-links">';
-    html += planKarteHtml();
 
     // ---- Tagesmemo: die Reihenfolge des Tages ----
     (function () {
@@ -3360,6 +3521,9 @@
               + (sprichQuelle !== 'kal' && memoLaedt ? 'Moment …' : (sprichQuelle !== 'kal' && memoLaeuft ? 'Stopp' : 'Vorlesen')) + '</button>'
             : '')
         + '</div></div>';
+
+      // Tagesplan steckt mit in dieser Karte: eine Zeile Stand, daneben die Knöpfe
+      html += planLeisteHtml();
 
       if (stimme.verbunden) {
         html += '<div class="memostimme"><label for="memo-stimme">Stimme</label>'
@@ -3725,42 +3889,78 @@
           const wohn = shown.filter(function (x) { return parkTypes.indexOf(x.type) === -1; });
           const park = shown.filter(function (x) { return parkTypes.indexOf(x.type) !== -1; });
 
-          html += '<table><thead><tr>'
-            + '<th>Einheit</th><th class="sep-l">Mieter</th><th class="hide-s">Einzug</th><th>Status</th>'
-            + '<th class="right hide-s sep-l">Fläche</th><th class="right hide-s">€/m²</th><th class="right hide-s">Kalt</th>'
-            + '<th class="right hide-s">Küche</th><th class="right hide-s">Stellplatz</th><th class="right">Netto</th>'
-            + '<th class="right hide-s">NK</th><th class="right hide-s">Gesamt</th><th class="right hide-s">Kaution</th>'
-            + '<th class="hide-s sep-l">Notiz</th><th></th></tr></thead><tbody>';
+          // Spalten, die bei keiner Einheit etwas enthalten, fallen weg — die Tabelle bleibt übersichtlich
+          const leerStrich = '<span class="unit-type">—</span>';
+          const irgendwo = function (fn) { return shown.some(function (x) { return !!fn(x); }); };
+          const qm = function (x) { return x.area ? String(x.area).replace('.', ',') + ' m²' : leerStrich; };
+          const rentedShown = shown.filter(function (x) { return x.status === 'vermietet'; });
+          const t = function (fn) { return rentedShown.reduce(function (a, x) { return a + fn(x); }, 0); };
+          const flaeche = t(function (x) { return n(x.area); });
+          const spalten = [
+            { kopf: 'Einheit', zeige: true,
+              zelle: function (x) { return '<td><div class="unit-name">' + esc(x.name) + '</div><div class="unit-type">' + esc(x.type) + '</div></td>'; } },
+            { kopf: 'Mieter', cls: 'sep-l', zeige: true,
+              zelle: function (x) {
+                return '<td class="sep-l">' + (x.tenant ? esc(x.tenant) : leerStrich)
+                  + (!x.tenant && x.hint ? '<div class="hintline">' + esc(x.hint) + '</div>' : '')
+                  + (x.docs && x.docs.length ? '<div><span class="docbadge">' + x.docs.length + ' Dokument' + (x.docs.length > 1 ? 'e' : '') + '</span></div>' : '')
+                  + '</td>';
+              } },
+            { kopf: 'Einzug', cls: 'hide-s', zeige: irgendwo(function (x) { return x.movein; }),
+              zelle: function (x) { return '<td class="num hide-s">' + dateDE(x.movein) + '</td>'; } },
+            { kopf: 'Status', zeige: true,
+              zelle: function (x) {
+                return '<td><button class="pill klick ' + x.status + '" data-act="status" data-oid="' + o.id
+                  + '" data-uid="' + x.id + '" title="Status wechseln">' + label(x.status) + '</button></td>';
+              } },
+            { kopf: 'Fläche', cls: 'right hide-s sep-l', zeige: irgendwo(function (x) { return x.area; }),
+              zelle: function (x) { return '<td class="right num hide-s sep-l">' + qm(x) + '</td>'; },
+              fuss: flaeche ? flaeche.toFixed(1).replace('.', ',') + ' m²' : '' },
+            { kopf: '€/m²', cls: 'right hide-s', zeige: irgendwo(function (x) { return x.area && n(x.rent); }),
+              zelle: function (x) {
+                return '<td class="right num hide-s">' + (x.area && n(x.rent)
+                  ? (n(x.rent) / n(x.area)).toFixed(2).replace('.', ',') : leerStrich) + '</td>';
+              },
+              fuss: flaeche ? (t(function (x) { return n(x.rent); }) / flaeche).toFixed(2).replace('.', ',') : '' },
+            { kopf: 'Kalt', cls: 'right hide-s', zeige: irgendwo(function (x) { return n(x.rent); }),
+              zelle: function (x) { return '<td class="right num hide-s">' + money(x.rent) + '</td>'; },
+              fuss: money(t(function (x) { return n(x.rent); })) },
+            { kopf: 'Küche', cls: 'right hide-s', zeige: irgendwo(function (x) { return n(x.kitchen); }),
+              zelle: function (x) { return '<td class="right num hide-s">' + money(x.kitchen) + '</td>'; },
+              fuss: money(t(function (x) { return n(x.kitchen); })) },
+            { kopf: 'Stellplatz', cls: 'right hide-s', zeige: irgendwo(function (x) { return n(x.parking); }),
+              zelle: function (x) { return '<td class="right num hide-s">' + money(x.parking) + '</td>'; },
+              fuss: money(t(function (x) { return n(x.parking); })) },
+            { kopf: 'Netto', cls: 'right', zeige: true,
+              zelle: function (x) { return '<td class="right num strong">' + money(netto(x)) + '</td>'; },
+              fuss: money(t(netto)) },
+            { kopf: 'NK', cls: 'right hide-s', zeige: irgendwo(function (x) { return n(x.nk); }),
+              zelle: function (x) { return '<td class="right num hide-s">' + money(x.nk) + '</td>'; },
+              fuss: money(t(function (x) { return n(x.nk); })) },
+            { kopf: 'Gesamt', cls: 'right hide-s', zeige: irgendwo(function (x) { return n(x.nk); }),
+              zelle: function (x) { return '<td class="right num hide-s">' + money(brutto(x)) + '</td>'; },
+              fuss: money(t(brutto)) },
+            { kopf: 'Kaution', cls: 'right hide-s', zeige: irgendwo(function (x) { return n(kaution(x)); }),
+              zelle: function (x) { return '<td class="right num hide-s">' + money(kaution(x)) + '</td>'; },
+              fuss: money(t(kaution)) },
+            { kopf: 'Notiz', cls: 'hide-s sep-l', zeige: irgendwo(function (x) { return x.note; }),
+              zelle: function (x) { return '<td class="hide-s sep-l notecell">' + (x.note ? esc(x.note) : leerStrich) + '</td>'; } }
+          ].filter(function (sp) { return sp.zeige; });
+
+          html += '<table class="einheiten"><thead><tr>'
+            + spalten.map(function (sp) { return '<th' + (sp.cls ? ' class="' + sp.cls + '"' : '') + '>' + sp.kopf + '</th>'; }).join('')
+            + '<th></th></tr></thead><tbody>';
 
           const rowHtml = function (x) {
-            return '<tr class="unitrow" data-act="edit-unit" data-oid="' + o.id + '" data-uid="' + x.id + '">'
-              + '<td><div class="unit-name">' + esc(x.name) + '</div><div class="unit-type">' + esc(x.type) + '</div></td>'
-              + '<td class="sep-l">' + (x.tenant ? esc(x.tenant) : '<span class="unit-type">—</span>')
-              + (!x.tenant && x.hint ? '<div class="hintline">' + esc(x.hint) + '</div>' : '')
-              + (x.docs && x.docs.length ? '<div><span class="docbadge">' + x.docs.length + ' Dokument' + (x.docs.length > 1 ? 'e' : '') + '</span></div>' : '')
-              + '</td>'
-              + '<td class="num hide-s">' + dateDE(x.movein) + '</td>'
-              + '<td><button class="pill klick ' + x.status + '" data-act="status" data-oid="' + o.id
-              + '" data-uid="' + x.id + '" title="Status wechseln">' + label(x.status) + '</button></td>'
-              + '<td class="right num hide-s sep-l">' + (x.area ? String(x.area).replace('.', ',') + ' m²' : '<span class="unit-type">—</span>') + '</td>'
-              + '<td class="right num hide-s">' + (x.area && n(x.rent)
-                  ? (n(x.rent) / n(x.area)).toFixed(2).replace('.', ',') : '<span class="unit-type">—</span>') + '</td>'
-              + '<td class="right num hide-s">' + money(x.rent) + '</td>'
-              + '<td class="right num hide-s">' + money(x.kitchen) + '</td>'
-              + '<td class="right num hide-s">' + money(x.parking) + '</td>'
-              + '<td class="right num strong">' + money(netto(x)) + '</td>'
-              + '<td class="right num hide-s">' + money(x.nk) + '</td>'
-              + '<td class="right num hide-s">' + money(brutto(x)) + '</td>'
-              + '<td class="right num hide-s">' + money(kaution(x)) + '</td>'
-              + '<td class="hide-s sep-l notecell">' + (x.note ? esc(x.note) : '<span class="unit-type">—</span>') + '</td>'
-              + '<td><div class="rowact"><button class="tiny ghost" data-act="edit-unit" data-oid="' + o.id + '" data-uid="' + x.id + '">Bearbeiten</button></div></td>'
-              + '</tr>';
+            return '<tr class="unitrow" data-act="edit-unit" data-oid="' + o.id + '" data-uid="' + x.id + '" title="Bearbeiten">'
+              + spalten.map(function (sp) { return sp.zelle(x); }).join('')
+              + '<td class="rowpfeil" aria-hidden="true">›</td></tr>';
           };
 
           const groupRow = function (title, list) {
             const rented = list.filter(function (x) { return x.status === 'vermietet'; });
             const sum = rented.reduce(function (a, x) { return a + netto(x); }, 0);
-            return '<tr class="grouprow"><td colspan="15">' + title + ' · ' + list.length
+            return '<tr class="grouprow"><td colspan="' + (spalten.length + 1) + '">' + title + ' · ' + list.length
               + (sum ? ' · <span class="num">' + money(sum) + ' netto</span>' : '') + '</td></tr>';
           };
 
@@ -3769,22 +3969,13 @@
           if (park.length && wohn.length) html += groupRow('Stellplätze und Garagen', park);
           park.forEach(function (x) { html += rowHtml(x); });
 
-          const rentedShown = shown.filter(function (x) { return x.status === 'vermietet'; });
-          const t = function (fn) { return rentedShown.reduce(function (a, x) { return a + fn(x); }, 0); };
           html += '</tbody><tfoot><tr>'
-            + '<td colspan="2">Summe vermietet · ' + rentedShown.length + ' Einheiten</td>'
-            + '<td class="hide-s"></td><td></td>'
-            + '<td class="right num hide-s sep-l">' + (t(function (x) { return n(x.area); }) ? t(function (x) { return n(x.area); }).toFixed(1).replace('.', ',') + ' m²' : '') + '</td>'
-            + '<td class="right num hide-s">' + (t(function (x) { return n(x.area); })
-                ? (t(function (x) { return n(x.rent); }) / t(function (x) { return n(x.area); })).toFixed(2).replace('.', ',') : '') + '</td>'
-            + '<td class="right num hide-s">' + money(t(function (x) { return n(x.rent); })) + '</td>'
-            + '<td class="right num hide-s">' + money(t(function (x) { return n(x.kitchen); })) + '</td>'
-            + '<td class="right num hide-s">' + money(t(function (x) { return n(x.parking); })) + '</td>'
-            + '<td class="right num">' + money(t(netto)) + '</td>'
-            + '<td class="right num hide-s">' + money(t(function (x) { return n(x.nk); })) + '</td>'
-            + '<td class="right num hide-s">' + money(t(brutto)) + '</td>'
-            + '<td class="right num hide-s">' + money(t(kaution)) + '</td>'
-            + '<td class="hide-s sep-l"></td><td></td></tr></tfoot></table>';
+            + spalten.map(function (sp, i) {
+                if (i === 0) return '<td>Summe vermietet · ' + rentedShown.length + ' Einheiten</td>';
+                const cls = (sp.cls || '').replace('right', 'right num');
+                return '<td' + (cls ? ' class="' + cls + '"' : '') + '>' + (sp.fuss || '') + '</td>';
+              }).join('')
+            + '<td></td></tr></tfoot></table>';
             html += '</div>';
           }
           html += '<div class="modal-actions" style="justify-content:flex-start;margin-top:12px">'
@@ -4287,14 +4478,19 @@
 
   async function rgLoeschen(id, art) {
     const e = rg && rg.liste.find(function (x) { return String(x.id) === String(id); });
-    if (!e || !window.confirm((art === 'nk' ? 'Schreiben ' : 'Rechnung ') + e.nummer + ' wirklich löschen?')) return;
-    try {
-      const a = await api('rechnungen/' + id, { method: 'DELETE' });
-      rg.liste = a.liste; rg.naechste = a.naechste;
-      if (rgForm && String(rgForm.id) === String(id)) rgNeu(rgArt(rgForm));
-      if (nkForm && String(nkForm.id) === String(id)) nkNeu();
-      toast(art === 'nk' ? 'Schreiben gelöscht' : 'Rechnung gelöscht'); render();
-    } catch (err) { toast(err.message); }
+    if (!e) return;
+    const vorher = rg.liste;
+    rg.liste = rg.liste.filter(function (x) { return String(x.id) !== String(id); });
+    render();
+    spaeterLoeschen((art === 'nk' ? 'Schreiben ' : 'Rechnung ') + e.nummer + ' gelöscht', async function () {
+      try {
+        const a = await api('rechnungen/' + id, { method: 'DELETE' });
+        rg.liste = a.liste; rg.naechste = a.naechste;
+        if (rgForm && String(rgForm.id) === String(id)) rgNeu(rgArt(rgForm));
+        if (nkForm && String(nkForm.id) === String(id)) nkNeu();
+        render();
+      } catch (err) { rg.liste = vorher; fehlerToast(err.message); render(); }
+    }, function () { rg.liste = vorher; render(); toast('Wiederhergestellt'); });
   }
 
   // Das fertige Blatt (DIN A4) — dieselbe Ansicht für Vorschau und Druck
@@ -5055,9 +5251,132 @@
       + '</div>';
   }
 
+  // ---- Suche für alles (Lupe oben, Strg+K) ----
+  function sucheTreffer(q) {
+    const worte = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
+    if (!worte.length) return [];
+    const passt = function () {
+      const text = Array.prototype.slice.call(arguments).join(' ').toLowerCase();
+      return worte.every(function (w) { return text.indexOf(w) !== -1; });
+    };
+    const gruppen = [];
+    const gruppe = function (name, liste) { if (liste.length) gruppen.push({ name: name, liste: liste.slice(0, 5), mehr: liste.length - 5 }); };
+
+    gruppe('Objekte', data.objects.filter(function (o) { return passt(o.name, o.note); }).map(function (o) {
+      return { typ: 'objekt', id: o.id, titel: o.name, unten: o.units.length + ' Einheiten' };
+    }));
+    const einheiten = [];
+    data.objects.forEach(function (o) {
+      o.units.forEach(function (x) {
+        if (passt(o.name, x.name, x.tenant, x.contact, x.type)) {
+          einheiten.push({ typ: 'einheit', oid: o.id, id: x.id, titel: (x.tenant || x.name || 'Einheit'),
+            unten: o.name + (x.tenant ? ' · ' + x.name : '') });
+        }
+      });
+    });
+    gruppe('Einheiten und Mieter', einheiten);
+    gruppe('Interessenten', (data.interessenten || []).filter(function (i) { return passt(i.name, i.kontakt, i.notiz); })
+      .map(function (i) { return { typ: 'interessent', id: i.id, titel: i.name || 'Interessent', unten: i.kontakt || einheitKurz(i.einheitId) || '' }; }));
+    gruppe('Aufgaben', (alleAufgaben || []).filter(function (t) { return passt(t.inhalt, t.beschreibung); })
+      .map(function (t) { return { typ: 'aufgabe', id: t.id, titel: t.inhalt, unten: (t.faellig ? rgDatum(t.faellig) + ' · ' : '') + (tdProjektName(t.projektId) || '') }; }));
+    gruppe('Post', (postListe || []).concat((postInfo && postInfo.rest) || []).filter(function (m) { return passt(m.betreff, m.von); })
+      .map(function (m) { return { typ: 'post', id: m.id, titel: m.betreff, unten: String(m.von || '').replace(/<.*>/, '').replace(/"/g, '').trim() }; }));
+    gruppe('Abrechnungen', ((rg && rg.liste) || []).filter(function (e) { return passt(e.nummer, e.objekt); })
+      .map(function (e) { return { typ: 'rechnung', id: e.id, titel: e.nummer, unten: e.objekt || '' }; }));
+    return gruppen;
+  }
+
+  function sucheTrefferHtml(q) {
+    if (!String(q || '').trim()) return '<div class="such-leer">Objekte, Mieter, Interessenten, Aufgaben, Mails und Abrechnungen</div>';
+    const gruppen = sucheTreffer(q);
+    if (!gruppen.length) return '<div class="such-leer">Nichts gefunden</div>';
+    let erster = true;
+    return gruppen.map(function (g) {
+      return '<div class="such-gruppe"><div class="such-kopf">' + g.name + '</div>'
+        + g.liste.map(function (t) {
+          const html = '<button class="such-treffer' + (erster ? ' gewaehlt' : '') + '" data-act="such-treffer" data-typ="' + t.typ
+            + '" data-id="' + esc(String(t.id)) + '"' + (t.oid ? ' data-oid="' + t.oid + '"' : '') + '>'
+            + '<span class="st-titel">' + esc(t.titel) + '</span>'
+            + (t.unten ? '<span class="st-unten">' + esc(t.unten) + '</span>' : '') + '</button>';
+          erster = false;
+          return html;
+        }).join('')
+        + (g.mehr > 0 ? '<div class="such-mehr">und ' + g.mehr + ' weitere – genauer suchen</div>' : '')
+        + '</div>';
+    }).join('');
+  }
+
+  function sucheOeffnen() {
+    if (phase !== 'app' || !data) return;
+    tdMenue = null;
+    modal = { kind: 'suche', q: '' };
+    render();
+    fensterGeoeffnet();
+  }
+
+  function sucheBinden() {
+    const feld = root.querySelector('#suche-q');
+    if (!feld) return;
+    const ziel = root.querySelector('#suche-treffer');
+    feld.focus();
+    feld.addEventListener('input', function () {
+      modal.q = feld.value;
+      ziel.innerHTML = sucheTrefferHtml(feld.value);
+      ziel.querySelectorAll('[data-act]').forEach(function (el) {
+        el.addEventListener('click', function (ev) { ev.stopPropagation(); handle('such-treffer', el); });
+      });
+    });
+    feld.addEventListener('keydown', function (ev) {
+      const alle = Array.prototype.slice.call(ziel.querySelectorAll('.such-treffer'));
+      if (!alle.length) return;
+      let i = alle.findIndex(function (b) { return b.classList.contains('gewaehlt'); });
+      if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+        ev.preventDefault();
+        if (i >= 0) alle[i].classList.remove('gewaehlt');
+        i = ev.key === 'ArrowDown' ? Math.min(alle.length - 1, i + 1) : Math.max(0, i - 1);
+        alle[i].classList.add('gewaehlt');
+        alle[i].scrollIntoView({ block: 'nearest' });
+      } else if (ev.key === 'Enter') {
+        ev.preventDefault(); ev.stopPropagation();
+        handle('such-treffer', alle[Math.max(0, i)]);
+      }
+    });
+  }
+
+  function sucheSpringen(el) {
+    const typ = el.getAttribute('data-typ'), id = el.getAttribute('data-id');
+    modal = null;
+    if (typ === 'objekt') {
+      ansicht = 'objekte'; query = ''; open[id] = true; render();
+      const kopf = root.querySelector('.obj-head[data-id="' + id + '"]');
+      if (kopf) kopf.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    } else if (typ === 'einheit') {
+      openUnit(el.getAttribute('data-oid'), id);
+    } else if (typ === 'interessent') {
+      const inter = interessentVon(id);
+      if (inter) modal = { kind: 'interessent', isNew: false, i: inter };
+      render();
+    } else if (typ === 'aufgabe') {
+      render(); tdOeffnen(id);
+    } else if (typ === 'post') {
+      const m = (postListe || []).concat((postInfo && postInfo.rest) || []).find(function (z) { return z.id === id; });
+      render();
+      if (m) window.open(m.url, '_blank', 'noopener');
+    } else if (typ === 'rechnung') {
+      const e = rg && rg.liste.find(function (x) { return String(x.id) === String(id); });
+      ansicht = 'rechnungen';
+      if (e) rgTab = e.art || 'as';
+      rgAusListe(id);
+      render();
+    } else render();
+  }
+
   function renderModal() {
     let body = '';
-    if (modal.kind === 'unit') {
+    if (modal.kind === 'suche') {
+      body = '<div class="such-feld"><input type="search" id="suche-q" placeholder="Suchen …" autocomplete="off" value="' + esc(modal.q || '') + '"></div>'
+        + '<div id="suche-treffer">' + sucheTrefferHtml(modal.q) + '</div>';
+    } else if (modal.kind === 'unit') {
       const x = modal.unit;
       body = '<h2>' + (modal.isNew ? 'Einheit hinzufügen' : esc(x.name || 'Einheit')) + '</h2>'
         + '<div class="hint">Nettomiete = Kalt + Küche + Stellplatz · Kaution leer lassen = 2 Monatskaltmieten<br>'
@@ -6017,7 +6336,7 @@
       wartung: 'Prüfungen', aufgabe: 'Aufgabe', todoist: 'Todoist', zugaenge: 'Zugänge',
       sicherung: 'Daten sichern', serversicherung: 'Server-Sicherung', plan: 'Tagesplan', planeinst: 'Tagesplan', staende: 'Verlauf', menue: 'Menü', google: 'Postfach',
       schreiben: 'Schreiben', nk: 'Betriebskosten', auszug: 'Kontoauszug', beleg: 'Beleg ablegen',
-      schnell: 'Aufgabe hinzufügen'
+      schnell: 'Aufgabe hinzufügen', suche: 'Suchen'
     }[modal.kind] || '';
 
 
@@ -6042,19 +6361,6 @@
   }
 
   // Die Zurück-Taste des Handys schließt das Fenster statt die Seite zu verlassen
-  document.addEventListener('keydown', function (ev) {
-    if (modal || phase !== 'app') return;
-    const imFeld = ['INPUT', 'TEXTAREA', 'SELECT'].indexOf(ev.target.tagName) !== -1;
-    if (ev.key === '/' && !imFeld) {
-      ev.preventDefault();
-      const q = root.querySelector('#q');
-      if (q) q.focus();
-    }
-    if (ev.key === 'Escape' && imFeld && ev.target.id === 'q') {
-      query = ''; render();
-    }
-  });
-
   window.addEventListener('popstate', function () {
     if (modal) { modal = null; render(); }
   });
@@ -6097,6 +6403,7 @@
     });
     rgBinden();
     nkBinden();
+    sucheBinden();
     // Stimme der Tagesmemo: Wahl merken und sofort kurz anhören
     const stimmwahl = root.querySelector('#memo-stimme');
     if (stimmwahl) {
@@ -6338,6 +6645,8 @@
       tdMerken(); render();
     }
     else if (act === 'td-fertig') { tdFertig(el.getAttribute('data-tid'), el); }
+    else if (act === 'suche') { sucheOeffnen(); }
+    else if (act === 'such-treffer') { sucheSpringen(el); }
     else if (act === 'td-oeffnen') { tdOeffnen(el.getAttribute('data-tid')); }
     else if (act === 'td-menue') {
       const typ = el.getAttribute('data-typ'), tid = el.getAttribute('data-tid') || '';
@@ -6685,7 +6994,7 @@
       if (!r) return;
       const t = nkText(o, r);
       navigator.clipboard.writeText(t).then(function () { toast('Abrechnung kopiert'); })
-        .catch(function () { window.prompt('Kopieren mit Strg+C:', t); });
+        .catch(function () { kopierDialog(t); });
     }
     else if (act === 'schreiben') {
       modal = { kind: 'schreiben', oid: el.getAttribute('data-oid'), uid: el.getAttribute('data-uid'), art: 'erhoehung' };
@@ -6843,14 +7152,18 @@
     }
     else if (act === 'plan-zurueck') {
       if (planLaeuft) return;
-      if (!confirm('Die letzte Planung zurücknehmen? Alle Aufgaben bekommen wieder ihr altes Datum.')) return;
-      planLaeuft = true; render();
-      api('plan/rueckgaengig', { method: 'POST', body: {} })
-        .then(function (r) {
-          planLaeuft = false;
-          return planNachAenderung('Zurückgenommen: ' + r.zurueck + (r.zurueck === 1 ? ' Aufgabe' : ' Aufgaben'));
+      dialog({ titel: 'Planung zurücknehmen?', text: 'Alle Aufgaben bekommen wieder ihr altes Datum.',
+        knoepfe: [{ label: 'Abbrechen', wert: false }, { label: 'Zurücknehmen', wert: true, art: 'primaer' }] })
+        .then(function (w) {
+          if (!w.wert) return;
+          planLaeuft = true; render();
+          return api('plan/rueckgaengig', { method: 'POST', body: {} })
+            .then(function (r) {
+              planLaeuft = false;
+              return planNachAenderung('Zurückgenommen: ' + r.zurueck + (r.zurueck === 1 ? ' Aufgabe' : ' Aufgaben'));
+            });
         })
-        .catch(function (e) { planLaeuft = false; toast(e.message); render(); });
+        .catch(function (e) { planLaeuft = false; fehlerToast(e.message); render(); });
     }
     else if (act === 'plan-einst') {
       modal = { kind: 'planeinst' }; render();
@@ -6901,12 +7214,16 @@
     else if (act === 'nutzer-weg') { nutzerLoeschen(el.getAttribute('data-name')); }
     else if (act === 'nutzer-pw') {
       const wer = el.getAttribute('data-name');
-      const neu = prompt('Neues Passwort für ' + wer + ' (mind. 8 Zeichen):');
-      if (neu === null) return;
-      if (neu.length < 8) { toast('Mindestens acht Zeichen'); return; }
-      api('users/' + encodeURIComponent(wer) + '/passwort', { method: 'PUT', body: { passwort: neu } })
-        .then(function () { toast('Passwort für ' + wer + ' geändert'); })
-        .catch(function (e) { toast(e.message); });
+      dialog({ titel: 'Neues Passwort für ' + wer, text: 'Mindestens acht Zeichen. ' + wer + ' wird dabei überall abgemeldet.',
+        feld: { typ: 'password', platzhalter: 'Neues Passwort' },
+        knoepfe: [{ label: 'Abbrechen', wert: false }, { label: 'Ändern', wert: true, art: 'primaer' }] })
+        .then(function (w) {
+          if (!w.wert) return;
+          if ((w.eingabe || '').length < 8) { fehlerToast('Mindestens acht Zeichen'); return; }
+          return api('users/' + encodeURIComponent(wer) + '/passwort', { method: 'PUT', body: { passwort: w.eingabe } })
+            .then(function () { toast('Passwort für ' + wer + ' geändert'); });
+        })
+        .catch(function (e) { fehlerToast(e.message); });
     }
     else if (act === 'pw-aendern') {
       // Passwörter ungekürzt nehmen — Leerzeichen am Rand zählen mit
@@ -7190,7 +7507,7 @@
 
     navigator.clipboard.writeText(text)
       .then(function () { toast('Abrechnungstext kopiert'); })
-      .catch(function () { window.prompt('Kopieren mit Strg+C:', text); });
+      .catch(function () { kopierDialog(text); });
   }
 
   function val(id) { const el = root.querySelector('#' + id); return el ? el.value.trim() : ''; }
@@ -7258,7 +7575,7 @@
     const text = lines.join('\n');
     navigator.clipboard.writeText(text).then(function () {
       toast('In die Zwischenablage kopiert — in Excel einfügen');
-    }).catch(function () { window.prompt('Kopieren mit Strg+C / Cmd+C:', text); });
+    }).catch(function () { kopierDialog(text); });
   }
 
   if ('serviceWorker' in navigator) {
@@ -7288,6 +7605,38 @@
       if (Number(block.getAttribute('data-ende')) < minuten) block.classList.add('spaet');
     });
   }, 30000);
+
+  // ---- Immer aktuell: beim Zurückkehren zur App und alle zehn Minuten nachladen ----
+  // Was jemand anderes gespeichert hat, was in Todoist oder im Postfach neu ist, taucht so von selbst auf.
+  // Ein offenes Fenster oder ein Feld, in dem gerade getippt wird, wird dabei nicht gestört.
+  let zuletztAufgefrischt = Date.now(), frischLaeuft = false;
+  async function auffrischen() {
+    if (phase !== 'app' || frischLaeuft || speicherLaeuft || nochmalSpeichern) return;
+    frischLaeuft = true;
+    try {
+      if (!modal) {
+        const stand = await api('data');
+        if (stand && stand.wann && (!zuletztGeaendert || stand.wann !== zuletztGeaendert.wann) && !speicherLaeuft) {
+          await datenHolen();
+        }
+      }
+      if (todoist.verbunden) { await alleLaden(); await planLaden(); }
+      if (ansicht === 'post' && google.verbunden) await postLaden();
+      zuletztAufgefrischt = Date.now();
+      const tipptGerade = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].indexOf(document.activeElement.tagName) !== -1;
+      if (!tipptGerade && !document.getElementById('dialog')) render();
+    } catch (e) { /* beim nächsten Mal */ }
+    finally { frischLaeuft = false; }
+  }
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible' && Date.now() - zuletztAufgefrischt > 60 * 1000) auffrischen();
+  });
+  window.addEventListener('focus', function () {
+    if (Date.now() - zuletztAufgefrischt > 60 * 1000) auffrischen();
+  });
+  setInterval(function () {
+    if (document.visibilityState === 'visible' && Date.now() - zuletztAufgefrischt > 10 * 60 * 1000) auffrischen();
+  }, 60 * 1000);
 
   // Aus der Morgenmeldung geöffnet: das Memo hervorheben und die Stimmen wecken
   try {
