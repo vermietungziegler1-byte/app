@@ -581,6 +581,12 @@
       toast('Server nicht erreichbar');
     }
     render();
+    if (phase === 'app' && todoist.verbunden) {
+      planLaden().then(function () {
+        if (planWunsch) { planWunsch = false; modal = { kind: 'plan' }; }
+        render();
+      });
+    }
   }
 
   // Fehlende Felder ergaenzen, damit spaetere Erweiterungen nichts kaputt machen.
@@ -1593,6 +1599,60 @@
     catch (fehler) { assistent = { verbunden: false, hoeren: false }; }
   }
 
+  // ---- Tagesplaner ----
+  async function planLaden() {
+    if (!todoist.verbunden) { planInfo = null; return; }
+    try {
+      const antworten = await Promise.all([api('plan'), api('plan/einstellungen')]);
+      planInfo = antworten[0];
+      planEinst = antworten[1];
+    } catch (e) { planInfo = { fehler: e.message }; }
+  }
+  function planUhr(ms) {
+    return new Date(ms).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  }
+  function planTag(iso) {
+    return new Date(iso + 'T12:00:00').toLocaleDateString('de-DE', { weekday: 'short', day: 'numeric', month: 'numeric' });
+  }
+  function planKarteHtml() {
+    if (!todoist.verbunden) return '';
+    const p = planInfo;
+    let zeile, knoepfe = '';
+    if (!p) {
+      zeile = 'Wird berechnet …';
+    } else if (p.fehler) {
+      zeile = '<span style="color:var(--sperr)">' + esc(p.fehler) + '</span>';
+    } else {
+      const l = p.letzteUebernahme;
+      if (l && !p.aenderungen) {
+        zeile = 'Geplant um ' + planUhr(l.wann) + ' Uhr' + (l.wer === 'Automatik' ? ' (automatisch)' : '')
+          + ' · ' + p.bloecke.length + (p.bloecke.length === 1 ? ' Block' : ' Blöcke') + ' heute.';
+      } else if (l) {
+        zeile = 'Seit der Planung um ' + planUhr(l.wann) + ' Uhr hat sich etwas verschoben — '
+          + '„Neu planen“ legt Offenes in die freie Zeit.';
+      } else if (p.aenderungen) {
+        zeile = p.bloecke.length + (p.bloecke.length === 1 ? ' Aufgabe passt' : ' Aufgaben passen') + ' heute hinein'
+          + (p.verschoben.length ? ', ' + p.verschoben.length + ' kommen auf die nächsten Tage' : '') + '.';
+      } else {
+        zeile = 'Nichts zu planen — alles hat seinen Platz.';
+      }
+      knoepfe = (p.aenderungen ? '<button class="tiny primary" data-act="plan-zeigen">' + (l ? 'Neu planen' : 'Tag planen') + '</button>' : '')
+        + (l ? '<button class="tiny ghost" data-act="plan-zurueck"' + (planLaeuft ? ' disabled' : '') + '>Rückgängig</button>' : '');
+    }
+    return '<div class="tafel planer memo"><div class="memokopf"><h3>Tagesplan</h3>'
+      + '<button class="tiny ghost" data-act="plan-einst" title="Arbeitszeiten und Automatik">Einstellen</button></div>'
+      + '<div class="planzeile">' + zeile + '</div>'
+      + (planEinst && planEinst.automatisch ? '<div class="unit-type">Plant jeden Morgen automatisch.</div>' : '')
+      + (knoepfe ? '<div class="planknoepfe">' + knoepfe + '</div>' : '')
+      + '</div>';
+  }
+  async function planNachAenderung(meldung) {
+    toast(meldung);
+    await alleLaden();
+    await planLaden();
+    render();
+  }
+
   async function todoistLaden() {
     try { todoist = await api('todoist'); } catch (e) { todoist = { verbunden: false, zuordnung: {} }; }
     if (todoist.verbunden) {
@@ -2221,6 +2281,10 @@
   // ---------------------------------------------------------------
   let memoLaeuft = false;   // wird gerade vorgelesen
   let memoWunsch = false;   // aus der Morgenmeldung geöffnet
+  let planInfo = null;      // Vorschlag bzw. Stand der Tagesplanung vom Server
+  let planEinst = null;     // Einstellungen des Tagesplaners
+  let planLaeuft = false;   // Übernehmen oder Rückgängig läuft gerade
+  let planWunsch = false;   // aus der Morgenmeldung: Vorschlag gleich öffnen
   let memoStimmeName = null;   // welche Gerätestimme vorlesen soll
   let memoAudio = null;        // laufende Aufnahme der echten Stimme
   let memoLaedt = false;       // die Aufnahme wird gerade geholt
@@ -2801,7 +2865,7 @@
       const d = new Date(t.faelligZeit);
       if (isNaN(d)) return;
       liste.push({
-        art: 'aufgabe', von: d.getHours() * 60 + d.getMinutes(), dauer: 60,
+        art: 'aufgabe', von: d.getHours() * 60 + d.getMinutes(), dauer: t.dauer || 60,
         titel: t.inhalt, unten: tdProjektName(t.projektId),
         act: 'td-oeffnen', tid: t.id
       });
@@ -3271,6 +3335,7 @@
 
     if (ansicht === 'heute') {
     html += '<div class="heute-raster"><div class="heute-links">';
+    html += planKarteHtml();
 
     // ---- Tagesmemo: die Reihenfolge des Tages ----
     (function () {
@@ -5761,6 +5826,76 @@
         + '<button data-act="pw-aendern">Eigenes Passwort ändern</button>'
         + '<div class="modal-actions"><div class="spacer"></div>'
         + '<button data-act="close">Schließen</button></div>';
+    } else if (modal.kind === 'plan') {
+      const p = planInfo;
+      body = '<h2>Tagesplan</h2>';
+      if (!p || p.fehler) {
+        body += '<div class="docempty">' + (p ? esc(p.fehler) : 'Wird berechnet …') + '</div>';
+      } else {
+        body += '<div class="hint">So würde ich ' + (p.datum === heuteISO() ? 'deinen Tag' : 'den ' + esc(planTag(p.datum))) + ' legen. '
+          + '„Übernehmen“ trägt Uhrzeit und Dauer in Todoist ein; was heute nicht mehr passt, bekommt ein neues Datum. '
+          + 'Mit „Rückgängig“ ist alles wieder wie vorher.</div>';
+        const heute = p.bloecke.map(function (b) {
+          return { von: b.von, html: '<div class="planblock"><span class="num">' + b.von + '–' + b.bis + '</span>'
+            + '<span class="grow">' + esc(b.inhalt) + '</span>'
+            + '<span class="unit-type">' + b.dauer + ' Min' + (b.geschaetzt ? ', geschätzt' : '') + '</span></div>' };
+        }).concat(p.fest.map(function (f) {
+          return { von: f.von, html: '<div class="planblock fest"><span class="num">' + f.von + '–' + f.bis + '</span>'
+            + '<span class="grow">' + esc(f.inhalt) + '</span><span class="unit-type">feste Uhrzeit</span></div>' };
+        })).sort(function (a, c) { return a.von < c.von ? -1 : 1; });
+        body += '<div class="plantitel">Heute</div>'
+          + (heute.length ? heute.map(function (z) { return z.html; }).join('') : '<div class="docempty">Heute ist kein Platz mehr frei.</div>');
+        if (p.verschoben.length) {
+          const tage = {};
+          p.verschoben.forEach(function (v) { (tage[v.nach] = tage[v.nach] || []).push(v.inhalt); });
+          body += '<div class="plantitel">Auf die nächsten Tage (' + p.verschoben.length + ')</div>'
+            + Object.keys(tage).sort().map(function (d) {
+                return '<div class="plangruppe"><b>' + esc(planTag(d)) + '</b> ' + tage[d].map(esc).join(' · ') + '</div>';
+              }).join('');
+        }
+        if (p.wiederkehrend.length) {
+          body += '<div class="unit-type" style="margin-top:10px">Wiederkehrend, bleibt wie es ist: '
+            + p.wiederkehrend.map(function (w) { return esc(w.inhalt); }).join(' · ') + '</div>';
+        }
+        if (p.ohnePlatz.length) {
+          body += '<div class="unit-type" style="margin-top:6px">Kein Platz in den nächsten Wochen: '
+            + p.ohnePlatz.map(function (w) { return esc(w.inhalt); }).join(' · ') + '</div>';
+        }
+        if (nutzerRolle === 'verwalter' && planEinst && !planEinst.automatisch) {
+          body += '<label class="planauto"><input type="checkbox" id="plan-auto"> Ab jetzt jeden Morgen automatisch so planen</label>';
+        }
+      }
+      body += '<div class="modal-actions">'
+        + '<button class="primary" data-act="plan-uebernehmen"' + (planLaeuft || !p || p.fehler || !p.aenderungen ? ' disabled' : '') + '>'
+        + (planLaeuft ? 'Trage ein …' : 'Übernehmen') + '</button>'
+        + '<div class="spacer"></div><button data-act="close">Abbrechen</button></div>';
+    } else if (modal.kind === 'planeinst') {
+      const e = planEinst || {};
+      const darf = nutzerRolle === 'verwalter';
+      const aus = darf ? '' : ' disabled';
+      const zeit = function (id, wert) { return '<input type="time" id="' + id + '" value="' + esc(wert || '') + '"' + aus + '>'; };
+      const zahl = function (id, wert, schritt) {
+        return '<input type="number" id="' + id + '" value="' + esc(String(wert)) + '" step="' + (schritt || 1) + '" min="0"' + aus + '>';
+      };
+      const tage = [[1, 'Mo'], [2, 'Di'], [3, 'Mi'], [4, 'Do'], [5, 'Fr'], [6, 'Sa'], [0, 'So']];
+      body = '<h2>Tagesplan einstellen</h2>'
+        + '<div class="hint">In diesem Rahmen legt der Planer deine Aufgaben. Termine aus dem Kalender, Besichtigungen '
+        + 'und Aufgaben mit fester Uhrzeit hält er frei.</div>'
+        + '<div class="two">' + f('Arbeitsbeginn', zeit('pe-start', e.start)) + f('Arbeitsende', zeit('pe-ende', e.ende)) + '</div>'
+        + '<div class="two">' + f('Pause von', zeit('pe-pvon', e.pauseVon)) + f('Pause bis', zeit('pe-pbis', e.pauseBis)) + '</div>'
+        + '<div class="two">' + f('Höchstens verplant pro Tag (Stunden)', zahl('pe-max', (e.maxMinuten || 360) / 60, 0.5))
+        + f('Luft nach jedem Block (Minuten)', zahl('pe-puffer', e.puffer === undefined ? 10 : e.puffer)) + '</div>'
+        + '<div class="two">' + f('Dauer, wenn nichts bekannt (Minuten)', zahl('pe-dauer', e.standardDauer || 30, 5)) + '<div></div></div>'
+        + f('Arbeitstage', '<div class="plantage">' + tage.map(function (t) {
+            return '<label><input type="checkbox" class="pe-tag" value="' + t[0] + '"'
+              + ((e.arbeitstage || [1, 2, 3, 4, 5]).indexOf(t[0]) !== -1 ? ' checked' : '') + aus + '> ' + t[1] + '</label>';
+          }).join('') + '</div>')
+        + '<label class="planauto"><input type="checkbox" id="pe-auto"' + (e.automatisch ? ' checked' : '') + aus + '> '
+        + 'Jeden Morgen automatisch planen und in Todoist eintragen</label>'
+        + (darf ? '' : '<div class="legal">Nur der Verwalter kann das ändern.</div>')
+        + '<div class="modal-actions">'
+        + (darf ? '<button class="primary" data-act="plan-einst-speichern">Speichern</button>' : '')
+        + '<div class="spacer"></div><button data-act="close">Schließen</button></div>';
     } else if (modal.kind === 'serversicherung') {
       const si = sicherungInfo;
       const zeit = function (ms) {
@@ -5835,7 +5970,7 @@
     const titel = {
       unit: 'Einheit', object: 'Objekt', strom: 'Stromabrechnung', konto: 'Mietkonto',
       wartung: 'Prüfungen', aufgabe: 'Aufgabe', todoist: 'Todoist', zugaenge: 'Zugänge',
-      sicherung: 'Daten sichern', serversicherung: 'Server-Sicherung', staende: 'Verlauf', menue: 'Menü', google: 'Postfach',
+      sicherung: 'Daten sichern', serversicherung: 'Server-Sicherung', plan: 'Tagesplan', planeinst: 'Tagesplan', staende: 'Verlauf', menue: 'Menü', google: 'Postfach',
       schreiben: 'Schreiben', nk: 'Betriebskosten', auszug: 'Kontoauszug', beleg: 'Beleg ablegen',
       schnell: 'Aufgabe hinzufügen'
     }[modal.kind] || '';
@@ -6634,6 +6769,54 @@
       verlaufHolen().then(function () { if (modal && modal.kind === 'staende') render(); });
     }
     else if (act === 'verlauf-laden') { verlaufLaden(el.getAttribute('data-id')); }
+    else if (act === 'plan-zeigen') {
+      modal = { kind: 'plan' }; render();
+      planLaden().then(function () { if (modal && modal.kind === 'plan') render(); });
+    }
+    else if (act === 'plan-uebernehmen') {
+      if (planLaeuft) return;
+      const auto = root.querySelector('#plan-auto');
+      const automatisch = !!(auto && auto.checked);
+      planLaeuft = true; render();
+      (automatisch ? api('plan/einstellungen', { method: 'PUT', body: { automatisch: true } }) : Promise.resolve())
+        .then(function () { return api('plan', { method: 'POST', body: { datum: planInfo && planInfo.datum } }); })
+        .then(function (r) {
+          modal = null;
+          planLaeuft = false;
+          return planNachAenderung('Geplant: ' + r.geaendert + (r.geaendert === 1 ? ' Aufgabe' : ' Aufgaben') + ' eingetragen'
+            + (r.fehler.length ? ' — ' + r.fehler.length + ' nicht (' + r.fehler[0].fehler + ')' : ''));
+        })
+        .catch(function (e) { planLaeuft = false; toast(e.message); render(); });
+    }
+    else if (act === 'plan-zurueck') {
+      if (planLaeuft) return;
+      if (!confirm('Die letzte Planung zurücknehmen? Alle Aufgaben bekommen wieder ihr altes Datum.')) return;
+      planLaeuft = true; render();
+      api('plan/rueckgaengig', { method: 'POST', body: {} })
+        .then(function (r) {
+          planLaeuft = false;
+          return planNachAenderung('Zurückgenommen: ' + r.zurueck + (r.zurueck === 1 ? ' Aufgabe' : ' Aufgaben'));
+        })
+        .catch(function (e) { planLaeuft = false; toast(e.message); render(); });
+    }
+    else if (act === 'plan-einst') {
+      modal = { kind: 'planeinst' }; render();
+      if (!planEinst) api('plan/einstellungen').then(function (e) { planEinst = e; if (modal && modal.kind === 'planeinst') render(); });
+    }
+    else if (act === 'plan-einst-speichern') {
+      const wert = function (id) { const x = root.querySelector('#' + id); return x ? x.value : ''; };
+      const tage = Array.prototype.slice.call(root.querySelectorAll('.pe-tag'))
+        .filter(function (x) { return x.checked; }).map(function (x) { return Number(x.value); });
+      if (!tage.length) { toast('Mindestens ein Arbeitstag'); return; }
+      api('plan/einstellungen', { method: 'PUT', body: {
+        start: wert('pe-start'), ende: wert('pe-ende'), pauseVon: wert('pe-pvon'), pauseBis: wert('pe-pbis'),
+        maxMinuten: Math.round(Number(wert('pe-max')) * 60), puffer: Number(wert('pe-puffer')),
+        standardDauer: Number(wert('pe-dauer')), arbeitstage: tage,
+        automatisch: !!(root.querySelector('#pe-auto') || {}).checked
+      } })
+        .then(function (e) { planEinst = e; modal = null; return planNachAenderung('Tagesplan eingestellt'); })
+        .catch(function (e) { toast(e.message); });
+    }
     else if (act === 'server-sicherung') {
       modal = { kind: 'serversicherung' }; render();
       api('sicherung').then(function (i) { sicherungInfo = i; if (modal && modal.kind === 'serversicherung') render(); })
@@ -7058,6 +7241,12 @@
     if (typeof URLSearchParams === 'function'
         && new URLSearchParams(location.search).get('memo') === '1') {
       memoWunsch = true;
+      ansicht = 'heute';
+      if (history.replaceState) history.replaceState({}, '', location.pathname);
+    }
+    if (typeof URLSearchParams === 'function'
+        && new URLSearchParams(location.search).get('plan') === '1') {
+      planWunsch = true;
       ansicht = 'heute';
       if (history.replaceState) history.replaceState({}, '', location.pathname);
     }

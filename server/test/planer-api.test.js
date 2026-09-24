@@ -4,42 +4,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const http = require('http');
-const { serverStarten, sitzung } = require('./hilfe');
-
-// Ein kleines Todoist zum Testen: kennt nur Aufgaben lesen und ändern
-function fakeTodoist(aufgaben) {
-  const aenderungen = [];
-  const server = http.createServer(function (req, res) {
-    let koerper = '';
-    req.on('data', function (d) { koerper += d; });
-    req.on('end', function () {
-      res.setHeader('Content-Type', 'application/json');
-      if (req.method === 'GET' && req.url.startsWith('/tasks')) {
-        return res.end(JSON.stringify({ results: aufgaben, next_cursor: null }));
-      }
-      const m = /^\/tasks\/([^/?]+)$/.exec(req.url);
-      if (req.method === 'POST' && m) {
-        const a = aufgaben.find(function (x) { return String(x.id) === m[1]; });
-        if (!a) { res.statusCode = 404; return res.end('{}'); }
-        const k = JSON.parse(koerper || '{}');
-        aenderungen.push({ id: a.id, koerper: k });
-        if (k.due_datetime) a.due = { date: k.due_datetime, is_recurring: false, string: '' };
-        else if (k.due_date) a.due = { date: k.due_date, is_recurring: false, string: '' };
-        else if (k.due_string === 'no date') a.due = null;
-        if (k.duration) a.duration = { amount: k.duration, unit: k.duration_unit };
-        return res.end(JSON.stringify(a));
-      }
-      res.statusCode = 404; res.end('{}');
-    });
-  });
-  return new Promise(function (ok) {
-    server.listen(0, '127.0.0.1', function () {
-      ok({ basis: 'http://127.0.0.1:' + server.address().port, aenderungen: aenderungen, aufgaben: aufgaben,
-        stoppen: function () { server.close(); } });
-    });
-  });
-}
+const { serverStarten, sitzung, fakeTodoist } = require('./hilfe');
 
 // Montag, 7. Januar 2030 — weit weg von "jetzt", damit der Plan den ganzen Tag nutzen kann
 const MONTAG = '2030-01-07';

@@ -98,6 +98,10 @@ async function vorschlag(datum, roh) {
     einstellungen: planerEinstellungen(),
     vomPlaner: letzte ? letzte.aenderungen.filter(function (a) { return a.art === 'block'; }).map(function (a) { return a.id; }) : []
   });
+  // Feste Uhrzeiten für die Anzeige als HH:MM wie die Blöcke
+  plan.fest = plan.fest.map(function (f) {
+    return { id: f.id, inhalt: f.inhalt, von: kern.uhrzeit(f.von), bis: kern.uhrzeit(f.bis) };
+  });
   plan.aenderungen = plan.bloecke.filter(function (b) {
     // Steht schon genau so in Todoist? Dann nichts ändern.
     return !(b.vorher.faelligZeit && String(b.vorher.faelligZeit).slice(0, 16) === datum + 'T' + b.von);
