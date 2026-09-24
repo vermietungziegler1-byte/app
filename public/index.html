@@ -263,6 +263,22 @@
   #app .ganzauf {
     margin-top: 9px; font-size: 12px; color: var(--muted); cursor: pointer;
   }
+  #app .ganzzu .ganzmehr { margin-left: auto; color: var(--messing); font-weight: 600; }
+  #app .ganzliste {
+    margin-top: 10px; max-height: 232px; overflow-y: auto; overscroll-behavior: contain;
+    border: 1px solid var(--line-soft); border-radius: 8px;
+  }
+  #app .gzeile {
+    display: flex; align-items: center; gap: 9px; padding: 6px 10px; font-size: 13px;
+    border-bottom: 1px solid var(--line-soft); cursor: pointer;
+  }
+  #app .gzeile:last-child { border-bottom: 0; }
+  #app .gzeile:hover { background: var(--glas); }
+  #app .gzeile .gtext { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #app .gzeile .gpunkt { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--muted); }
+  #app .gzeile.spaet .gpunkt, #app .gzeile.frist .gpunkt { background: var(--td-rot); }
+  #app .gzeile.frist { color: var(--td-rot); }
+  #app .gzeile.gkal .gpunkt { background: #63b58f; }
   #app .ganzauf:hover { color: var(--messing); }
 
   #app .zeitrahmen {
@@ -3892,7 +3908,7 @@
   let kalSchiebt = null;      // Aufgabe, die auf einen anderen Tag soll
   // Eine Stunde in Bildpunkten — am Handy höher, damit Text in die Blöcke passt
   const KAL_HOEHE = (window.innerWidth || 1000) < 560 ? 58 : 46;
-  let kalGanzAuf = false;     // Handy: Zeile ohne Uhrzeit aufgeklappt?
+  let kalGanzAuf = false;     // Liste "ohne Uhrzeit" aufgeklappt?
   let sprichQuelle = null;    // wer gerade vorliest: 'memo' oder 'kal'
   let kalRolle = null;        // gemerkte Rollposition der Zeitachse
   let kalRolleTag = null;     // für welchen Tag sie gilt
@@ -5094,33 +5110,37 @@
         : [];
       const ganzAnzahl = tages.fristen.length + ohneZeit.length + liegen.length + ganzeGkal.length;
       const ganzRot = (tages.fristen.length + liegen.length) > 0;
-      const schmal = (window.innerWidth || 1000) < 560;
-      if (ganzAnzahl && schmal && !kalGanzAuf) {
-        // Am Handy nimmt die Pillenreihe zu viel Platz weg — nur eine schmale Zeile
+      // Alles ohne Uhrzeit als eine Liste: [Klasse, Attribute, Text]
+      const ganzListe = []
+        .concat(liegen.map(function (t) {
+          return ['spaet', 'data-act="td-oeffnen" data-tid="' + t.id + '"', t.inhalt];
+        }))
+        .concat(tages.fristen.map(function (f) { return ['frist', '', f.was]; }))
+        .concat(ganzeGkal.map(function (g) {
+          return ['gkal', 'data-act="gkal-info" data-id="' + esc(g.id) + '"', g.titel];
+        }))
+        .concat(ohneZeit.map(function (t) {
+          return [kalTag < heuteIso ? 'spaet' : '', 'data-act="td-oeffnen" data-tid="' + t.id + '"', t.inhalt];
+        }));
+      if (ganzAnzahl && ganzAnzahl <= 3) {
+        // Wenige Einträge: als kleine Kästchen, das passt in eine Zeile
+        html += '<div class="ganztags">' + ganzListe.map(function (e) {
+          return '<div class="gpille ' + e[0] + '" ' + e[1] + '><span>' + esc(e[2]) + '</span></div>';
+        }).join('') + '</div>';
+      } else if (ganzAnzahl && !kalGanzAuf) {
+        // Viele Einträge: nur eine schmale Zeile, aufklappbar
         html += '<div class="ganzzu" data-act="kal-ganz">'
           + (ganzRot ? '<span class="punktrot"></span>' : '')
-          + ganzAnzahl + ' ohne Uhrzeit — antippen zum Anzeigen</div>';
+          + '<span>' + ganzAnzahl + ' ohne Uhrzeit'
+          + (liegen.length ? ' · davon ' + liegen.length + ' überfällig' : '')
+          + '</span><span class="ganzmehr">anzeigen</span></div>';
       } else if (ganzAnzahl) {
-        html += '<div class="ganztags">'
-          + liegen.map(function (t) {
-              return '<div class="gpille spaet" data-act="td-oeffnen" data-tid="' + t.id + '">'
-                + '<span>' + esc(t.inhalt) + '</span></div>';
-            }).join('')
-          + tages.fristen.map(function (f) {
-              return '<div class="gpille frist"><span>' + esc(f.was) + '</span></div>';
-            }).join('')
-          + ganzeGkal.map(function (g) {
-              return '<div class="gpille gkal" data-act="gkal-info" data-id="' + esc(g.id) + '">'
-                + '<span>' + esc(g.titel) + '</span></div>';
-            }).join('')
-          + ohneZeit.map(function (t) {
-              return '<div class="gpille' + (kalTag < heuteIso ? ' spaet' : '') + '" data-act="td-oeffnen" data-tid="'
-                + t.id + '"><span>' + esc(t.inhalt) + '</span></div>';
-            }).join('')
-          + '</div>';
-        if (schmal) {
-          html += '<div class="ganzauf" data-act="kal-ganz">ohne Uhrzeit wieder ausblenden</div>';
-        }
+        // Aufgeklappt: eine kompakte Liste, eine Zeile je Eintrag, mit eigenem Rollbalken
+        html += '<div class="ganzliste">' + ganzListe.map(function (e) {
+          return '<div class="gzeile ' + e[0] + '" ' + e[1] + ' title="' + esc(e[2]) + '">'
+            + '<span class="gpunkt"></span><span class="gtext">' + esc(e[2]) + '</span></div>';
+        }).join('') + '</div>'
+          + '<div class="ganzauf" data-act="kal-ganz">einklappen</div>';
       }
 
       // --- Zeitachse: alle 24 Stunden, im Rahmen rollbar ---
