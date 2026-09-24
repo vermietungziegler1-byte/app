@@ -138,14 +138,14 @@ app.post('/api/push/test', nurAngemeldet, async function (req, res) {
 
 // --- Morgenmeldung: Tagesübersicht aus den eigenen Daten und Todoist ---
 
-async function morgenInhalt(heute) {
+async function morgenInhalt(heute, ohneAufgaben) {
   const teile = [];
   const zeile = db.prepare('SELECT inhalt FROM stand WHERE id = 1').get();
   const d = zeile ? JSON.parse(zeile.inhalt) : null;
 
-  // Aufgaben aus Todoist: überfällig oder heute fällig
+  // Aufgaben aus Todoist: überfällig oder heute fällig (entfällt, wenn der Tagesplan sie schon nennt)
   try {
-    if (einstellung('todoist_token')) {
+    if (einstellung('todoist_token') && !ohneAufgaben) {
       const liste = await todoistListe('/tasks');
       const anzahl = liste.filter(function (t) {
         const f = t.due && (t.due.date || t.due.datetime);
@@ -206,7 +206,7 @@ async function morgenInhalt(heute) {
     if (frei) teile.push(frei + ' frei');
   }
 
-  return teile.length ? teile.join(' · ') : 'Nichts Dringendes. Guter Tag zum Aufräumen.';
+  return teile.length ? teile.join(' · ') : (ohneAufgaben ? '' : 'Nichts Dringendes. Guter Tag zum Aufräumen.');
 }
 
 if (webpush) {
@@ -224,11 +224,31 @@ if (webpush) {
     einstellungSetzen('push_zuletzt', t.datum);   // vor dem Senden, sonst klingelt es bei Fehlern jede halbe Minute
     const zeilen = db.prepare('SELECT * FROM push_abos').all();
     if (!zeilen.length) return;
-    const text = await morgenInhalt(t.datum);
+    // Tagesplan: bei Automatik fertig geplant, sonst ein Vorschlag zum Antippen
+    const planer = require('./planer');
+    let planZeile = '', ziel = '/?memo=1';
+    if (einstellung('todoist_token')) {
+      try {
+        const auto = await planer.automatischPlanen(t.datum);
+        if (auto) {
+          planZeile = planer.planKurztext(auto.bloecke, auto.verschoben);
+        } else {
+          const v = await planer.vorschlag(t.datum);
+          if (v.aenderungen) {
+            planZeile = 'Vorschlag: ' + v.bloecke.length + ' Aufgaben passen heute rein'
+              + (v.verschoben.length ? ', ' + v.verschoben.length + ' auf die nächsten Tage' : '')
+              + ' — antippen zum Planen';
+            ziel = '/?plan=1';
+          }
+        }
+      } catch (fehler) { console.log('Tagesplan für die Morgenmeldung fehlgeschlagen:', fehler.message); }
+    }
+    const rest = await morgenInhalt(t.datum, !!planZeile);
+    const text = (planZeile ? planZeile + (rest ? ' · ' + rest : '') : rest).slice(0, 400);
     const datum = new Date().toLocaleDateString('de-DE', {
       timeZone: 'Europe/Berlin', weekday: 'long', day: 'numeric', month: 'long'
     });
-    await mitteilungSenden(zeilen, { titel: 'Guten Morgen — ' + datum, text: text, url: '/?memo=1' });
+    await mitteilungSenden(zeilen, { titel: 'Guten Morgen — ' + datum, text: text, url: ziel });
   }
 
   // --- Erinnerung eine Stunde vor jeder Besichtigung ---

@@ -9,10 +9,13 @@ const app = express.Router();
 // ---------------- Todoist ----------------
 // Der Server spricht mit Todoist, damit das Zugangstoken den Browser nie erreicht.
 
+// Für Tests lässt sich die Adresse auf einen nachgebauten Todoist umbiegen
+const TODOIST_BASIS = process.env.TODOIST_BASIS || 'https://api.todoist.com/api/v1';
+
 async function todoist(pfad, optionen) {
   const token = einstellung('todoist_token');
   if (!token) throw new Error('Kein Todoist-Token hinterlegt');
-  const antwort = await holen('https://api.todoist.com/api/v1' + pfad, Object.assign({
+  const antwort = await holen(TODOIST_BASIS + pfad, Object.assign({
     headers: {
       'Authorization': 'Bearer ' + token,
       'Content-Type': 'application/json'
@@ -64,6 +67,9 @@ function aufgabeMappen(t, namen) {
     faelligZeit: mitZeit || null,
     faelligText: (t.due && t.due.string) || '',
     wiederkehrend: !!(t.due && t.due.is_recurring),
+    // Dauer in Minuten, wenn in Todoist eine gesetzt ist (z. B. vom Tagesplaner)
+    dauer: t.duration && t.duration.unit === 'minute' ? Number(t.duration.amount) || null
+      : (t.duration && t.duration.unit === 'day' ? Number(t.duration.amount) * 1440 || null : null),
     prioritaet: t.priority || 1,
     labels: t.labels || [],
     kommentare: Number(t.note_count || t.comment_count || 0),

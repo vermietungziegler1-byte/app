@@ -322,4 +322,4 @@ app.get('/api/gkal/termine', nurAngemeldet, async function (req, res) {
   } catch (e) { res.status(502).json({ fehler: e.message }); }
 });
 
-module.exports = { router: app };
+module.exports = { router: app, gkalHolen, gkalFenster, ortsZeitZuTs, berlinText };

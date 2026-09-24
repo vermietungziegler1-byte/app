@@ -666,7 +666,7 @@
   #app[data-theme="dark"] .obj.offen { box-shadow: 0 2px 18px rgba(0,0,0,.3); }
 
   #app .searchrow { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
-  #app input[type="text"], #app input[type="number"], #app input[type="date"], #app input[type="url"],
+  #app input[type="text"], #app input[type="number"], #app input[type="date"], #app input[type="time"], #app input[type="url"],
   #app select, #app textarea {
     font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line);
     border-radius: 7px; padding: 9px 12px; width: 100%;
@@ -1649,3 +1649,32 @@
   #app .rg-liste .zeile:last-child { border-bottom: 0; }
   #app .rg-liste .zeile .wer { color: var(--muted); font-size: 12px; flex: 1; min-width: 120px; }
   #app .rg-liste .zeile .knoepfe { display: flex; gap: 6px; margin-left: auto; }
+
+/* --- Tagesplaner --- */
+#app .planer .planzeile { margin-top: 8px; font-size: 14px; color: var(--ink); }
+#app .planer .planknoepfe { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+#app .plantitel {
+  margin: 16px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--muted); font-weight: 700;
+}
+#app .planblock {
+  display: flex; align-items: baseline; gap: 12px; padding: 7px 0; font-size: 14px;
+  border-bottom: 1px solid var(--line-soft);
+}
+#app .planblock .num { flex: none; width: 92px; color: var(--messing); font-size: 13px; }
+#app .planblock .grow { flex: 1; min-width: 0; }
+#app .planblock .unit-type { flex: none; }
+#app .planblock.fest { color: var(--muted); }
+#app .planblock.fest .num { color: var(--muted); }
+#app .plangruppe { padding: 5px 0; font-size: 13px; line-height: 1.5; border-bottom: 1px solid var(--line-soft); }
+#app .plangruppe b { margin-right: 6px; }
+#app .planauto { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 14px; cursor: pointer; }
+#app .planauto input { width: auto; }
+#app .plantage { display: flex; gap: 12px; flex-wrap: wrap; }
+#app .plantage label { display: flex; align-items: center; gap: 4px; font-size: 14px; text-transform: none; letter-spacing: 0; color: var(--ink); font-weight: 400; }
+#app .plantage input { width: auto; }
+@media (max-width: 620px) {
+  #app .planblock { flex-wrap: wrap; gap: 2px 10px; }
+  #app .planblock .num { width: auto; }
+  #app .planblock .grow { flex-basis: 100%; order: 3; }
+}
