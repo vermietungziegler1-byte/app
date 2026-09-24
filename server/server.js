@@ -2366,7 +2366,12 @@ async function drive(token, pfad, optionen) {
   const antwort = await holen('https://www.googleapis.com/drive/v3' + pfad, o);
   if (!antwort.ok) {
     const grund = await antwort.text().catch(function () { return ''; });
-    const e = new Error('Drive antwortet mit ' + antwort.status + (grund ? ': ' + grund.slice(0, 160) : ''));
+    let text = '';
+    try { text = ((JSON.parse(grund) || {}).error || {}).message || ''; } catch (x) { text = grund; }
+    // Häufigster Fall beim Einrichten: die Drive-Schnittstelle ist im Google-Projekt noch aus
+    const e = new Error(/has not been used|is disabled|accessNotConfigured/i.test(grund)
+      ? 'Die Google Drive API ist im Google-Cloud-Projekt nicht aktiviert — dort unter APIs & Dienste → Bibliothek → Google Drive API → Aktivieren'
+      : 'Drive antwortet mit ' + antwort.status + (text ? ': ' + String(text).slice(0, 160) : ''));
     e.status = antwort.status;
     throw e;
   }
