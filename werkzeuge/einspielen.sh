@@ -34,7 +34,8 @@ Z=${EINSPIELEN_ZIEL:-/opt/vermietung}
 DIENST=${EINSPIELEN_DIENST:-vermietung}
 ABLAGE=${EINSPIELEN_ABLAGE:-/root/sicherungen}
 SELBST=${EINSPIELEN_SELBST:-/usr/local/bin/einspielen}
-SCHLUESSEL=${EINSPIELEN_SCHLUESSEL:-/root/.ssh/vermietung_github}
+SSH_ORDNER=${EINSPIELEN_SSH:-/root/.ssh}
+SCHLUESSEL=$SSH_ORDNER/vermietung_github
 BEHALTEN=10
 
 if [ -t 1 ]; then GRUEN=$'\e[32m'; ROT=$'\e[31m'; GELB=$'\e[33m'; FETT=$'\e[1m'; AUS=$'\e[0m'
@@ -245,17 +246,17 @@ fi
 # ============================================================
 if [ "$MODUS" = "einrichten" ]; then
   command -v git >/dev/null || { echo "Installiere git …"; apt-get install -y -q git >/dev/null; }
-  mkdir -p /root/.ssh && chmod 700 /root/.ssh
+  mkdir -p "$SSH_ORDNER" && chmod 700 "$SSH_ORDNER"
   if [ ! -f "$SCHLUESSEL" ]; then
     ssh-keygen -q -t ed25519 -N '' -C "vermietung-server" -f "$SCHLUESSEL"
     ok "Schlüssel für GitHub erzeugt"
   fi
-  if ! grep -q "Host github-vermietung" /root/.ssh/config 2>/dev/null; then
+  if ! grep -q "Host github-vermietung" "$SSH_ORDNER/config" 2>/dev/null; then
     printf '\nHost github-vermietung\n  HostName github.com\n  User git\n  IdentityFile %s\n  IdentitiesOnly yes\n' \
-      "$SCHLUESSEL" >> /root/.ssh/config
-    chmod 600 /root/.ssh/config
+      "$SCHLUESSEL" >> "$SSH_ORDNER/config"
+    chmod 600 "$SSH_ORDNER/config"
   fi
-  grep -q "^github.com" /root/.ssh/known_hosts 2>/dev/null || ssh-keyscan -q github.com >> /root/.ssh/known_hosts 2>/dev/null
+  grep -q "^github.com" "$SSH_ORDNER/known_hosts" 2>/dev/null || ssh-keyscan -q github.com >> "$SSH_ORDNER/known_hosts" 2>/dev/null
 
   if ! git ls-remote "$REPO" >/dev/null 2>&1; then
     echo ""
