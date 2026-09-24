@@ -146,6 +146,19 @@
   }
 
   #app *, #app *::before, #app *::after { box-sizing: border-box; }
+
+  /* Rollbalken passend zum Design statt des hellen Windows-Standards:
+     schmal, dezent, in Hell und Dunkel. color-scheme sorgt dafür, dass auch
+     alles Übrige, das der Browser selbst zeichnet, zum Modus passt. */
+  #app { color-scheme: light; }
+  #app[data-theme="dark"] { color-scheme: dark; }
+  html:has(#app[data-theme="dark"]) { color-scheme: dark; }
+  #app * { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+  #app *::-webkit-scrollbar { width: 8px; height: 8px; }
+  #app *::-webkit-scrollbar-track { background: transparent; }
+  #app *::-webkit-scrollbar-thumb { background: var(--line); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+  #app *::-webkit-scrollbar-thumb:hover { background-color: var(--muted); }
+  #app *::-webkit-scrollbar-button { display: none; height: 0; width: 0; }
   #app .num {
     font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
     font-variant-numeric: tabular-nums; letter-spacing: -0.01em;
