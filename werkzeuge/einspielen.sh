@@ -60,7 +60,9 @@ selbst_erneuern() {   # $1 = neue Fassung
   ok "einspielen selbst wurde aktualisiert"
   exec "$SELBST" "$MODUS" "$@"
 }
-[ "$MODUS" != "zurueck" ] && selbst_erneuern "$Q/einspielen.sh" "$@"
+# Aus /root/update nur, solange GitHub nicht eingerichtet ist — sonst kommt die
+# neueste Fassung aus GitHub, und eine alte Kopie im Update-Ordner darf sie nicht überschreiben.
+[ "$MODUS" != "zurueck" ] && [ ! -d "$GIT/.git" ] && selbst_erneuern "$Q/einspielen.sh" "$@"
 [ -e "$(dirname "$SELBST")/zurueck" ] || ln -sf "$SELBST" "$(dirname "$SELBST")/zurueck" 2>/dev/null
 
 # ---------- Wo liegt was? ----------
