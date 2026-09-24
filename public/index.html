@@ -2202,6 +2202,8 @@
   let theme = 'dark';
   let letzteSpeicher = [];
   let speicherFehler = false;   // letzte Änderung kam nicht beim Server an
+  let sicherungInfo = null;     // Stand der Server- und Drive-Sicherung (nur Verwalter)
+  let sicherungLaeuftJetzt = false;
 
   // Mitteilungen (Push) und Interessenten
   let swReg = null, pushAbo = null, pushGeraete = null, pushEinst = null, pushFehler = null;
@@ -4833,16 +4835,20 @@
             let her = null;
             try { her = window.localStorage.getItem(SICHERUNG_ZEIT); } catch (e) { /* egal */ }
             const tage = her ? Math.floor((Date.now() - Number(her)) / 86400000) : null;
-            return eintrag('datei-sichern', 'Sichern',
+            return eintrag('datei-sichern', 'Auf dieses Gerät sichern',
               tage === null ? 'noch nie' : (tage === 0 ? 'heute' : 'vor ' + tage + ' T.'));
           })()
+        + (nutzerRolle === 'verwalter'
+            ? eintrag('server-sicherung', 'Server-Sicherung',
+                sicherungInfo ? (sicherungInfo.driveFehler || sicherungInfo.lokalFehler ? 'prüfen' : 'täglich') : '')
+            : '')
         + eintrag('datei-laden', 'Aus Datei laden')
         + eintrag('export', 'Als Tabelle kopieren')
         + '</div>'
 
-        + (nutzerRolle === 'verwalter'
-            ? '<div class="sl-gruppe"><span>Konto</span>' + eintrag('zugaenge', 'Zugänge') + '</div>'
-            : '')
+        // Zugänge für alle: dort ändert jeder sein eigenes Passwort, Verwaltung sieht nur der Verwalter
+        + '<div class="sl-gruppe"><span>Konto</span>'
+        + eintrag('zugaenge', nutzerRolle === 'verwalter' ? 'Zugänge' : 'Passwort ändern') + '</div>'
 
         + '<div class="sl-fuss">' + eintrag('abmelden', 'Abmelden') + '</div>'
         + '</div>';
@@ -7443,6 +7449,35 @@
         + '<button data-act="pw-aendern">Eigenes Passwort ändern</button>'
         + '<div class="modal-actions"><div class="spacer"></div>'
         + '<button data-act="close">Schließen</button></div>';
+    } else if (modal.kind === 'sicherung') {
+      const si = sicherungInfo;
+      const zeit = function (ms) {
+        return ms ? new Date(ms).toLocaleString('de-DE', { day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' }) + ' Uhr' : 'noch nie';
+      };
+      const zeile = function (titel, wann, fehler, hinweis) {
+        return '<div class="docrow"><div class="grow"><strong>' + titel + '</strong>'
+          + '<div class="unit-type">' + (fehler
+              ? '<span style="color:var(--sperr)">' + esc(fehler) + '</span>'
+              : 'zuletzt ' + esc(zeit(wann))) + (hinweis ? ' · ' + hinweis : '') + '</div></div></div>';
+      };
+      body = '<h2>Server-Sicherung</h2>'
+        + '<div class="hint">Jede Nacht sichert der Server die komplette Datenbank: '
+        + 'auf dem Server selbst (die letzten 14 Tage) und in deinem Google Drive im Ordner '
+        + '„Vermietung – Sicherungen“ (die letzten 30 Tage). In der Drive-Kopie fehlen die '
+        + 'Zugangsschlüssel für Todoist, Google, OpenAI und Claude — die bleiben nur auf dem Server.</div>';
+      if (!si) {
+        body += '<div class="docempty">Wird geladen …</div>';
+      } else {
+        body += '<div class="doclist">'
+          + zeile('Auf dem Server', si.lokal, si.lokalFehler, si.dateien.length + ' Sicherungen vorhanden')
+          + zeile('In Google Drive', si.drive,
+              si.googleVerbunden ? si.driveFehler : 'Erst das Postfach verbinden (Menü → Postfach), dann geht es auch in Drive.',
+              '')
+          + '</div>';
+      }
+      body += '<div class="modal-actions"><button class="primary" data-act="sicherung-jetzt"'
+        + (sicherungLaeuftJetzt ? ' disabled' : '') + '>' + (sicherungLaeuftJetzt ? 'Sichert …' : 'Jetzt sichern') + '</button>'
+        + '<div class="spacer"></div><button data-act="close">Schließen</button></div>';
     } else if (modal.kind === 'staende') {
       body = '<h2>Verlauf</h2>'
         + '<div class="hint">Der Server hebt die letzten fünfzig Stände auf. '
@@ -8286,6 +8321,23 @@
       verlaufHolen().then(function () { if (modal && modal.kind === 'staende') render(); });
     }
     else if (act === 'verlauf-laden') { verlaufLaden(el.getAttribute('data-id')); }
+    else if (act === 'server-sicherung') {
+      modal = { kind: 'sicherung' }; render();
+      api('sicherung').then(function (i) { sicherungInfo = i; if (modal && modal.kind === 'sicherung') render(); })
+        .catch(function (e) { toast(e.message); });
+    }
+    else if (act === 'sicherung-jetzt') {
+      if (sicherungLaeuftJetzt) return;
+      sicherungLaeuftJetzt = true; render();
+      api('sicherung', { method: 'POST' })
+        .then(function (e) {
+          toast(e.driveFehler || e.lokalFehler ? 'Sicherung mit Problem — siehe Hinweis' : 'Gesichert');
+          return api('sicherung');
+        })
+        .then(function (i) { sicherungInfo = i; })
+        .catch(function (e) { toast(e.message); })
+        .then(function () { sicherungLaeuftJetzt = false; if (modal && modal.kind === 'sicherung') render(); });
+    }
     else if (act === 'zugaenge') {
       modal = { kind: 'zugaenge' }; render();
       nutzerListeHolen().then(function () { if (modal && modal.kind === 'zugaenge') render(); });
