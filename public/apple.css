@@ -1,0 +1,259 @@
+/* ==================================================================
+   Apple-Stil (Entwurf)
+   Liegt über app.css und stellt die Optik auf die Gestaltung von
+   Apple um (Human Interface Guidelines): Systemschrift, hellgrauer
+   Grund mit weißen Karten, große runde Ecken, kaum Rahmen, iOS-Blau
+   als Akzent, Segmented Control statt Reiter, halbtransparente Leisten.
+   Wer den alten Stil zurück will, entfernt nur den Verweis in index.html.
+   ================================================================== */
+
+/* ---------- Farben ---------- */
+#app {
+  --messing: #007aff;          /* Akzent (Name bleibt, damit app.css weiter passt) */
+  --messing-warm: #0a84ff;
+  --putz: #f2f2f7;
+  --bg: #f2f2f7;
+  --surface: #ffffff;
+  --ink: #1d1d1f;
+  --muted: #6e6e73;
+  --line: #d1d1d6;
+  --line-soft: #e5e5ea;
+  --nacht: #1c1c1e;
+  --frei: #8e8e93;
+  --frei-soft: #f2f2f7;
+  --sperr: #ff3b30;
+  --sperr-soft: rgba(255, 59, 48, .12);
+  --glas: rgba(0, 122, 255, .10);
+  --fuellung: rgba(118, 118, 128, .12);      /* graue Flächen wie in iOS */
+  --fuellung-stark: rgba(118, 118, 128, .20);
+  --segment: #ffffff;
+  --leiste: rgba(249, 249, 249, .82);
+  --td-rot: #ff3b30;
+
+  background: var(--bg);
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, "Segoe UI", Roboto, sans-serif;
+  letter-spacing: -0.011em;
+  font-feature-settings: normal;
+}
+#app[data-theme="dark"] {
+  --messing: #0a84ff;
+  --messing-warm: #409cff;
+  --putz: #2c2c2e;
+  --bg: #000000;
+  --surface: #1c1c1e;
+  --ink: #f5f5f7;
+  --muted: #98989f;
+  --line: #38383a;
+  --line-soft: #2c2c2e;
+  --nacht: #2c2c2e;
+  --frei: #8e8e93;
+  --frei-soft: #2c2c2e;
+  --sperr: #ff453a;
+  --sperr-soft: rgba(255, 69, 58, .18);
+  --glas: rgba(10, 132, 255, .18);
+  --fuellung: rgba(118, 118, 128, .24);
+  --fuellung-stark: rgba(118, 118, 128, .34);
+  --segment: #636366;
+  --leiste: rgba(22, 22, 24, .82);
+  --td-rot: #ff453a;
+  background: var(--bg);
+}
+html:has(#app[data-theme="light"]) body, html:has(#app:not([data-theme])) body { background: #f2f2f7; }
+html:has(#app[data-theme="dark"]) body { background: #000; }
+
+/* Zahlen in derselben Schrift, aber gleich breit (statt Schreibmaschinenschrift) */
+#app .num { font-family: inherit; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+
+/* ---------- Kopf ---------- */
+#app .top { border-bottom: none; padding-bottom: 6px; margin-bottom: 14px; }
+#app .top::after { display: none; }
+#app h1, #app .sperrkasten h1 {
+  font-family: inherit; font-size: 30px; font-weight: 700; letter-spacing: -0.025em;
+}
+#app .sub { text-transform: none; letter-spacing: 0; font-size: 13px; }
+#app .siegel {
+  border-radius: 11px; font-family: inherit; font-weight: 700; font-size: 23px; color: #fff;
+  background: linear-gradient(180deg, #2b95ff, #0062e0);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .15);
+}
+#app .burger span { background: var(--messing); }
+
+/* ---------- Bereiche: Segmented Control ---------- */
+#app .seitennav {
+  display: inline-flex; flex-wrap: nowrap; gap: 0; padding: 2px; margin: 0 0 18px;
+  background: var(--fuellung); border-radius: 9px; max-width: 100%; overflow-x: auto;
+}
+#app .seitennav button {
+  border: none; background: transparent; color: var(--ink); border-radius: 7px;
+  padding: 6px 16px; font-size: 13px; font-weight: 500; white-space: nowrap;
+}
+#app .seitennav button:hover { background: transparent; color: var(--ink); }
+#app .seitennav button.aktiv {
+  background: var(--segment); color: var(--ink); font-weight: 600;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, .12), 0 3px 1px rgba(0, 0, 0, .04);
+}
+#app .rg-tabs { display: inline-flex; gap: 0; padding: 2px; background: var(--fuellung); border-radius: 9px; }
+#app .rg-tabs button { border: none; background: transparent; color: var(--ink); border-radius: 7px; padding: 5px 14px; }
+#app .rg-tabs button.aktiv {
+  background: var(--segment); color: var(--ink); border: none; font-weight: 600;
+  box-shadow: 0 3px 8px rgba(0, 0, 0, .12), 0 3px 1px rgba(0, 0, 0, .04);
+}
+
+/* ---------- Karten ---------- */
+#app .tafel, #app .kpi, #app .obj, #app .ekarte, #app .td, #app .pv-ergebnis .niveau-block {
+  border: none; border-radius: 14px; box-shadow: none; background: var(--surface);
+}
+#app .tafel { padding: 16px 18px; margin-bottom: 16px; }
+#app .tafel.heute { border-left: none; }
+#app .tafel h3 {
+  text-transform: none; letter-spacing: -0.015em; font-size: 17px; font-weight: 600; color: var(--ink);
+}
+#app .kpis.split .kpi { background: var(--surface); border: none; }
+#app .kpi.hero { background: linear-gradient(160deg, #2b95ff, #0062e0); color: #fff; }
+#app .kpi.hero::before { display: none; }
+#app .kpi.hero .label { color: rgba(255, 255, 255, .75); }
+#app .obj:hover { box-shadow: 0 2px 10px rgba(0, 0, 0, .06); }
+#app .obj-head:hover { background: rgba(118, 118, 128, .06); }
+#app .obj-title, #app .sl-name, #app .rg-gruppe {
+  font-family: inherit; font-weight: 600; letter-spacing: -0.015em;
+}
+#app .obj-title { font-size: 17px; }
+#app .ekarte.summe { background: var(--surface); border: none; }
+
+/* Listen wie in den iPhone-Einstellungen: feine Trennlinien, keine Kästen */
+#app .doclist { border: none; background: var(--surface); border-radius: 12px; }
+#app .modal .doclist { background: var(--putz); }
+#app .docrow, #app .faellig, #app .mpunkt, #app .gzeile, #app .planblock { border-color: var(--line-soft); }
+
+/* ---------- Knöpfe ---------- */
+#app button {
+  border: none; border-radius: 10px; background: var(--fuellung); color: var(--messing);
+  font-weight: 600; padding: 8px 15px;
+}
+#app button:hover { background: var(--fuellung-stark); color: var(--messing); border-color: transparent; }
+#app button:active { transform: scale(.97); opacity: .85; }
+#app button.primary { background: var(--messing); color: #fff; }
+#app button.primary:hover { background: var(--messing); color: #fff; filter: brightness(1.08); }
+#app button.ghost { background: transparent; color: var(--messing); }
+#app button.ghost:hover { background: var(--glas); color: var(--messing); }
+#app button.danger { background: var(--sperr-soft); color: var(--sperr); }
+#app button.danger:hover { background: var(--sperr-soft); color: var(--sperr); filter: brightness(1.05); }
+#app button.tiny { border-radius: 8px; padding: 5px 11px; }
+#app button:disabled { opacity: .45; }
+#app button.theme { color: var(--ink); }
+
+/* Zeilen-Knöpfe in Menüs bleiben in Textfarbe */
+#app .sl-gruppe button, #app .sl-fuss button, #app .menueliste button, #app .fabmenu button {
+  color: var(--ink); background: transparent; font-weight: 500; border-radius: 10px;
+}
+#app .sl-gruppe button:hover, #app .sl-fuss button:hover, #app .menueliste button:hover {
+  background: var(--fuellung); color: var(--ink);
+}
+#app .fabmenu button { background: var(--surface); box-shadow: 0 4px 16px rgba(0, 0, 0, .18); }
+#app .sl-gruppe > span { text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 600; }
+#app .seitenleiste { border-right: none; background: var(--bg); box-shadow: 4px 0 30px rgba(0, 0, 0, .18); }
+#app .sl-gruppe { background: var(--surface); border-radius: 12px; padding: 4px; }
+#app .sl-gruppe > span { padding: 8px 10px 4px; }
+#app .sl-kopf, #app .sl-fuss { border-color: transparent; }
+
+#app .vorlesen, #app .mikro {
+  border: none; background: var(--glas); color: var(--messing); font-weight: 600;
+}
+#app .vorlesen:hover, #app .vorlesen.laeuft { background: var(--messing); color: #fff; }
+#app .kalkopf button { border: none; background: var(--fuellung); color: var(--messing); }
+#app .kalkopf button:hover { background: var(--fuellung-stark); color: var(--messing); }
+
+#app .fab {
+  background: var(--messing); color: #fff;
+  box-shadow: 0 8px 20px rgba(0, 122, 255, .35);
+}
+
+/* ---------- Eingabefelder ---------- */
+#app input[type="text"], #app input[type="number"], #app input[type="date"], #app input[type="time"],
+#app input[type="url"], #app input[type="password"], #app input[type="email"], #app select, #app textarea {
+  background: var(--putz); border: 1px solid transparent; border-radius: 10px; color: var(--ink);
+}
+#app .modal input[type="text"], #app .modal input[type="number"], #app .modal input[type="date"],
+#app .modal input[type="time"], #app .modal input[type="password"], #app .modal select, #app .modal textarea {
+  background: var(--fuellung);
+}
+#app input:focus, #app select:focus, #app textarea:focus {
+  outline: none; border-color: var(--messing); box-shadow: 0 0 0 3px rgba(0, 122, 255, .22);
+}
+#app .field label, #app .feldchen > span, #app .monat span {
+  text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 500; color: var(--muted);
+}
+
+/* ---------- Fenster ---------- */
+#app .backdrop { background: rgba(0, 0, 0, .32); backdrop-filter: blur(6px); }
+#app .modal {
+  border-top: none; border-radius: 16px; box-shadow: 0 20px 60px rgba(0, 0, 0, .28);
+}
+#app .modal h2 { font-family: inherit; font-size: 22px; font-weight: 700; letter-spacing: -0.02em; }
+#app .modal .hint { font-size: 14px; }
+#app .hintbox { background: var(--glas); color: var(--ink); border-left: none; border-radius: 12px; }
+#app .sum-line { background: var(--putz); color: var(--ink); border-radius: 10px; }
+#app .mahnung { background: var(--glas); border: none; color: var(--ink); border-radius: 12px; }
+#app .sperrkasten { border: none; border-top: none; border-radius: 16px; box-shadow: 0 10px 40px rgba(0, 0, 0, .08); }
+#app .toast {
+  background: rgba(28, 28, 30, .92); color: #fff; border: none; border-radius: 14px;
+  padding: 12px 18px; backdrop-filter: blur(20px); box-shadow: 0 8px 30px rgba(0, 0, 0, .25);
+}
+#app .foot { text-transform: none; letter-spacing: 0; font-size: 12px; }
+
+/* ---------- Kalender und Tagesplan ---------- */
+#app .kaltag { background: transparent; border-radius: 12px; }
+#app .kaltag:hover { background: var(--fuellung); border-color: transparent; }
+#app .kaltag .wtag { letter-spacing: 0; }
+#app .kaltag.gewaehlt { background: var(--messing); }
+#app .kaltag.gewaehlt .wzahl, #app .kaltag.gewaehlt .wtag { color: #fff; }
+#app .kaltag.gewaehlt .kalpunkt { background: #fff; }
+#app .kaltag.heute:not(.gewaehlt) .wzahl, #app .kaltag.heute:not(.gewaehlt) .wtag { color: var(--td-rot); }
+#app .ztermin.aufgabe {
+  background: linear-gradient(var(--glas), var(--glas)), var(--surface);
+  border-left-color: var(--messing);
+}
+#app .mnr { background: var(--messing); color: #fff; }
+#app .mnr.rot { background: var(--td-rot); }
+#app .gpille { border: none; background: var(--fuellung); }
+#app .planblock .num { color: var(--messing); }
+
+/* ---------- Leisten: halbtransparent mit Unschärfe ---------- */
+#app .untenleiste {
+  background: var(--leiste); border-top: .5px solid var(--line);
+  backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px);
+}
+#app .untenleiste button { background: transparent; color: var(--muted); font-weight: 500; letter-spacing: 0; }
+#app .untenleiste button.aktiv { color: var(--messing); }
+#app .untenleiste button.aktiv span { text-shadow: none; }
+@media (max-width: 620px) {
+  #app .top {
+    background: var(--leiste); border-bottom: .5px solid var(--line);
+    backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px);
+  }
+  #app h1 { font-size: 22px; }
+  #app .tafel { border-radius: 12px; }
+}
+
+/* ---------- Druckvorschau: Leiste im neuen Akzent ---------- */
+#druck .dk-leiste span { color: #0a84ff; }
+#druck .dk-leiste button.primary { background: #007aff; border-color: #007aff; color: #fff; }
+
+/* ---------- Feinschliff nach dem ersten Durchgang ---------- */
+#app { accent-color: var(--messing); }
+/* Segmented Controls stehen jeweils in einer eigenen Zeile, nur so breit wie nötig */
+#app .seitennav, #app .rg-tabs { display: flex; width: max-content; max-width: 100%; }
+#app .rg-tabs { margin: 0 0 16px; }
+@media (max-width: 620px) { #app .seitennav { display: none; } }
+/* Kennzahlen: Beschriftung wie in Apples Übersichten */
+#app .kpi .label { text-transform: none; letter-spacing: 0; font-size: 13px; font-weight: 600; }
+/* Suchfeld auf grauem Grund: weiß mit Lupe, wie in iOS */
+#app .searchrow input {
+  background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%238e8e93' stroke-width='2.4' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E") no-repeat 12px center;
+  padding-left: 36px;
+}
+/* Fensterüberschrift wie die Titelzeile in iOS */
+#app .fensterkopf { border-bottom-color: var(--line-soft); }
+#app .fensterkopf span { text-transform: none; letter-spacing: -0.01em; font-size: 15px; font-weight: 600; color: var(--ink); }
+#app .zurueck { background: transparent; }
+#app .kpi.hero .value, #app .kpi.hero .value * { color: #fff; }

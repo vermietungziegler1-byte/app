@@ -177,7 +177,7 @@ test('Oberfläche wird ausgeliefert, mit Schutz-Kopfzeilen und ohne Google Fonts
   assert.match(a.text, /<div id="app">/);
   // Alle eingebundenen Dateien sind erreichbar und laden nichts von Google
   const verweise = a.text.match(/(?:href|src)="([a-z]+\.(?:css|js)\?v=[0-9a-f]+)"/g) || [];
-  assert.equal(verweise.length, 3);
+  assert.equal(verweise.length, 4);
   for (const v of verweise) {
     const datei = await louis.get('/' + v.split('"')[1]);
     assert.equal(datei.status, 200, v);
