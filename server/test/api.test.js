@@ -162,7 +162,14 @@ test('Oberfläche wird ausgeliefert, mit Schutz-Kopfzeilen und ohne Google Fonts
   const a = await louis.get('/');
   assert.equal(a.status, 200);
   assert.match(a.text, /<div id="app">/);
-  assert.doesNotMatch(a.text, /fonts\.googleapis|fonts\.gstatic/);
+  // Alle eingebundenen Dateien sind erreichbar und laden nichts von Google
+  const verweise = a.text.match(/(?:href|src)="([a-z]+\.(?:css|js)\?v=[0-9a-f]+)"/g) || [];
+  assert.equal(verweise.length, 3);
+  for (const v of verweise) {
+    const datei = await louis.get('/' + v.split('"')[1]);
+    assert.equal(datei.status, 200, v);
+    assert.doesNotMatch(datei.text, /fonts\.googleapis|fonts\.gstatic/, v);
+  }
   assert.equal(a.kopf.get('x-frame-options'), 'DENY');
   assert.equal(a.kopf.get('x-content-type-options'), 'nosniff');
   assert.equal(a.kopf.get('x-powered-by'), null);
@@ -173,4 +180,10 @@ test('Zu viele falsche Anmeldungen werden gebremst', async function () {
   let letzter;
   for (let i = 0; i < 11; i++) letzter = await s.post('/api/login', { name: 'niemand', passwort: 'x' });
   assert.equal(letzter.status, 429);
+});
+
+test('index.html verweist mit aktuellen Prüfsummen auf CSS und JS', function () {
+  const { gebaut } = require('../../werkzeuge/bauen');
+  const html = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'index.html'), 'utf8');
+  assert.equal(html, gebaut(), 'Bitte "node werkzeuge/bauen.js" ausführen');
 });
