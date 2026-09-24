@@ -27,6 +27,7 @@
   #druck .posten th + th, #druck .posten td + td { padding-left: 5mm; }
   #druck .posten .z { text-align: right; white-space: nowrap; }
   #druck .posten .klein { display: block; font-size: 8.5pt; color: #5d6a76; margin-top: .8mm; }
+  #druck p.klein { font-size: 8.5pt; color: #5d6a76; margin-top: 2mm; }
   #druck .summen { width: 78mm; margin-left: auto; margin-top: 5mm; font-size: 10pt; }
   #druck .summen td { padding: 1.6mm 0; }
   #druck .summen td:last-child { text-align: right; }

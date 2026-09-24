@@ -111,3 +111,55 @@ test('Oberfläche: Tagesplan vorschlagen, übernehmen, zurücknehmen', { skip: p
     todoist.stoppen();
   }
 });
+
+test('Oberfläche: Solarstrom-Rechnung anlegen und fürs nächste Jahr vorbereiten', { skip: pw ? false : 'Playwright nicht installiert' }, async function () {
+  const server = await serverStarten();
+  const browser = await pw.chromium.launch();
+  try {
+    await sitzung(server).post('/api/setup', { name: 'louis', passwort: 'geheim123' });
+    const seite = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
+    const fehler = [];
+    seite.on('pageerror', function (e) { fehler.push(e.message); });
+    await seite.goto(server.basis + '/');
+    await seite.evaluate(async function () {
+      await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'louis', passwort: 'geheim123' }) });
+    });
+    await seite.reload();
+    await seite.waitForSelector('[data-act="zu-rechnungen"]', { state: 'attached' });
+    await seite.evaluate(function () { document.querySelector('[data-act="zu-rechnungen"]').click(); });
+    await seite.click('[data-act="rg-tab"][data-tab="pv"]');
+    await seite.waitForSelector('text=Solarstrom');
+
+    // Erste Rechnung: Vorjahr, PV-Nummer
+    const vorjahr = new Date().getFullYear() - 1;
+    assert.equal(await seite.inputValue('[data-rg="von"]'), vorjahr + '-01-01');
+    assert.match(await seite.inputValue('[data-rg="nummer"]'), /-PV-01$/);
+    await seite.fill('[data-rg="standAlt"]', '1000');
+    await seite.fill('[data-rg="standNeu"]', '2500');
+    await seite.fill('[data-rg="preis"]', '25');
+    await seite.click('[data-act="rg-speichern"]');
+    await seite.waitForSelector('[data-act="rg-folgejahr"]');
+
+    // Vorschau zeigt den Solarstrom-Text
+    await seite.click('[data-act="rg-vorschau"]');
+    await seite.waitForSelector('#druck:not([hidden]) >> text=Rechnung über die Lieferung von Solarstrom');
+    await seite.click('[data-dk="zu"]');
+
+    // Fürs nächste Jahr: Zeitraum +1, alter Stand = letzter neuer, Preis bleibt
+    await seite.click('[data-act="rg-folgejahr"]');
+    assert.equal(await seite.inputValue('[data-rg="von"]'), (vorjahr + 1) + '-01-01');
+    assert.equal(await seite.inputValue('[data-rg="standAlt"]'), '2500');
+    assert.equal(await seite.inputValue('[data-rg="standNeu"]'), '');
+    assert.equal(await seite.inputValue('[data-rg="preis"]'), '25');
+    assert.match(await seite.inputValue('[data-rg="nummer"]'), /-PV-02$/);
+
+    // Allgemeinstrom bleibt davon unberührt
+    await seite.click('[data-act="rg-tab"][data-tab="as"]');
+    assert.match(await seite.inputValue('[data-rg="nummer"]'), /-AS-01$/);
+    assert.deepEqual(fehler, []);
+  } finally {
+    await browser.close();
+    await server.stoppen();
+  }
+});

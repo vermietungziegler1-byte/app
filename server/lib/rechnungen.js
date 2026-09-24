@@ -30,7 +30,9 @@ const RECHNUNG_ABSENDER_FELDER = {
   as: ['name', 'strasse', 'ort', 'steuernummer', 'ustId', 'kontoinhaber', 'iban', 'bank', 'kontakt', 'empfaenger'],
   nk: ['vermieter', 'strasse', 'ort', 'telefon', 'unterschrift', 'kontoText', 'anlage']
 };
-const RECHNUNG_ABSENDER_SCHLUESSEL = { as: 'rechnung_absender', nk: 'nk_absender' };
+// Solarstrom-Rechnungen (pv) haben denselben Absender wie die Allgemeinstrom-Rechnungen
+const RECHNUNG_ABSENDER_SCHLUESSEL = { as: 'rechnung_absender', pv: 'rechnung_absender', nk: 'nk_absender' };
+const RECHNUNG_ARTEN = { as: 'AS', pv: 'PV', nk: 'NK' };
 
 function rechnungAbsender(art) {
   try { return JSON.parse(einstellung(RECHNUNG_ABSENDER_SCHLUESSEL[art] || 'rechnung_absender') || '{}'); } catch (e) { return {}; }
@@ -43,7 +45,7 @@ function rechnungenListe() {
       wer: r.wer, wann: r.wann, inhalt: inhalt };
   });
 }
-// Nächste freie Nummer je Art im Muster JJJJ-AS-NN (Allgemeinstrom) bzw. JJJJ-NK-NN (Nebenkosten)
+// Nächste freie Nummer je Art im Muster JJJJ-AS-NN (Allgemeinstrom), JJJJ-PV-NN (Solarstrom) bzw. JJJJ-NK-NN (Nebenkosten)
 function rechnungNaechste() {
   const jahr = String(new Date().getFullYear());
   const frei = function (kuerzel) {
@@ -54,7 +56,7 @@ function rechnungNaechste() {
     });
     return jahr + '-' + kuerzel + '-' + String(max + 1).padStart(2, '0');
   };
-  return { as: frei('AS'), nk: frei('NK') };
+  return { as: frei('AS'), pv: frei('PV'), nk: frei('NK') };
 }
 
 app.get('/api/rechnungen', nurAngemeldet, function (req, res) {
@@ -75,7 +77,7 @@ app.put('/api/rechnungen/absender/:art?', nurAngemeldet, nurVerwalter, function 
 
 app.post('/api/rechnungen', nurAngemeldet, function (req, res) {
   const b = req.body || {};
-  const art = b.art === 'nk' ? 'nk' : 'as';
+  const art = RECHNUNG_ARTEN[b.art] ? b.art : 'as';
   const nummer = String(b.nummer || '').trim().slice(0, 60);
   if (!nummer) return res.status(400).json({ fehler: 'Rechnungsnummer fehlt' });
   let id = Number(b.id) || 0;
