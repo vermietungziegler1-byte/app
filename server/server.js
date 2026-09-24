@@ -725,7 +725,16 @@ async function googleToken() {
       grant_type: 'refresh_token'
     })
   });
-  if (!antwort.ok) throw new Error('Google lehnt das Zugriffsrecht ab (' + antwort.status + ')');
+  if (!antwort.ok) {
+    let grund = '';
+    try { grund = ((await antwort.json()) || {}).error || ''; } catch (e) { /* egal */ }
+    // invalid_grant: das dauerhafte Zugriffsrecht ist abgelaufen oder wurde zurückgezogen
+    // (im Testmodus des Google-Projekts passiert das automatisch nach 7 Tagen)
+    if (grund === 'invalid_grant') {
+      throw new Error('Die Google-Verbindung ist abgelaufen — bitte unter Menü → Postfach trennen und neu verbinden');
+    }
+    throw new Error('Google lehnt das Zugriffsrecht ab (' + antwort.status + (grund ? ', ' + grund : '') + ')');
+  }
   const daten = await antwort.json();
   googleZugriff = {
     token: daten.access_token,
