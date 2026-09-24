@@ -255,7 +255,7 @@ if [ "$MODUS" = "einrichten" ]; then
     ok "Schlüssel für GitHub erzeugt"
   fi
   if ! grep -q "Host github-vermietung" "$SSH_ORDNER/config" 2>/dev/null; then
-    printf '\nHost github-vermietung\n  HostName github.com\n  User git\n  IdentityFile %s\n  IdentitiesOnly yes\n' \
+    printf '\nHost github-vermietung\n  HostName github.com\n  User git\n  IdentityFile %s\n  IdentitiesOnly yes\n  StrictHostKeyChecking accept-new\n' \
       "$SCHLUESSEL" >> "$SSH_ORDNER/config"
     chmod 600 "$SSH_ORDNER/config"
   fi
