@@ -9,8 +9,10 @@
 //  1. Aus Arbeitszeit, Pause und festen Terminen entstehen freie Lücken.
 //  2. Fällige und überfällige Aufgaben werden nach Wichtigkeit sortiert
 //     und nacheinander in die früheste passende Lücke gelegt.
-//  3. Was heute nicht mehr hineinpasst, wird auf die nächsten Arbeitstage
-//     verteilt — so, dass kein Tag mehr als die eingestellte Zeit bekommt.
+//  3. Überfälliges, das heute nicht mehr hineinpasst, wird auf die nächsten
+//     Arbeitstage verteilt — so, dass kein Tag mehr als die eingestellte Zeit
+//     bekommt. Was für heute fällig ist, bleibt immer heute (notfalls ohne
+//     Uhrzeit): wann es drankommt, entscheidest du selbst.
 //  Wiederkehrende Aufgaben werden nie angefasst (sonst ginge die
 //  Wiederholung in Todoist verloren).
 // -------------------------------------------------------------
@@ -126,7 +128,7 @@ function planen(p) {
   const start = minuten(e.start), ende = minuten(e.ende);
   const istArbeitstag = function (d) { return e.arbeitstage.indexOf(wochentag(d)) !== -1; };
 
-  const ergebnis = { datum: datum, bloecke: [], fest: [], verschoben: [], wiederkehrend: [], ohnePlatz: [], einstellungen: e };
+  const ergebnis = { datum: datum, bloecke: [], fest: [], verschoben: [], bleibtHeute: [], wiederkehrend: [], ohnePlatz: [], einstellungen: e };
 
   // Aufgaben einteilen
   const kandidaten = [];
@@ -187,6 +189,11 @@ function planen(p) {
     if (istArbeitstag(d)) tage.push({ datum: d, frei: e.maxMinuten - (spaeter[d] || 0) });
   }
   rest.forEach(function (a) {
+    // Für heute fällig: bleibt heute, auch ohne freie Lücke
+    if (a.faellig === datum) {
+      ergebnis.bleibtHeute.push({ id: a.id, inhalt: a.inhalt, prioritaet: a.prioritaet || 1, dauer: a._dauer });
+      return;
+    }
     // Erster Tag mit genug Platz — eine Aufgabe, die länger als ein ganzer Tag ist, bekommt einen leeren Tag
     const tag = tags(tage, a._dauer, e.maxMinuten);
     if (!tag) {

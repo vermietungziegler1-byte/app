@@ -57,7 +57,9 @@ test('Wichtigstes zuerst: Priorität, dann am längsten überfällig', function 
     aufgabe('wichtig', { faellig: DONNERSTAG, prioritaet: 4 })
   ] });
   assert.deepEqual(p.bloecke.map(function (b) { return b.id; }).sort(), ['alt', 'wichtig']);
-  assert.deepEqual(p.verschoben.map(function (v) { return [v.id, v.nach]; }), [['neu', '2026-09-25']]);
+  // Was für heute fällig ist, bleibt heute — auch wenn keine Zeit mehr frei ist
+  assert.equal(p.verschoben.length, 0);
+  assert.deepEqual(p.bleibtHeute.map(function (b) { return b.id; }), ['neu']);
 });
 
 test('Überfälliges wird auf Arbeitstage verteilt, das Wochenende bleibt frei', function () {
@@ -77,9 +79,21 @@ test('Tage, an denen schon Aufgaben fällig sind, bekommen entsprechend weniger 
     aufgabe('morgenSchon', { faellig: '2026-09-25', dauer: 60 }),
     aufgabe('zuViel', { faellig: '2026-09-20', dauer: 60 })
   ] });
-  // Die ältere Aufgabe bekommt heute den Platz; Freitag ist mit der dort fälligen schon voll → Montag
+  // Die ältere Aufgabe bekommt heute den Platz; die heutige bleibt trotzdem heute
   assert.deepEqual(p.bloecke.map(function (b) { return b.id; }), ['zuViel']);
-  assert.deepEqual(p.verschoben.map(function (v) { return [v.id, v.nach]; }), [['heute', '2026-09-28']]);
+  assert.equal(p.verschoben.length, 0);
+  assert.deepEqual(p.bleibtHeute.map(function (b) { return b.id; }), ['heute']);
+});
+
+test('Überfälliges geht an Tagen vorbei, an denen schon genug fällig ist', function () {
+  const p = planen({ datum: DONNERSTAG, einstellungen: Object.assign({}, E, { maxMinuten: 60 }), aufgaben: [
+    aufgabe('heute', { dauer: 60, prioritaet: 4 }),
+    aufgabe('morgenSchon', { faellig: '2026-09-25', dauer: 60 }),
+    aufgabe('alt', { faellig: '2026-09-20', dauer: 60 })
+  ] });
+  // „heute“ ist wichtiger und bekommt den Platz; „alt“ muss weg, Freitag ist voll → Montag
+  assert.deepEqual(p.bloecke.map(function (b) { return b.id; }), ['heute']);
+  assert.deepEqual(p.verschoben.map(function (v) { return [v.id, v.nach]; }), [['alt', '2026-09-28']]);
 });
 
 test('Wiederkehrende Aufgaben werden nie verplant oder verschoben', function () {
@@ -91,10 +105,13 @@ test('Wiederkehrende Aufgaben werden nie verplant oder verschoben', function () 
   assert.ok(!p.verschoben.some(function (v) { return v.id === 'routine'; }));
 });
 
-test('Am Wochenende wird nichts verplant, alles geht auf Montag', function () {
-  const p = planen({ datum: '2026-09-26', einstellungen: E, aufgaben: [aufgabe(1, { faellig: '2026-09-26' })] });
+test('Am Wochenende wird nichts verplant: Überfälliges geht auf Montag, Heutiges bleibt', function () {
+  const p = planen({ datum: '2026-09-26', einstellungen: E, aufgaben: [
+    aufgabe(1, { faellig: '2026-09-26' }), aufgabe(2, { faellig: '2026-09-24' })
+  ] });
   assert.equal(p.bloecke.length, 0);
-  assert.deepEqual(p.verschoben.map(function (v) { return v.nach; }), ['2026-09-28']);
+  assert.deepEqual(p.verschoben.map(function (v) { return [v.id, v.nach]; }), [['2', '2026-09-28']]);
+  assert.deepEqual(p.bleibtHeute.map(function (b) { return b.id; }), ['1']);
 });
 
 test('Heute ab jetzt: nichts wird in die Vergangenheit gelegt', function () {

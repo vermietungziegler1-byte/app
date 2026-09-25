@@ -6236,6 +6236,10 @@
                 return '<div class="plangruppe"><b>' + esc(planTag(d)) + '</b> ' + tage[d].map(esc).join(' · ') + '</div>';
               }).join('');
         }
+        if (p.bleibtHeute && p.bleibtHeute.length) {
+          body += '<div class="plantitel">Bleibt heute, ohne feste Uhrzeit (' + p.bleibtHeute.length + ')</div>'
+            + '<div class="plangruppe">' + p.bleibtHeute.map(function (b) { return esc(b.inhalt); }).join(' · ') + '</div>';
+        }
         if (p.wiederkehrend.length) {
           body += '<div class="unit-type" style="margin-top:10px">Wiederkehrend, bleibt wie es ist: '
             + p.wiederkehrend.map(function (w) { return esc(w.inhalt); }).join(' · ') + '</div>';
