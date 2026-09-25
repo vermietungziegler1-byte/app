@@ -416,3 +416,6 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 #app .planliste .mpunkt.vorbei { opacity: .5; }
 #app .planliste .mpunkt.jetzt .mwas { color: var(--messing); }
 #app .planliste .mpunkt.liegen .muhr { color: var(--sperr); } #app .planliste .mwarum .rot { color: var(--sperr); }
+#app .planliste .td-kreis.an { background: var(--messing); border-color: var(--messing); color: #fff; }
+#app .planliste .mpunkt.abgehakt .mwas { text-decoration: line-through; color: var(--muted); }
+#app .planliste .td-kreis.an svg { opacity: 1; color: #fff; }

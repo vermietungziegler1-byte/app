@@ -2489,7 +2489,9 @@
   let kalSchiebt = null;      // Aufgabe, die auf einen anderen Tag soll
   // Eine Stunde in Bildpunkten — am Handy höher, damit Text in die Blöcke passt
   const KAL_HOEHE = (window.innerWidth || 1000) < 560 ? 58 : 46;
-  let memoAlle = false;       // Heute: alle Punkte statt der ersten fünf
+  let memoAlle = false;
+  // Abgehakte Kalendertermine: stehen in den Daten, damit es auf jedem Gerät gleich aussieht
+  function kalAbgehakt(k) { return !!(data && data.kalErledigt && data.kalErledigt[k]); }       // Heute: alle Punkte statt der ersten fünf
   let kalGanzAuf = false;     // Liste "ohne Uhrzeit" aufgeklappt?
   let sprichQuelle = null;    // wer gerade vorliest: 'memo' oder 'kal'
   let kalRolle = null;        // gemerkte Rollposition der Zeitachse
@@ -3632,7 +3634,6 @@
       if (istHeute) {
         // 1 — was rechts im Zeitplan für heute steht, in der Reihenfolge des Tages
         const jetztMin = new Date().getHours() * 60 + new Date().getMinutes();
-        const uhr = function (m) { return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); };
         const geplant = zeitplan.slice().sort(function (x, y) { return x.von - y.von; });
         html += '<div class="tagabschnitt"><span>Heute eingeplant</span>'
           + (geplant.length ? '<span class="anzahl">' + geplant.length + '</span>' : '') + '</div>';
@@ -3644,14 +3645,19 @@
             const jetzt = !vorbei && e.von <= jetztMin;
             const ziel = e.tid ? ' data-act="td-oeffnen" data-tid="' + e.tid + '"'
               : (e.act ? ' data-act="' + e.act + '"' + (e.id ? ' data-id="' + esc(String(e.id)) + '"' : '') : '');
+            // Termine aus dem Kalender und Besichtigungen hakt man hier ab (gemerkt in den Daten);
+            // Aufgaben werden wie überall in Todoist erledigt
+            const schluessel = e.art + ':' + (e.tid || e.id) + '@' + kalTag;
+            const abgehakt = !e.tid && kalAbgehakt(schluessel);
             // Vorbei, aber nicht abgehakt: nicht verblassen lassen, sondern als offen zeigen
-            const liegen = vorbei && !!e.tid;
-            return '<li class="mpunkt' + (ziel ? ' klickbar' : '') + (vorbei && !liegen ? ' vorbei' : '') + (liegen ? ' liegen' : '') + (jetzt ? ' jetzt' : '') + '"' + ziel + '>'
-              + '<span class="muhr num">' + uhr(e.von) + '</span>'
+            const liegen = vorbei && !abgehakt;
+            return '<li class="mpunkt' + (ziel ? ' klickbar' : '') + (abgehakt ? ' abgehakt' : '') + (liegen ? ' liegen' : '') + (jetzt ? ' jetzt' : '') + '"' + ziel + '>'
               + '<span class="mtext"><span class="mwas">' + esc(e.titel) + '</span>'
-              + '<span class="mwarum">' + (jetzt ? 'läuft gerade · ' : '') + (liegen ? '<span class="rot">Zeit vorbei, noch offen</span> · ' : '') + (e.dauer ? e.dauer + ' Min' : '')
+              + '<span class="mwarum">' + (abgehakt ? 'erledigt' : (jetzt ? 'läuft gerade' : (liegen ? '<span class="rot">noch offen</span>' : 'geplant')))
               + (e.unten ? ' · ' + esc(e.unten) : '') + '</span></span>'
-              + (e.tid ? '<button type="button" class="td-kreis" data-act="td-fertig" data-tid="' + e.tid + '" title="Abhaken">' + TDI.check + '</button>' : '')
+              + (e.tid
+                  ? '<button type="button" class="td-kreis" data-act="td-fertig" data-tid="' + e.tid + '" title="Abhaken">' + TDI.check + '</button>'
+                  : '<button type="button" class="td-kreis' + (abgehakt ? ' an' : '') + '" data-act="kal-abhaken" data-k="' + esc(schluessel) + '" title="' + (abgehakt ? 'Wieder offen' : 'Abhaken') + '">' + TDI.check + '</button>')
               + '</li>';
           }).join('') + '</ol>';
         }
@@ -6807,6 +6813,16 @@
       kalTag = kalIso(d); render();
     }
     else if (act === 'kal-heute') { kalTag = heuteISO(); render(); }
+    else if (act === 'kal-abhaken') {
+      const k = el.getAttribute('data-k');
+      if (!data.kalErledigt) data.kalErledigt = {};
+      if (data.kalErledigt[k]) delete data.kalErledigt[k];
+      else data.kalErledigt[k] = heuteISO();
+      // Älter als zwei Wochen braucht es nicht mehr
+      const grenze = new Date(Date.now() - 14 * 86400000).toISOString().slice(0, 10);
+      Object.keys(data.kalErledigt).forEach(function (x) { if (data.kalErledigt[x] < grenze) delete data.kalErledigt[x]; });
+      save(); render();
+    }
     else if (act === 'memo-alle') { memoAlle = !memoAlle; render(); }
     else if (act === 'kal-ganz') { kalGanzAuf = !kalGanzAuf; render(); }
     else if (act === 'kal-sprechen') { kalVorlesen(); }
