@@ -475,3 +475,18 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
   padding: 5px 12px; font-size: 13px; font-weight: 600; min-height: 0; box-shadow: none; cursor: pointer;
 }
 #app .td-f-wknoepfe .nh-knopf.primaer { background: var(--messing); color: #fff; }
+
+/* ===== Großer Bildschirm: den Platz nutzen ===== */
+@media (min-width: 1100px) {
+  /* Aufgabenliste über die ganze Karte statt nach 820 px Schluss */
+  #app .td-inhalt { max-width: none; padding: 24px 36px 44px; }
+  #app .td { grid-template-columns: 250px minmax(0, 1fr); }
+  /* Aufgabenfenster wächst mit dem Bildschirm */
+  #app .modal.mittel { max-width: min(1320px, 90vw); width: min(1320px, 90vw); height: auto; max-height: 90vh; }
+  #app .modal.mittel .td-fenster { grid-template-columns: minmax(0, 1fr) 320px; }
+  #app .modal.mittel #t-besch { min-height: 180px; }
+}
+@media (min-width: 1600px) {
+  #app .td-inhalt { padding: 26px 48px 48px; }
+  #app .modal.mittel .td-fenster { grid-template-columns: minmax(0, 1fr) 360px; }
+}
