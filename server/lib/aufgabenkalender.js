@@ -134,6 +134,23 @@ function spaeterEntfernen(ids) {
   })().catch(function (e) { fehlerMerken(e.message); });
 }
 
+// Eine einzelne Aufgabe nach einer Änderung: mit Uhrzeit → Eintrag, sonst weg. Still im Hintergrund.
+function aufgabeAbgleichen(a) {
+  if (!bereit() || !a || !a.id) return;
+  (async function () {
+    let zeit = a.faelligZeit ? String(a.faelligZeit) : '';
+    if (/Z$|[+-]\d\d:\d\d$/.test(zeit)) {
+      const d = new Date(zeit);
+      if (!isNaN(d)) zeit = require('./kalender').berlinText(d.getTime());
+    }
+    if (zeit.length >= 16) {
+      await blockEintragen({ id: a.id, inhalt: a.inhalt, datum: zeit.slice(0, 10), von: zeit.slice(11, 16), dauer: a.dauer || 30, url: a.url });
+    } else {
+      await blockEntfernen(a.id);
+    }
+  })().catch(function (e) { fehlerMerken(e.message); });
+}
+
 function stand() {
   const g = googleEinstellungen();
   return {
@@ -143,4 +160,4 @@ function stand() {
   };
 }
 
-module.exports = { RECHT, bereit, planEintragen, blockEntfernen, spaeterEntfernen, stand };
+module.exports = { RECHT, bereit, planEintragen, blockEntfernen, spaeterEntfernen, aufgabeAbgleichen, stand };
