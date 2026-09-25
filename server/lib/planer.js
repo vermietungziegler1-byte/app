@@ -15,6 +15,7 @@ const { nurAngemeldet, nurVerwalter } = require('./anmeldung');
 const { todoist, todoistListe, aufgabeMappen } = require('./todoist');
 const { gkalHolen, gkalFenster, ortsZeitZuTs, berlinText } = require('./kalender');
 const kern = require('./planer-kern');
+const aufgabenkalender = require('./aufgabenkalender');
 
 const app = express.Router();
 
@@ -105,7 +106,7 @@ async function vorschlag(datum, roh) {
   plan.aenderungen = plan.bloecke.filter(function (b) {
     // Steht schon genau so in Todoist? Dann nichts ändern.
     return !(b.vorher.faelligZeit && String(b.vorher.faelligZeit).slice(0, 16) === datum + 'T' + b.von);
-  }).length + plan.verschoben.length;
+  }).length + plan.verschoben.length + plan.eingeplant.length;
   plan.letzteUebernahme = letzte ? { wann: letzte.wann, wer: letzte.wer, anzahl: letzte.aenderungen.length } : null;
   return plan;
 }
@@ -140,6 +141,9 @@ async function uebernehmen(datum, wer) {
   plan.verschoben.forEach(function (v) {
     auftraege.push({ art: 'verschoben', id: v.id, inhalt: v.inhalt, koerper: { due_date: v.nach } });
   });
+  plan.eingeplant.forEach(function (v) {
+    auftraege.push({ art: 'eingeplant', id: v.id, inhalt: v.inhalt, koerper: { due_date: v.nach } });
+  });
 
   const erledigt = [];
   const fehler = await nacheinander(auftraege, async function (a) {
@@ -153,7 +157,15 @@ async function uebernehmen(datum, wer) {
     db.prepare('INSERT INTO planer_protokoll (datum, wann, wer, aenderungen) VALUES (?,?,?,?)')
       .run(plan.datum, Date.now(), wer || null, JSON.stringify(erledigt));
   }
-  return { plan: plan, geaendert: erledigt.length, fehler: fehler };
+
+  // In den Google-Kalender „Aufgaben“: jeder Block mit Uhrzeit; wer auf einen anderen Tag wandert, fliegt raus
+  const url = {};
+  roh.forEach(function (t) { url[String(t.id)] = aufgabeMappen(t, null).url; });
+  const kalender = await aufgabenkalender.planEintragen(
+    plan.bloecke.map(function (b) { return { id: b.id, inhalt: b.inhalt, datum: plan.datum, von: b.von, dauer: b.dauer, url: url[b.id] }; }),
+    plan.verschoben.map(function (v) { return v.id; }));
+
+  return { plan: plan, geaendert: erledigt.length, fehler: fehler, kalender: kalender };
 }
 
 // Die letzte Übernahme eines Tages zurücknehmen
@@ -177,6 +189,7 @@ async function rueckgaengig(datum) {
     await todoist('/tasks/' + encodeURIComponent(a.id), { method: 'POST', body: JSON.stringify(koerper) });
   });
   db.prepare('UPDATE planer_protokoll SET zurueck = 1 WHERE id = ?').run(letzte.id);
+  aufgabenkalender.spaeterEntfernen(letzte.aenderungen.filter(function (a) { return a.art === 'block'; }).map(function (a) { return a.id; }));
   return { zurueck: letzte.aenderungen.length - fehler.length, fehler: fehler };
 }
 
@@ -196,7 +209,7 @@ async function automatischPlanen(datum) {
   automatikLaeuft = (async function () {
     einstellungSetzen('planer_auto_datum', datum);   // vorher setzen: bei Fehlern nicht jede Minute neu versuchen
     const r = await uebernehmen(datum, 'Automatik');
-    const kurz = { bloecke: r.plan.bloecke, verschoben: r.plan.verschoben.length, fehler: r.fehler.length };
+    const kurz = { bloecke: r.plan.bloecke, verschoben: r.plan.verschoben.length, eingeplant: r.plan.eingeplant.length, fehler: r.fehler.length };
     einstellungSetzen('planer_auto_ergebnis', JSON.stringify(kurz));
     return kurz;
   })();
@@ -212,13 +225,14 @@ setInterval(function () {
 }, 60 * 1000).unref();
 
 // Eine Zeile für die Morgenmitteilung: "08:00 Stadtwerke anrufen · 08:25 Nebenkosten … (+3) · 5 auf die nächsten Tage"
-function planKurztext(bloecke, verschoben) {
+function planKurztext(bloecke, verschoben, eingeplant) {
   const teile = [];
   if (bloecke.length) {
     const erste = bloecke.slice(0, 3).map(function (b) { return b.von + ' ' + b.inhalt; }).join(' · ');
     teile.push(erste + (bloecke.length > 3 ? ' (+' + (bloecke.length - 3) + ')' : ''));
   }
   if (verschoben) teile.push(verschoben + (verschoben === 1 ? ' Aufgabe' : ' Aufgaben') + ' auf die nächsten Tage verteilt');
+  if (eingeplant) teile.push(eingeplant + (eingeplant === 1 ? ' Aufgabe ohne Datum' : ' Aufgaben ohne Datum') + ' eingeplant');
   return teile.join(' · ');
 }
 
@@ -237,13 +251,13 @@ app.post('/api/plan/rueckgaengig', nurAngemeldet, mitFehler(async function (req,
 }));
 
 app.get('/api/plan/einstellungen', nurAngemeldet, function (req, res) {
-  res.json(planerEinstellungen());
+  res.json(Object.assign({}, planerEinstellungen(), { kalender: aufgabenkalender.stand() }));
 });
 
 app.put('/api/plan/einstellungen', nurAngemeldet, nurVerwalter, function (req, res) {
   const e = kern.einstellungenPruefen(Object.assign({}, planerEinstellungen(), req.body || {}));
   einstellungSetzen('planer', JSON.stringify(e));
-  res.json(e);
+  res.json(Object.assign({}, e, { kalender: aufgabenkalender.stand() }));
 });
 
 module.exports = { router: app, vorschlag, uebernehmen, rueckgaengig, planerEinstellungen, automatischPlanen, planKurztext };

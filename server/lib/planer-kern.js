@@ -9,8 +9,13 @@
 //  1. Aus Arbeitszeit, Pause und festen Terminen entstehen freie Lücken.
 //  2. Fällige und überfällige Aufgaben werden nach Wichtigkeit sortiert
 //     und nacheinander in die früheste passende Lücke gelegt.
-//  3. Was heute nicht mehr hineinpasst, wird auf die nächsten Arbeitstage
-//     verteilt — so, dass kein Tag mehr als die eingestellte Zeit bekommt.
+//  3. Überfälliges, das heute nicht mehr hineinpasst, wird auf die nächsten
+//     Arbeitstage verteilt — so, dass kein Tag mehr als die eingestellte Zeit
+//     bekommt. Was für heute fällig ist, bleibt immer heute (notfalls ohne
+//     Uhrzeit): wann es drankommt, entscheidest du selbst.
+//  4. Aufgaben ohne Datum kommen danach dran: erst in Lücken von heute,
+//     sonst auf Arbeitstage mit Platz in den nächsten zwei Wochen.
+//     Unteraufgaben und alles, was auf eine Antwort wartet, bleiben liegen.
 //  Wiederkehrende Aufgaben werden nie angefasst (sonst ginge die
 //  Wiederholung in Todoist verloren).
 // -------------------------------------------------------------
@@ -24,8 +29,13 @@ const STANDARD = {
   maxMinuten: 360,       // höchstens so viel Aufgabenzeit pro Tag
   arbeitstage: [1, 2, 3, 4, 5],   // Mo–Fr (0 = Sonntag)
   standardDauer: 30,
-  automatisch: false
+  automatisch: false,
+  ohneDatum: true,        // Aufgaben ohne Datum selbst einplanen
+  ohneDatumTage: 10       // … höchstens so viele Arbeitstage im Voraus
 };
+
+// Wartet auf jemand anderen? Dann gibt es nichts einzuplanen.
+const WARTET = /wartet|warten|waiting/i;
 
 function minuten(hhmm) {
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ''));
@@ -64,6 +74,8 @@ function einstellungenPruefen(e) {
     if (t.length) r.arbeitstage = Array.from(new Set(t)).sort();
   }
   if (e.automatisch !== undefined) r.automatisch = !!e.automatisch;
+  if (e.ohneDatum !== undefined) r.ohneDatum = !!e.ohneDatum;
+  zahl('ohneDatumTage', 1, 30);
   return r;
 }
 
@@ -99,6 +111,12 @@ function luecken(von, bis, belegt, puffer) {
   return frei.filter(function (l) { return l[1] > l[0]; });
 }
 
+// Ohne Datum: Wichtigstes zuerst, dann was am längsten liegt
+function ohneReihenfolge(a, b) {
+  return (b.prioritaet || 1) - (a.prioritaet || 1)
+    || String(a.angelegt || '').localeCompare(String(b.angelegt || ''));
+}
+
 // Wichtigstes zuerst: Priorität, dann am längsten überfällig, dann Todoist-Reihenfolge
 function reihenfolge(a, b) {
   return (b.prioritaet || 1) - (a.prioritaet || 1)
@@ -126,13 +144,21 @@ function planen(p) {
   const start = minuten(e.start), ende = minuten(e.ende);
   const istArbeitstag = function (d) { return e.arbeitstage.indexOf(wochentag(d)) !== -1; };
 
-  const ergebnis = { datum: datum, bloecke: [], fest: [], verschoben: [], wiederkehrend: [], ohnePlatz: [], einstellungen: e };
+  const ergebnis = { datum: datum, bloecke: [], fest: [], verschoben: [], bleibtHeute: [], eingeplant: [], wiederkehrend: [], ohnePlatz: [], einstellungen: e };
 
   // Aufgaben einteilen
   const kandidaten = [];
+  const ohne = [];      // Aufgaben ohne Datum, die der Planer unterbringen darf
   const spaeter = {};   // Tag -> schon verplante Minuten (Aufgaben, die ohnehin an dem Tag fällig sind)
   (p.aufgaben || []).forEach(function (a) {
-    if (!a.faellig) return;
+    if (!a.faellig) {
+      const wartet = (a.labels || []).some(function (l) { return WARTET.test(l); });
+      if (e.ohneDatum && !a.eltern && !wartet) {
+        const d = dauerSchaetzen(a, e);
+        ohne.push(Object.assign({}, a, { _dauer: d.dauer, _geschaetzt: d.geschaetzt }));
+      }
+      return;
+    }
     const d = dauerSchaetzen(a, e);
     const zeitHeute = a.faelligZeit && a.faellig === datum ? minuten(String(a.faelligZeit).slice(11, 16)) : null;
     if (a.wiederkehrend) {
@@ -177,6 +203,24 @@ function planen(p) {
       belegt.push({ von: luecke[0], bis: bis });
       budget -= a._dauer;
     });
+    // Was dann noch frei ist, bekommen Aufgaben ohne Datum
+    ohne.sort(ohneReihenfolge);
+    const ohneRest = [];
+    ohne.forEach(function (a) {
+      const frei = a._dauer <= budget ? luecken(von, ende, belegt, e.puffer) : [];
+      const luecke = frei.find(function (l) { return l[1] - l[0] >= a._dauer; });
+      if (!luecke) { ohneRest.push(a); return; }
+      const bis = luecke[0] + a._dauer;
+      ergebnis.bloecke.push({
+        id: a.id, inhalt: a.inhalt, projekt: a.projekt || '', prioritaet: a.prioritaet || 1,
+        von: uhrzeit(luecke[0]), bis: uhrzeit(bis), dauer: a._dauer, geschaetzt: a._geschaetzt,
+        ohneDatum: true, vorher: { faellig: null, faelligZeit: null }
+      });
+      belegt.push({ von: luecke[0], bis: bis });
+      budget -= a._dauer;
+    });
+    ohne.length = 0;
+    Array.prototype.push.apply(ohne, ohneRest);
     ergebnis.bloecke.sort(function (a, b) { return a.von.localeCompare(b.von); });
   }
 
@@ -187,6 +231,11 @@ function planen(p) {
     if (istArbeitstag(d)) tage.push({ datum: d, frei: e.maxMinuten - (spaeter[d] || 0) });
   }
   rest.forEach(function (a) {
+    // Für heute fällig: bleibt heute, auch ohne freie Lücke
+    if (a.faellig === datum) {
+      ergebnis.bleibtHeute.push({ id: a.id, inhalt: a.inhalt, prioritaet: a.prioritaet || 1, dauer: a._dauer });
+      return;
+    }
     // Erster Tag mit genug Platz — eine Aufgabe, die länger als ein ganzer Tag ist, bekommt einen leeren Tag
     const tag = tags(tage, a._dauer, e.maxMinuten);
     if (!tag) {
@@ -197,6 +246,18 @@ function planen(p) {
     ergebnis.verschoben.push({
       id: a.id, inhalt: a.inhalt, prioritaet: a.prioritaet || 1, dauer: a._dauer,
       nach: tag.datum, vorher: { faellig: a.faellig, faelligZeit: a.faelligZeit || null }
+    });
+  });
+
+  // Aufgaben ohne Datum: auf die nächsten Arbeitstage, solange dort noch Platz ist
+  const nahe = tage.slice(0, e.ohneDatumTage);
+  ohne.sort(ohneReihenfolge).forEach(function (a) {
+    const tag = nahe.find(function (t) { return t.frei >= a._dauer; });
+    if (!tag) return;   // kein Platz in Sicht: bleibt ohne Datum, kommt beim nächsten Mal wieder dran
+    tag.frei -= a._dauer;
+    ergebnis.eingeplant.push({
+      id: a.id, inhalt: a.inhalt, prioritaet: a.prioritaet || 1, dauer: a._dauer,
+      nach: tag.datum, vorher: { faellig: null, faelligZeit: null }
     });
   });
 

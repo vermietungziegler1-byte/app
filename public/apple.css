@@ -403,3 +403,4 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 }
 #app ol.memoliste.ohnenr .mpunkt { padding-left: 2px; }
 #app ol.memoliste .mpunkt.frist .mwas { color: var(--sperr); }
+#app .plankal { margin-top: 14px; padding: 12px 14px; border-radius: 12px; background: var(--fuellung); }

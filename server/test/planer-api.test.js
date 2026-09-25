@@ -30,7 +30,8 @@ test('Tagesplan: Vorschlag, Übernehmen und Rückgängig', async function () {
     assert.equal(todoist.aenderungen.length, 0);
     assert.deepEqual(a.json.bloecke.map(function (b) { return [b.id, b.von, b.bis]; }), [
       ['1', '08:00', '08:15'],     // wichtig und Anruf → 15 Minuten, zuerst
-      ['2', '08:25', '08:40']      // danach mit 10 Minuten Puffer; "wegschicken" → 15 Minuten
+      ['2', '08:25', '08:40'],     // danach mit 10 Minuten Puffer; "wegschicken" → 15 Minuten
+      ['5', '10:10', '10:40']      // ohne Datum: in die nächste freie Lücke (nach dem festen Termin 9–10 Uhr)
     ]);
     assert.deepEqual(a.json.fest.map(function (f) { return f.id; }), ['4']);
     assert.deepEqual(a.json.wiederkehrend.map(function (w) { return w.id; }), ['3']);
@@ -38,7 +39,7 @@ test('Tagesplan: Vorschlag, Übernehmen und Rückgängig', async function () {
     // Übernehmen: Uhrzeit in UTC (Januar: Berlin = UTC+1) und Dauer landen in Todoist
     a = await louis.post('/api/plan', { datum: MONTAG });
     assert.equal(a.status, 200, a.text);
-    assert.equal(a.json.geaendert, 2);
+    assert.equal(a.json.geaendert, 3);
     assert.deepEqual(a.json.fehler, []);
     const zu1 = todoist.aenderungen.find(function (x) { return x.id === '1'; }).koerper;
     assert.deepEqual(zu1, { due_datetime: '2030-01-07T07:00:00Z', duration: 15, duration_unit: 'minute' });
@@ -52,9 +53,10 @@ test('Tagesplan: Vorschlag, Übernehmen und Rückgängig', async function () {
     // Rückgängig: alte Daten zurück
     a = await louis.post('/api/plan/rueckgaengig', { datum: MONTAG });
     assert.equal(a.status, 200, a.text);
-    assert.equal(a.json.zurueck, 2);
+    assert.equal(a.json.zurueck, 3);
     assert.equal(aufgaben[0].due.date, '2030-01-02');
     assert.equal(aufgaben[1].due.date, '2030-01-03');
+    assert.equal(aufgaben[4].due, null, 'die Aufgabe ohne Datum ist wieder ohne Datum');
 
     // Ein zweites Rückgängig gibt es nicht
     a = await louis.post('/api/plan/rueckgaengig', { datum: MONTAG });

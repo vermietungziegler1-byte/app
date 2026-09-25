@@ -5,12 +5,15 @@ const { db, crypto, holen, htmlSicher, einstellung, einstellungSetzen, beiDatenA
 const { nurAngemeldet, nurVerwalter } = require('./anmeldung');
 
 const app = express.Router();
+const TOKEN_URL = process.env.GOOGLE_TOKEN_URL || 'https://oauth2.googleapis.com/token';
 
 // ---------------- Google Mail ----------------
 //  OAuth: Der Server kennt nur ein widerrufbares Zugriffsrecht, kein Passwort.
 
+// Kalender: nur Kalender, die die App selbst anlegt (der Kalender „Aufgaben“) — nie deine anderen Termine
 const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly'
-  + ' https://www.googleapis.com/auth/drive.file';
+  + ' https://www.googleapis.com/auth/drive.file'
+  + ' https://www.googleapis.com/auth/calendar.app.created';
 
 function googleEinstellungen() {
   return {
@@ -29,7 +32,7 @@ async function googleToken() {
   const g = googleEinstellungen();
   if (!g.clientId || !g.refresh) throw new Error('Google ist nicht verbunden');
   if (googleZugriff.token && Date.now() < googleZugriff.bis) return googleZugriff.token;
-  const antwort = await holen('https://oauth2.googleapis.com/token', {
+  const antwort = await holen(TOKEN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
@@ -103,7 +106,7 @@ app.get('/api/post/filter', nurAngemeldet, function (req, res) {
 });
 
 app.delete('/api/google', nurAngemeldet, nurVerwalter, function (req, res) {
-  ['google_refresh', 'google_adresse'].forEach(function (k) {
+  ['google_refresh', 'google_adresse', 'google_scope'].forEach(function (k) {
     db.prepare('DELETE FROM einstellungen WHERE schluessel = ?').run(k);
   });
   googleZugriffVergessen();
@@ -155,7 +158,7 @@ app.get('/api/google/zurueck', nurAngemeldet, nurVerwalter, async function (req,
   if (!code) return res.status(400).send('Kein Code von Google');
   try {
     const ziel = googleRueckweg(req);
-    const antwort = await holen('https://oauth2.googleapis.com/token', {
+    const antwort = await holen(TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -166,6 +169,7 @@ app.get('/api/google/zurueck', nurAngemeldet, nurVerwalter, async function (req,
     const daten = await antwort.json();
     if (!daten.refresh_token) throw new Error(daten.error_description || 'Kein dauerhaftes Zugriffsrecht erhalten');
     einstellungSetzen('google_refresh', daten.refresh_token);
+    einstellungSetzen('google_scope', String(daten.scope || ''));
     googleZugriffVergessen();
     postCache.clear();
 

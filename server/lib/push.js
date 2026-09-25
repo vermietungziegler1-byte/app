@@ -95,7 +95,10 @@ function pushEinstellungenAntwort(e) {
     zeit: e.zeit || '07:00',
     morgen: e.morgen !== false,
     termine: e.termine !== false,
-    anfragen: e.anfragen !== false
+    anfragen: e.anfragen !== false,
+    bloecke: e.bloecke !== false,
+    abends: e.abends !== false,
+    abendZeit: e.abendZeit || '18:00'
   };
 }
 
@@ -105,9 +108,12 @@ app.get('/api/push/einstellungen', nurAngemeldet, function (req, res) {
 
 // Gilt für alle Geräte — deshalb nur für den Verwalter
 app.put('/api/push/einstellungen', nurAngemeldet, nurVerwalter, function (req, res) {
-  const { zeit, morgen, termine, anfragen } = req.body || {};
+  const { zeit, morgen, termine, anfragen, bloecke, abends, abendZeit } = req.body || {};
   const e = pushEinstellungenLesen();
   if (typeof zeit === 'string' && /^\d{2}:\d{2}$/.test(zeit)) e.zeit = zeit;
+  if (typeof abendZeit === 'string' && /^\d{2}:\d{2}$/.test(abendZeit)) e.abendZeit = abendZeit;
+  if (bloecke !== undefined) e.bloecke = !!bloecke;
+  if (abends !== undefined) e.abends = !!abends;
   if (morgen !== undefined) e.morgen = !!morgen;
   if (termine !== undefined) e.termine = !!termine;
   if (anfragen !== undefined) e.anfragen = !!anfragen;
@@ -231,7 +237,7 @@ if (webpush) {
       try {
         const auto = await planer.automatischPlanen(t.datum);
         if (auto) {
-          planZeile = planer.planKurztext(auto.bloecke, auto.verschoben);
+          planZeile = planer.planKurztext(auto.bloecke, auto.verschoben, auto.eingeplant);
         } else {
           const v = await planer.vorschlag(t.datum);
           if (v.aenderungen) {
@@ -346,13 +352,83 @@ if (webpush) {
     }
   }
 
+  // --- Offene Aufgaben aus Todoist, höchstens alle fünf Minuten neu geholt ---
+  let aufgabenCache = { wann: 0, liste: [] };
+  async function offeneAufgaben() {
+    if (!einstellung('todoist_token')) return [];
+    if (Date.now() - aufgabenCache.wann < 5 * 60 * 1000) return aufgabenCache.liste;
+    const { todoistListe, aufgabeMappen } = require('./todoist');
+    const { berlinText } = require('./kalender');
+    const liste = (await todoistListe('/tasks')).map(function (roh) {
+      const a = aufgabeMappen(roh, null);
+      // Uhrzeiten mit Zone (…Z) in Berliner Ortszeit umrechnen
+      if (a.faelligZeit && /Z$|[+-]\d\d:\d\d$/.test(a.faelligZeit)) {
+        const d = new Date(a.faelligZeit);
+        if (!isNaN(d)) { a.faelligZeit = berlinText(d.getTime()); a.faellig = a.faelligZeit.slice(0, 10); }
+      }
+      return a;
+    });
+    aufgabenCache = { wann: Date.now(), liste: liste };
+    return liste;
+  }
+  const minutenVon = function (hhmm) { return Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5)); };
+
+  // --- „Jetzt dran“: zu Beginn jedes Blocks mit Uhrzeit ---
+  async function blockTick(e, t) {
+    if (e.bloecke === false) return;
+    const zeilen = db.prepare('SELECT * FROM push_abos').all();
+    if (!zeilen.length) return;   // noch kein Gerät: nichts als „erinnert“ abhaken
+    let gesendet = {};
+    try { gesendet = JSON.parse(einstellung('push_bloecke') || '{}'); } catch (fehler) { gesendet = {}; }
+    if (gesendet.datum !== t.datum) gesendet = { datum: t.datum, schluessel: [] };
+    const jetzt = minutenVon(t.zeit);
+    const faellig = (await offeneAufgaben()).filter(function (a) {
+      if (!a.faelligZeit || a.faellig !== t.datum || String(a.faelligZeit).length < 16) return false;
+      const start = minutenVon(String(a.faelligZeit).slice(11, 16));
+      return jetzt >= start && jetzt - start <= 10 && gesendet.schluessel.indexOf(a.id + '@' + a.faelligZeit) === -1;
+    });
+    if (!faellig.length) return;
+    faellig.forEach(function (a) { gesendet.schluessel.push(a.id + '@' + a.faelligZeit); });
+    einstellungSetzen('push_bloecke', JSON.stringify(gesendet));   // vor dem Senden: nie doppelt
+    for (const a of faellig) {
+      await mitteilungSenden(zeilen, {
+        titel: 'Jetzt dran',
+        text: a.inhalt + ' · ' + String(a.faelligZeit).slice(11, 16) + (a.dauer ? ' · ' + a.dauer + ' Min' : ''),
+        url: '/?memo=1', tag: 'block-' + a.id
+      });
+    }
+  }
+
+  // --- Abends: was heute liegen geblieben ist ---
+  async function abendTick(e, t) {
+    if (e.abends === false) return;
+    const spaeter = minutenVon(t.zeit) - minutenVon(e.abendZeit || '18:00');
+    if (spaeter < 0 || spaeter > 60) return;
+    if (einstellung('push_abend_zuletzt') === t.datum) return;
+    einstellungSetzen('push_abend_zuletzt', t.datum);
+    const offen = (await offeneAufgaben()).filter(function (a) {
+      return a.faellig && a.faellig <= t.datum && !a.wiederkehrend;
+    });
+    if (!offen.length) return;
+    const planer = require('./planer');
+    const auto = planer.planerEinstellungen().automatisch;
+    const namen = offen.slice(0, 3).map(function (a) { return a.inhalt; }).join(' · ') + (offen.length > 3 ? ' (+' + (offen.length - 3) + ')' : '');
+    await mitteilungSenden(db.prepare('SELECT * FROM push_abos').all(), {
+      titel: offen.length === 1 ? '1 Sache ist liegen geblieben' : offen.length + ' Sachen sind liegen geblieben',
+      text: namen + ' — ' + (auto ? 'ich plane sie morgen früh neu ein.' : 'morgen früh neu planen.'),
+      url: '/', tag: 'abend'
+    });
+  }
+
   setInterval(async function () {
     const e = pushEinstellungenLesen();
     const t = berlinJetzt();
+    try { await blockTick(e, t); } catch (fehler) { console.log('Block-Erinnerung fehlgeschlagen:', fehler.message); }
+    try { await abendTick(e, t); } catch (fehler) { console.log('Abendmeldung fehlgeschlagen:', fehler.message); }
     try { await morgenTick(e, t); } catch (fehler) { console.log('Morgenmeldung fehlgeschlagen:', fehler.message); }
     try { await terminTick(e, t); } catch (fehler) { console.log('Terminerinnerung fehlgeschlagen:', fehler.message); }
     try { await anfrageTick(e); } catch (fehler) { console.log('Anfragen-Prüfung fehlgeschlagen:', fehler.message); }
-  }, 30000).unref();
+  }, Number(process.env.PUSH_TAKT_MS) || 30000).unref();
 }
 
 module.exports = { router: app, webpush, mitteilungSenden };

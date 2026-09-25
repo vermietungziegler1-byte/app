@@ -1788,7 +1788,8 @@
           + '„Neu planen“ legt Offenes in die freie Zeit.';
       } else if (p.aenderungen) {
         zeile = p.bloecke.length + (p.bloecke.length === 1 ? ' Aufgabe passt' : ' Aufgaben passen') + ' heute hinein'
-          + (p.verschoben.length ? ', ' + p.verschoben.length + ' kommen auf die nächsten Tage' : '') + '.';
+          + (p.verschoben.length ? ', ' + p.verschoben.length + ' kommen auf die nächsten Tage' : '')
+          + (p.eingeplant && p.eingeplant.length ? ', ' + p.eingeplant.length + ' ohne Datum werden eingeplant' : '') + '.';
       } else {
         zeile = 'Nichts zu planen — alles hat seinen Platz.';
       }
@@ -5493,6 +5494,11 @@
         + '</div><div class="two">'
         + f('Vor Besichtigungen', sel('p-termine', [['an', 'Eingeschaltet'], ['aus', 'Ausgeschaltet']], (pushEinst && pushEinst.termine === false) ? 'aus' : 'an'))
         + f('Neue Anfragen', sel('p-anfragen', [['an', 'Eingeschaltet'], ['aus', 'Ausgeschaltet']], (pushEinst && pushEinst.anfragen === false) ? 'aus' : 'an'))
+        + '</div><div class="two">'
+        + f('„Jetzt dran“ zu jedem Block', sel('p-bloecke', [['an', 'Eingeschaltet'], ['aus', 'Ausgeschaltet']], (pushEinst && pushEinst.bloecke === false) ? 'aus' : 'an'))
+        + f('Abends: Liegengebliebenes', '<div style="display:flex;gap:8px">'
+            + sel('p-abends', [['an', 'An'], ['aus', 'Aus']], (pushEinst && pushEinst.abends === false) ? 'aus' : 'an')
+            + '<input type="time" id="p-abendzeit" value="' + esc((pushEinst && pushEinst.abendZeit) || '18:00') + '"></div>')
         + '</div>'
         + (google.verbunden ? '' : '<div class="unit-type" style="margin:-2px 0 10px">Die Anfragen-Meldung braucht das verbundene Postfach.</div>')
         + '<button class="tiny" data-act="push-zeit">Übernehmen</button>'
@@ -5770,6 +5776,7 @@
     } else if (modal.kind === 'google') {
       body = '<h2>Postfach</h2>'
         + '<div class="hint">Die App liest deine Mails nur mit — sie kann nichts senden, ändern oder löschen. '
+        + 'In deinen Kalender schreibt sie nur in den eigenen Kalender „Aufgaben“, deine anderen Termine bleiben unberührt. '
         + 'Das Zugriffsrecht kannst du bei Google jederzeit widerrufen.</div>'
         + (google.verbunden
             ? '<div class="hintbox">Verbunden mit ' + esc(google.adresse || 'deinem Postfach') + '</div>'
@@ -5785,7 +5792,8 @@
               + 'er blendet auch Mails aus, die sonst passen würden.</div>'
               + '<div class="modal-actions" style="justify-content:flex-start">'
               + '<button class="primary" data-act="pf-speichern">Filter speichern</button>'
-              + '<button class="danger" data-act="google-trennen">Verbindung lösen</button></div>'
+              + '<button class="danger" data-act="google-trennen">Verbindung lösen</button>'
+              + '<a class="tdlink" href="/api/google/start" title="Etwa, um dem Tagesplan den Kalender „Aufgaben“ zu erlauben">Neu anmelden</a></div>'
               + '<div class="divider"></div>'
               + '<div class="spalte-titel">Nachschauen, was Google liefert</div>'
               + '<div class="aufgabe-neu">'
@@ -6221,7 +6229,7 @@
         const heute = p.bloecke.map(function (b) {
           return { von: b.von, html: '<div class="planblock"><span class="num">' + b.von + '–' + b.bis + '</span>'
             + '<span class="grow">' + esc(b.inhalt) + '</span>'
-            + '<span class="unit-type">' + b.dauer + ' Min' + (b.geschaetzt ? ', geschätzt' : '') + '</span></div>' };
+            + '<span class="unit-type">' + b.dauer + ' Min' + (b.geschaetzt ? ', geschätzt' : '') + (b.ohneDatum ? ' · hatte kein Datum' : '') + '</span></div>' };
         }).concat(p.fest.map(function (f) {
           return { von: f.von, html: '<div class="planblock fest"><span class="num">' + f.von + '–' + f.bis + '</span>'
             + '<span class="grow">' + esc(f.inhalt) + '</span><span class="unit-type">feste Uhrzeit</span></div>' };
@@ -6235,6 +6243,18 @@
             + Object.keys(tage).sort().map(function (d) {
                 return '<div class="plangruppe"><b>' + esc(planTag(d)) + '</b> ' + tage[d].map(esc).join(' · ') + '</div>';
               }).join('');
+        }
+        if (p.eingeplant && p.eingeplant.length) {
+          const tageO = {};
+          p.eingeplant.forEach(function (v) { (tageO[v.nach] = tageO[v.nach] || []).push(v.inhalt); });
+          body += '<div class="plantitel">Ohne Datum, jetzt eingeplant (' + p.eingeplant.length + ')</div>'
+            + Object.keys(tageO).sort().map(function (d) {
+                return '<div class="plangruppe"><b>' + esc(planTag(d)) + '</b> ' + tageO[d].map(esc).join(' · ') + '</div>';
+              }).join('');
+        }
+        if (p.bleibtHeute && p.bleibtHeute.length) {
+          body += '<div class="plantitel">Bleibt heute, ohne feste Uhrzeit (' + p.bleibtHeute.length + ')</div>'
+            + '<div class="plangruppe">' + p.bleibtHeute.map(function (b) { return esc(b.inhalt); }).join(' · ') + '</div>';
         }
         if (p.wiederkehrend.length) {
           body += '<div class="unit-type" style="margin-top:10px">Wiederkehrend, bleibt wie es ist: '
@@ -6275,6 +6295,24 @@
           }).join('') + '</div>')
         + '<label class="planauto"><input type="checkbox" id="pe-auto"' + (e.automatisch ? ' checked' : '') + aus + '> '
         + 'Jeden Morgen automatisch planen und in Todoist eintragen</label>'
+        + '<label class="planauto"><input type="checkbox" id="pe-ohne"' + (e.ohneDatum !== false ? ' checked' : '') + aus + '> '
+        + 'Aufgaben ohne Datum selbst einplanen (in freie Zeit der nächsten zwei Wochen)</label>'
+        + (function () {
+            // Google-Kalender „Aufgaben“: eingerichtet, braucht neue Verbindung, oder Fehler
+            const k = e.kalender || {};
+            let zeile;
+            if (k.erlaubt && k.fehler) zeile = '<span style="color:var(--sperr)">' + esc(k.fehler) + '</span>';
+            else if (k.erlaubt) zeile = 'Jeder geplante Block steht auch in deinem Google-Kalender „Aufgaben“.';
+            else if (k.verbunden) zeile = 'Damit die Blöcke in deinem Google-Kalender „Aufgaben“ erscheinen, Google einmal neu verbinden und den Kalender-Zugriff erlauben.';
+            else zeile = 'Mit Google verbunden trägt der Planer jeden Block in einen eigenen Kalender „Aufgaben“ ein.';
+            return '<div class="plankal"><strong>Google-Kalender</strong><div class="unit-type">' + zeile + '</div>'
+              + (!k.erlaubt && darf
+                  ? (k.verbunden
+                      ? '<a class="tdlink" href="/api/google/start" style="display:inline-block;margin-top:8px">Google neu verbinden</a>'
+                      : '<button class="tiny" data-act="google" style="margin-top:8px">Google verbinden</button>')
+                  : '')
+              + '</div>';
+          })()
         + (darf ? '' : '<div class="legal">Nur der Verwalter kann das ändern.</div>')
         + '<div class="modal-actions">'
         + (darf ? '<button class="primary" data-act="plan-einst-speichern">Speichern</button>' : '')
@@ -7205,7 +7243,8 @@
         start: wert('pe-start'), ende: wert('pe-ende'), pauseVon: wert('pe-pvon'), pauseBis: wert('pe-pbis'),
         maxMinuten: Math.round(Number(wert('pe-max')) * 60), puffer: Number(wert('pe-puffer')),
         standardDauer: Number(wert('pe-dauer')), arbeitstage: tage,
-        automatisch: !!(root.querySelector('#pe-auto') || {}).checked
+        automatisch: !!(root.querySelector('#pe-auto') || {}).checked,
+        ohneDatum: !!(root.querySelector('#pe-ohne') || {}).checked
       } })
         .then(function (e) { planEinst = e; modal = null; return planNachAenderung('Tagesplan eingestellt'); })
         .catch(function (e) { toast(e.message); });
@@ -7362,7 +7401,10 @@
           zeit: val('p-zeit'),
           morgen: val('p-morgen') !== 'aus',
           termine: val('p-termine') !== 'aus',
-          anfragen: val('p-anfragen') !== 'aus'
+          anfragen: val('p-anfragen') !== 'aus',
+          bloecke: val('p-bloecke') !== 'aus',
+          abends: val('p-abends') !== 'aus',
+          abendZeit: val('p-abendzeit')
         }
       })
         .then(function (e) { pushEinst = e; toast('Einstellungen übernommen'); render(); })
