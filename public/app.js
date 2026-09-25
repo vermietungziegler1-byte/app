@@ -70,7 +70,6 @@
   let reiter = {};   // Objekt-ID -> 'einheiten' | 'zahlen' | 'aufgaben'
   let mobil = window.matchMedia('(max-width: 620px)').matches;
   let menueOffen = false;
-  let kennDetails = false;   // Objekte: Aufteilung unter der Kennzahl-Leiste
   let seiteOffen = false;
   let fabOffen = false;
   let zuletztOffen = false;
@@ -3485,29 +3484,47 @@
     }, 0);
     const quote = units.length ? Math.round(rented.length / units.length * 100) : 0;
 
-    // Eine schmale Leiste statt vieler Karten; die Aufteilung gibt es auf Wunsch darunter
-    const zelle = function (label, wert, unten) {
-      return '<div class="kz"><div class="kz-label">' + label + '</div>'
-        + '<div class="kz-wert num">' + wert + '</div>'
-        + (unten ? '<div class="kz-unten">' + unten + '</div>' : '') + '</div>';
-    };
-    html += '<div class="kennleiste">'
-      + zelle('Miete im Monat', money(nettoSum),
-          missing ? '<span class="warnung">' + missing + ' ohne Betrag</span>' : money(nkSum) + ' NK')
-      + zelle('Vermietet', quote + ' %', rented.length + ' von ' + units.length)
-      + zelle('Leerstand', free.length ? money(lost) : '—', free.length ? free.length + ' frei · je Monat' : 'nichts frei')
-      + zelle('Rückstände', rueckstand > 0.5 ? '<span class="rot">' + money(rueckstand) + '</span>' : '—', '6 Monate')
-      + '<button class="kz-mehr" data-act="kenn-details" title="Aufteilung">' + (kennDetails ? 'Weniger' : 'Mehr') + '</button>'
+    html += '<div class="kpis">'
+      + '<div class="kpi hero">'
+      + '<div class="label">Nettomiete monatlich</div>'
+      + '<div class="value num">' + money(nettoSum) + '</div>'
+      + '<div class="herozeile">'
+      + '<span>' + money(nettoSum * 12) + ' im Jahr</span>'
+      + '<span>' + money(nkSum) + ' NK</span>'
+      + (missing ? '<span class="warnung">' + missing + ' ohne Betrag</span>' : '')
+      + '</div></div>'
+
+      + '<div class="kpi">'
+      + '<div class="label">Jahresmiete netto</div>'
+      + '<div class="value num">' + money(nettoSum * 12) + '</div>'
+      + '<div class="aufteilung">'
+      + '<div class="teil"><span>Wohnen und Gewerbe</span><span class="num">' + money(wohnNetto * 12) + '</span></div>'
+      + '<div class="teil"><span>Garagen und Stellplätze</span><span class="num">' + money(parkNetto * 12) + '</span></div>'
+      + '</div></div>'
+
+      + '<div class="kpi">'
+      + '<div class="label">Vermietung</div>'
+      + '<div class="value num">' + quote + ' <small>%</small></div>'
+      + '<div class="balken"><span style="width:' + quote + '%"></span></div>'
+      + '<div class="kpizeile">' + rented.length + ' von ' + units.length + ' Einheiten'
+      + (free.length ? ' · ' + free.length + ' frei' : '') + '</div></div>'
+
+      + kpi('Entgangen durch Leerstand', money(lost), false,
+          free.length ? free.length + ' Einheiten frei' : 'kein Leerstand')
+      + kpi('Rückstände', rueckstand > 0.5 ? '<span class="rot">' + money(rueckstand) + '</span>' : '—',
+          false, 'letzte 6 Monate')
       + '</div>';
-    if (kennDetails) {
-      html += '<div class="kenndetails">'
-        + '<div class="kd-zeile"><span>Im Jahr netto</span><span class="num">' + money(nettoSum * 12) + '</span></div>'
-        + '<div class="kd-zeile"><span>Wohnungen und Gewerbe · ' + wohnV.length + ' von ' + wohnAll.length + ' vermietet'
-        + (wohnFrei ? ', ' + wohnFrei + ' frei' : '') + '</span><span class="num">' + money(wohnNetto) + ' / Monat</span></div>'
-        + '<div class="kd-zeile"><span>Garagen und Stellplätze · ' + parkV.length + ' von ' + parkAll.length + ' vermietet'
-        + (parkFrei ? ', ' + parkFrei + ' frei' : '') + '</span><span class="num">' + money(parkNetto) + ' / Monat</span></div>'
-        + '</div>';
-    }
+
+    html += '<div class="kpis split">'
+      + kpi('Wohnungen und Gewerbe', wohnAll.length
+          + '<small> · ' + wohnV.length + ' vermietet'
+          + (wohnFrei ? ' · ' + wohnFrei + ' frei' : '') + '</small>',
+          false, money(wohnNetto) + ' netto im Monat')
+      + kpi('Garagen und Stellplätze', parkAll.length
+          + '<small> · ' + parkV.length + ' vermietet'
+          + (parkFrei ? ' · ' + parkFrei + ' frei' : '') + '</small>',
+          false, money(parkNetto) + ' netto im Monat')
+      + '</div>';
 
     } // Kennzahlen (Objekte)
 
@@ -3640,11 +3657,10 @@
 
       html += '<div class="tafel">'
         + '<div class="kalkopf"><h3>'
-        // Heute steht Datum und Vorlesen schon in der Tages-Karte daneben
-        + (kalTag === heuteIso ? 'Kalender'
-            : esc(gewaehlt.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' })))
+        + (kalTag === heuteIso ? 'Heute · ' : '')
+        + esc(gewaehlt.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' }))
         + '</h3>'
-        + (kalTag !== heuteIso && (stimme.verbunden || ('speechSynthesis' in window))
+        + ((stimme.verbunden || ('speechSynthesis' in window))
             ? '<button type="button" class="vorlesen' + (sprichQuelle === 'kal' && (memoLaeuft || memoLaedt) ? ' laeuft' : '') + '" data-act="kal-sprechen" title="Den Tag vorlesen">'
               + '<span class="punkt"></span><span class="wort">'
               + (sprichQuelle === 'kal' && memoLaedt ? 'Moment …' : (sprichQuelle === 'kal' && memoLaeuft ? 'Stopp' : 'Vorlesen'))
@@ -3804,6 +3820,10 @@
 
     if (ansicht === 'objekte') {
 
+    html += '<div class="searchrow">'
+      + '<input type="text" id="q" placeholder="Mieter, Einheit oder Objekt suchen" value="' + esc(query) + '">'
+      + (query ? '<button data-act="clear-q" class="ghost">Suche zurücksetzen</button>' : '') + '</div>';
+
     data.objects.forEach(function (o) {
       const shown = o.units.filter(function (x) { return matches(o, x); });
       if (query && shown.length === 0) return;
@@ -3816,6 +3836,7 @@
         return a + (x.status === 'vermietet' ? Math.max(0, kontoSaldo(x, letzteMonate(6))) : 0);
       }, 0);
       const oAufgaben = (aufgaben[o.id] || []).length;
+      const oQuote = o.units.length ? Math.round(r.length / o.units.length * 100) : 0;
 
       html += '<div class="obj' + (isOpen ? ' offen' : '') + '">'
         + '<div class="obj-head" data-act="toggle" data-id="' + o.id + '">'
@@ -3828,6 +3849,7 @@
         + (oRueck > 0.5 ? '<span class="mtag rot num">' + money(oRueck) + ' offen</span>' : '')
         + (oAufgaben ? '<span class="mtag">' + oAufgaben + ' Aufgaben</span>' : '')
         + '</div>'
+        + '<div class="objbalken"><span style="width:' + oQuote + '%"></span></div>'
         + '</div><div class="strip">'
         + o.units.map(function (x) { return '<div class="tick ' + x.status + '" title="' + esc(x.name) + '"></div>'; }).join('')
         + '</div></div>';
@@ -5260,6 +5282,14 @@
     }
   }
 
+  function kpi(l, v, hero, fuss) {
+    return '<div class="kpi' + (hero ? ' hero' : '') + '">'
+      + '<div class="label">' + l + '</div>'
+      + '<div class="value num">' + v + '</div>'
+      + (fuss ? '<div class="kpizeile">' + fuss + '</div>' : '')
+      + '</div>';
+  }
+
   // ---- Suche für alles (Lupe oben, Strg+K) ----
   function sucheTreffer(q) {
     const worte = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
@@ -6658,7 +6688,6 @@
     }
     else if (act === 'td-fertig') { tdFertig(el.getAttribute('data-tid'), el); }
     else if (act === 'suche') { sucheOeffnen(); }
-    else if (act === 'kenn-details') { kennDetails = !kennDetails; render(); }
     else if (act === 'such-treffer') { sucheSpringen(el); }
     else if (act === 'td-oeffnen') { tdOeffnen(el.getAttribute('data-tid')); }
     else if (act === 'td-menue') {
