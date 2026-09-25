@@ -371,3 +371,53 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 #app .foot { min-height: 16px; }
 #app .foot-frisch { color: var(--muted); transition: opacity .6s; }
 #app .foot-frisch.weg { opacity: 0; }
+
+/* Objekte: Kennzahlen als eine schmale Leiste */
+#app .kennleiste {
+  display: flex; align-items: stretch; background: var(--surface); border-radius: 14px;
+  margin-bottom: 12px; overflow: hidden;
+}
+#app .kennleiste .kz { flex: 1 1 0; padding: 12px 16px; min-width: 0; border-right: 1px solid var(--line-soft); }
+#app .kennleiste .kz-label { font-size: 12px; color: var(--muted); font-weight: 500; }
+#app .kennleiste .kz-wert { font-size: 20px; font-weight: 650; letter-spacing: -0.02em; margin-top: 2px; white-space: nowrap; }
+#app .kennleiste .kz-unten { font-size: 12px; color: var(--muted); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#app .kennleiste .kz-unten .warnung { color: var(--sperr); }
+#app .kennleiste .rot { color: var(--sperr); }
+#app .kennleiste .kz-mehr {
+  flex: none; border: 0; background: transparent; color: var(--messing); font-weight: 600;
+  font-size: 13px; padding: 0 16px; box-shadow: none; border-radius: 0;
+}
+#app .kenndetails { background: var(--surface); border-radius: 14px; padding: 4px 16px; margin: -4px 0 12px; }
+#app .kenndetails .kd-zeile {
+  display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; font-size: 14px;
+  border-bottom: 1px solid var(--line-soft);
+}
+#app .kenndetails .kd-zeile:last-child { border-bottom: 0; }
+@media (max-width: 620px) {
+  #app .kennleiste { flex-wrap: wrap; }
+  #app .kennleiste .kz { flex: 1 1 50%; border-bottom: 1px solid var(--line-soft); padding: 10px 14px; }
+  #app .kennleiste .kz:nth-child(2n) { border-right: 0; }
+  #app .kennleiste .kz-mehr { flex: 1 1 100%; padding: 10px; }
+  #app .kennleiste .kz-wert { font-size: 18px; }
+}
+
+/* Belegung je Objekt: helle Punkte statt dunkler Fassade */
+#app .strip { background: transparent; padding: 0; gap: 5px; max-width: 220px; align-items: center; }
+#app .tick { width: 10px; height: 10px; border-radius: 50%; border: 0; box-shadow: none; background: var(--fuellung-stark); }
+#app .tick::after { display: none; }
+#app .tick.vermietet { background: var(--messing); box-shadow: none; }
+#app .tick.frei { background: transparent; border: 1.5px solid var(--frei); }
+#app .tick.gesperrt { background: var(--sperr); border: 0; }
+
+/* Abrechnungen: Liste zuerst, Formular auf Wunsch */
+#app .tafel h3 .rg-knopf.primary { background: var(--messing); color: #fff; border: 0; padding: 6px 12px; border-radius: 999px; font-weight: 600; }
+#app .linkknopf {
+  display: inline; border: 0; background: none; padding: 0; margin: 0; min-height: 0; box-shadow: none;
+  color: var(--messing); font: inherit; font-weight: 600; cursor: pointer; text-decoration: underline;
+}
+@media (max-width: 620px) {
+  #app .obj-head { flex-wrap: wrap; }
+  #app .obj-head .strip { flex: 1 1 100%; max-width: none; justify-content: flex-start; margin: 6px 0 0 26px; gap: 4px; }
+  #app .tick { width: 8px; height: 8px; }
+}
+#app .strip:empty { display: none; }

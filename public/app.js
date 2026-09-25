@@ -70,6 +70,7 @@
   let reiter = {};   // Objekt-ID -> 'einheiten' | 'zahlen' | 'aufgaben'
   let mobil = window.matchMedia('(max-width: 620px)').matches;
   let menueOffen = false;
+  let kennDetails = false;   // Objekte: Aufteilung unter der Kennzahl-Leiste
   let seiteOffen = false;
   let fabOffen = false;
   let zuletztOffen = false;
@@ -540,10 +541,10 @@
   let verstecktOffen = false;
   let rg = null;             // Rechnungen: Absender, gespeicherte Liste, nächste Nummer (vom Server)
   let rgForm = null;         // Entwurf der Rechnung, die gerade bearbeitet wird
-  let rgStammOffen = false;  // Absenderdaten aufgeklappt
   let rgTab = 'as';          // as = Allgemeinstrom | pv = Solarstrom | nk = Nebenkosten-Schreiben
   let nkForm = null;         // Entwurf des Nebenkosten-Schreibens
-  let nkStammOffen = false;
+  let rgFormOffen = false;   // Abrechnungen: Formular offen (sonst nur die Liste)
+  let nkFormOffen = false;
   let alleAufgaben = null;   // alle offenen Todoist-Aufgaben - die eine Quelle für Heute, Objekte und Aufgaben
 
   let staende = [];   // alle gefundenen Speicherstaende
@@ -3411,8 +3412,13 @@
         + '</div>'
 
         // Zugänge für alle: dort ändert jeder sein eigenes Passwort, Verwaltung sieht nur der Verwalter
-        + '<div class="sl-gruppe"><span>Konto</span>'
+        + '<div class="sl-gruppe"><span>Einstellungen</span>'
         + eintrag('theme', 'Darstellung', { auto: 'wie das Gerät', light: 'hell', dark: 'dunkel' }[themeWahl])
+        + eintrag('absender-rg', 'Rechnungsabsender')
+        + eintrag('absender-nk', 'Vermieter für Nebenkosten')
+        + '</div>'
+
+        + '<div class="sl-gruppe"><span>Konto</span>'
         + eintrag('zugaenge', nutzerRolle === 'verwalter' ? 'Zugänge' : 'Passwort ändern') + '</div>'
 
         + '<div class="sl-fuss">' + eintrag('abmelden', 'Abmelden') + '</div>'
@@ -3479,47 +3485,29 @@
     }, 0);
     const quote = units.length ? Math.round(rented.length / units.length * 100) : 0;
 
-    html += '<div class="kpis">'
-      + '<div class="kpi hero">'
-      + '<div class="label">Nettomiete monatlich</div>'
-      + '<div class="value num">' + money(nettoSum) + '</div>'
-      + '<div class="herozeile">'
-      + '<span>' + money(nettoSum * 12) + ' im Jahr</span>'
-      + '<span>' + money(nkSum) + ' NK</span>'
-      + (missing ? '<span class="warnung">' + missing + ' ohne Betrag</span>' : '')
-      + '</div></div>'
-
-      + '<div class="kpi">'
-      + '<div class="label">Jahresmiete netto</div>'
-      + '<div class="value num">' + money(nettoSum * 12) + '</div>'
-      + '<div class="aufteilung">'
-      + '<div class="teil"><span>Wohnen und Gewerbe</span><span class="num">' + money(wohnNetto * 12) + '</span></div>'
-      + '<div class="teil"><span>Garagen und Stellplätze</span><span class="num">' + money(parkNetto * 12) + '</span></div>'
-      + '</div></div>'
-
-      + '<div class="kpi">'
-      + '<div class="label">Vermietung</div>'
-      + '<div class="value num">' + quote + ' <small>%</small></div>'
-      + '<div class="balken"><span style="width:' + quote + '%"></span></div>'
-      + '<div class="kpizeile">' + rented.length + ' von ' + units.length + ' Einheiten'
-      + (free.length ? ' · ' + free.length + ' frei' : '') + '</div></div>'
-
-      + kpi('Entgangen durch Leerstand', money(lost), false,
-          free.length ? free.length + ' Einheiten frei' : 'kein Leerstand')
-      + kpi('Rückstände', rueckstand > 0.5 ? '<span class="rot">' + money(rueckstand) + '</span>' : '—',
-          false, 'letzte 6 Monate')
+    // Eine schmale Leiste statt vieler Karten; die Aufteilung gibt es auf Wunsch darunter
+    const zelle = function (label, wert, unten) {
+      return '<div class="kz"><div class="kz-label">' + label + '</div>'
+        + '<div class="kz-wert num">' + wert + '</div>'
+        + (unten ? '<div class="kz-unten">' + unten + '</div>' : '') + '</div>';
+    };
+    html += '<div class="kennleiste">'
+      + zelle('Miete im Monat', money(nettoSum),
+          missing ? '<span class="warnung">' + missing + ' ohne Betrag</span>' : money(nkSum) + ' NK')
+      + zelle('Vermietet', quote + ' %', rented.length + ' von ' + units.length)
+      + zelle('Leerstand', free.length ? money(lost) : '—', free.length ? free.length + ' frei · je Monat' : 'nichts frei')
+      + zelle('Rückstände', rueckstand > 0.5 ? '<span class="rot">' + money(rueckstand) + '</span>' : '—', '6 Monate')
+      + '<button class="kz-mehr" data-act="kenn-details" title="Aufteilung">' + (kennDetails ? 'Weniger' : 'Mehr') + '</button>'
       + '</div>';
-
-    html += '<div class="kpis split">'
-      + kpi('Wohnungen und Gewerbe', wohnAll.length
-          + '<small> · ' + wohnV.length + ' vermietet'
-          + (wohnFrei ? ' · ' + wohnFrei + ' frei' : '') + '</small>',
-          false, money(wohnNetto) + ' netto im Monat')
-      + kpi('Garagen und Stellplätze', parkAll.length
-          + '<small> · ' + parkV.length + ' vermietet'
-          + (parkFrei ? ' · ' + parkFrei + ' frei' : '') + '</small>',
-          false, money(parkNetto) + ' netto im Monat')
-      + '</div>';
+    if (kennDetails) {
+      html += '<div class="kenndetails">'
+        + '<div class="kd-zeile"><span>Im Jahr netto</span><span class="num">' + money(nettoSum * 12) + '</span></div>'
+        + '<div class="kd-zeile"><span>Wohnungen und Gewerbe · ' + wohnV.length + ' von ' + wohnAll.length + ' vermietet'
+        + (wohnFrei ? ', ' + wohnFrei + ' frei' : '') + '</span><span class="num">' + money(wohnNetto) + ' / Monat</span></div>'
+        + '<div class="kd-zeile"><span>Garagen und Stellplätze · ' + parkV.length + ' von ' + parkAll.length + ' vermietet'
+        + (parkFrei ? ', ' + parkFrei + ' frei' : '') + '</span><span class="num">' + money(parkNetto) + ' / Monat</span></div>'
+        + '</div>';
+    }
 
     } // Kennzahlen (Objekte)
 
@@ -3652,10 +3640,11 @@
 
       html += '<div class="tafel">'
         + '<div class="kalkopf"><h3>'
-        + (kalTag === heuteIso ? 'Heute · ' : '')
-        + esc(gewaehlt.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' }))
+        // Heute steht Datum und Vorlesen schon in der Tages-Karte daneben
+        + (kalTag === heuteIso ? 'Kalender'
+            : esc(gewaehlt.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' })))
         + '</h3>'
-        + ((stimme.verbunden || ('speechSynthesis' in window))
+        + (kalTag !== heuteIso && (stimme.verbunden || ('speechSynthesis' in window))
             ? '<button type="button" class="vorlesen' + (sprichQuelle === 'kal' && (memoLaeuft || memoLaedt) ? ' laeuft' : '') + '" data-act="kal-sprechen" title="Den Tag vorlesen">'
               + '<span class="punkt"></span><span class="wort">'
               + (sprichQuelle === 'kal' && memoLaedt ? 'Moment …' : (sprichQuelle === 'kal' && memoLaeuft ? 'Stopp' : 'Vorlesen'))
@@ -3815,10 +3804,6 @@
 
     if (ansicht === 'objekte') {
 
-    html += '<div class="searchrow">'
-      + '<input type="text" id="q" placeholder="Mieter, Einheit oder Objekt suchen" value="' + esc(query) + '">'
-      + (query ? '<button data-act="clear-q" class="ghost">Suche zurücksetzen</button>' : '') + '</div>';
-
     data.objects.forEach(function (o) {
       const shown = o.units.filter(function (x) { return matches(o, x); });
       if (query && shown.length === 0) return;
@@ -3831,7 +3816,6 @@
         return a + (x.status === 'vermietet' ? Math.max(0, kontoSaldo(x, letzteMonate(6))) : 0);
       }, 0);
       const oAufgaben = (aufgaben[o.id] || []).length;
-      const oQuote = o.units.length ? Math.round(r.length / o.units.length * 100) : 0;
 
       html += '<div class="obj' + (isOpen ? ' offen' : '') + '">'
         + '<div class="obj-head" data-act="toggle" data-id="' + o.id + '">'
@@ -3844,7 +3828,6 @@
         + (oRueck > 0.5 ? '<span class="mtag rot num">' + money(oRueck) + ' offen</span>' : '')
         + (oAufgaben ? '<span class="mtag">' + oAufgaben + ' Aufgaben</span>' : '')
         + '</div>'
-        + '<div class="objbalken"><span style="width:' + oQuote + '%"></span></div>'
         + '</div><div class="strip">'
         + o.units.map(function (x) { return '<div class="tick ' + x.status + '" title="' + esc(x.name) + '"></div>'; }).join('')
         + '</div></div>';
@@ -4356,13 +4339,14 @@
         + '<input type="' + (typ || 'text') + '" data-rg="' + key + '" value="' + esc(f[key]) + '"' + (extra || '') + '></label>';
     };
     const dez = ' step="0.01" inputmode="decimal"';
-    const sf = function (key, label) {
-      return '<label class="feldchen"><span>' + label + '</span>'
-        + '<input type="text" data-rgs="' + key + '" value="' + esc(s[key]) + '"></label>';
-    };
 
-    let html = '<div class="tafel"><h3>' + (f.id ? 'Rechnung ' + esc(f.nummer) : 'Neue Rechnung')
-      + ' <span class="anzahl">' + art.name + '</span></h3>';
+    const gespeichert = rg ? rg.liste.filter(function (e) { return (e.art || 'as') === rgArt(f); }) : [];
+    const offen = rgFormOffen || (rg && !gespeichert.length);
+    let html = '';
+    if (offen) {
+    html += '<div class="tafel rg-form"><h3>' + (f.id ? 'Rechnung ' + esc(f.nummer) : 'Neue Rechnung')
+      + ' <span class="anzahl">' + art.name + '</span>'
+      + (gespeichert.length ? '<button class="tiny ghost rg-knopf" data-act="rg-zu">Schließen</button>' : '') + '</h3>';
     html += '<div class="rg-grid">'
       + '<label class="feldchen breit"><span>Objekt</span><select data-rg="objekt">'
       + data.objects.map(function (o) {
@@ -4395,38 +4379,21 @@
       + '</div>';
     html += '<div class="rg-summe" id="rg-summe">' + rgSummeHtml(r) + '</div>';
     html += '<div class="modal-actions" style="margin-top:14px">'
-      + (f.id ? '<button data-act="rg-neu" data-art="' + rgArt(f) + '">Neue Rechnung</button>' : '')
       + '<span class="spacer"></span>'
       + '<button data-act="rg-vorschau">Vorschau &amp; Drucken</button>'
       + '<button class="primary" data-act="rg-speichern">' + (f.id ? 'Änderung speichern' : 'Speichern') + '</button>'
       + '</div>';
     if (!s.name || !s.iban) {
-      html += '<div class="rg-hinweis">Absender, Steuernummer und IBAN fehlen noch — unten einmal eintragen, dann stehen sie auf jeder Rechnung.</div>';
+      html += '<div class="rg-hinweis">Absender, Steuernummer und IBAN fehlen noch — '
+        + '<button class="linkknopf" data-act="absender" data-art="rg">jetzt eintragen</button>, dann stehen sie auf jeder Rechnung.</div>';
     }
     html += '</div>';
-
-    html += '<div class="tafel"><h3>Absender'
-      + '<button class="tiny ghost rg-knopf" data-act="rg-stamm">' + (rgStammOffen ? 'Zuklappen' : 'Bearbeiten') + '</button></h3>';
-    if (rgStammOffen) {
-      html += '<div class="rg-grid">'
-        + sf('name', 'Name') + sf('strasse', 'Straße') + sf('ort', 'PLZ und Ort')
-        + sf('steuernummer', 'Steuernummer') + sf('ustId', 'USt-IdNr. (falls vorhanden)')
-        + sf('kontoinhaber', 'Kontoinhaber') + sf('iban', 'IBAN') + sf('bank', 'Bank') + sf('kontakt', 'Telefon / E-Mail')
-        + '<label class="feldchen breit"><span>Empfänger (Vorgabe für neue Rechnungen)</span>'
-        + '<textarea data-rgs="empfaenger" rows="3">' + esc(s.empfaenger) + '</textarea></label>'
-        + '</div><div class="modal-actions"><button class="primary" data-act="rg-stamm-speichern">Absender speichern</button></div>';
-    } else {
-      html += '<div class="unit-type">' + (s.name
-        ? esc([s.name, s.strasse, s.ort].filter(Boolean).join(' · '))
-          + (s.steuernummer ? ' · St.-Nr. ' + esc(s.steuernummer) : '')
-          + (s.iban ? ' · ' + esc(s.iban) : '')
-        : 'Noch nichts eingetragen — auf „Bearbeiten“ tippen.') + '</div>';
     }
-    html += '</div>';
 
-    const gespeichert = rg ? rg.liste.filter(function (e) { return (e.art || 'as') === rgArt(f); }) : [];
-    html += '<div class="tafel rg-liste"><h3>Gespeicherte Rechnungen'
-      + (gespeichert.length ? ' <span class="anzahl">' + gespeichert.length + '</span>' : '') + '</h3>';
+    html += '<div class="tafel rg-liste"><h3>' + art.name + '-Rechnungen'
+      + (gespeichert.length ? ' <span class="anzahl">' + gespeichert.length + '</span>' : '')
+      + (offen && !f.id ? '' : '<button class="tiny primary rg-knopf" data-act="rg-neu" data-art="' + rgArt(f) + '">+ Neue Rechnung</button>')
+      + '</h3>';
     if (!rg) html += '<div class="unit-type">Wird geladen …</div>';
     else if (!gespeichert.length) html += '<div class="unit-type">Noch keine Rechnung gespeichert.</div>';
     else gespeichert.forEach(function (e) {
@@ -4454,19 +4421,58 @@
       el.addEventListener('input', los);
       el.addEventListener('change', los);
     });
-    root.querySelectorAll('[data-rgs]').forEach(function (el) {
-      el.addEventListener('input', function () {
-        if (!rg) rg = { stamm: Object.assign({}, RG_STAMM_LEER), nkStamm: Object.assign({}, NK_STAMM_LEER), liste: [], naechste: {} };
-        rg.stamm[el.getAttribute('data-rgs')] = el.value;
+  }
+
+  // Absender (Rechnungen) und Vermieter (Nebenkosten) — im Fenster aus dem Menü
+  function stammBinden() {
+    [['data-rgs', 'stamm'], ['data-nks', 'nkStamm']].forEach(function (a) {
+      root.querySelectorAll('[' + a[0] + ']').forEach(function (el) {
+        el.addEventListener('input', function () {
+          if (!rg) rg = { stamm: Object.assign({}, RG_STAMM_LEER), nkStamm: Object.assign({}, NK_STAMM_LEER), liste: [], naechste: {} };
+          rg[a[1]][el.getAttribute(a[0])] = el.value;
+        });
       });
     });
+  }
+  function absenderOeffnen(art) {
+    modal = { kind: 'absender', art: art === 'nk' ? 'nk' : 'rg' };
+    render(); fensterGeoeffnet();
+    if (!rg) rgLaden();
+  }
+  function absenderFenster() {
+    if (!rg) return '<h2>Einen Moment …</h2>';
+    if (modal.art === 'nk') {
+      const s = nkStamm();
+      const sf = function (key, label) {
+        return '<label class="feldchen"><span>' + label + '</span><input type="text" data-nks="' + key + '" value="' + esc(s[key]) + '"></label>';
+      };
+      return '<h2>Vermieter für Nebenkosten</h2>'
+        + '<div class="rg-grid">' + sf('vermieter', 'Vermieter') + sf('strasse', 'Straße') + sf('ort', 'PLZ und Ort')
+        + sf('telefon', 'Telefon für Rückfragen') + sf('unterschrift', 'Unterschrift') + sf('kontoText', 'Konto-Hinweis bei Nachzahlung')
+        + sf('anlage', 'Anlage (Vorgabe)') + '</div>'
+        + '<div class="modal-actions"><div class="spacer"></div><button data-act="close">Abbrechen</button>'
+        + '<button class="primary" data-act="nk-stamm-speichern">Speichern</button></div>';
+    }
+    const s = rgStamm();
+    const sf = function (key, label) {
+      return '<label class="feldchen"><span>' + label + '</span><input type="text" data-rgs="' + key + '" value="' + esc(s[key]) + '"></label>';
+    };
+    return '<h2>Rechnungsabsender</h2>'
+      + '<div class="rg-grid">'
+      + sf('name', 'Name') + sf('strasse', 'Straße') + sf('ort', 'PLZ und Ort')
+      + sf('steuernummer', 'Steuernummer') + sf('ustId', 'USt-IdNr. (falls vorhanden)')
+      + sf('kontoinhaber', 'Kontoinhaber') + sf('iban', 'IBAN') + sf('bank', 'Bank') + sf('kontakt', 'Telefon / E-Mail')
+      + '<label class="feldchen breit"><span>Empfänger (Vorgabe für neue Rechnungen)</span>'
+      + '<textarea data-rgs="empfaenger" rows="3">' + esc(s.empfaenger) + '</textarea></label>'
+      + '</div><div class="modal-actions"><div class="spacer"></div><button data-act="close">Abbrechen</button>'
+      + '<button class="primary" data-act="rg-stamm-speichern">Speichern</button></div>';
   }
 
   async function rgStammSpeichern() {
     try {
       const e = await api('rechnungen/absender', { method: 'PUT', body: rgStamm() });
       rg.stamm = Object.assign({}, RG_STAMM_LEER, e.stamm || {});
-      rgStammOffen = false;
+      if (modal && modal.kind === 'absender') modal = null;
       if (rgForm && !rgForm.id && !rgForm.empfaenger.trim()) rgForm.empfaenger = rg.stamm.empfaenger;
       toast('Absender gespeichert'); render();
     } catch (e) { toast(e.message); }
@@ -4483,6 +4489,7 @@
       if (!rg) rg = { stamm: Object.assign({}, RG_STAMM_LEER), nkStamm: Object.assign({}, NK_STAMM_LEER), liste: [], naechste: {} };
       rg.liste = e.liste; rg.naechste = e.naechste;
       rgForm.id = e.id;
+      rgFormOffen = true;   // die eben gespeicherte Rechnung bleibt offen
       toast('Rechnung ' + f.nummer + ' gespeichert'); render();
     } catch (err) { toast(err.message); }
   }
@@ -4492,6 +4499,7 @@
     if (!e) return;
     rgForm = Object.assign({}, e.inhalt || {}, { id: e.id, art: e.art || 'as', nummer: e.nummer, objekt: e.objekt, datum: e.datum });
     if (!rgForm.empfaenger) rgForm.empfaenger = '';
+    rgFormOffen = true;
     render(); window.scrollTo(0, 0);
   }
 
@@ -4653,14 +4661,15 @@
       return '<label class="feldchen"><span>' + label + '</span>'
         + '<input type="' + (typ || 'text') + '" data-nk="' + key + '" value="' + esc(f[key]) + '"' + (extra || '') + '></label>';
     };
-    const sf = function (key, label) {
-      return '<label class="feldchen"><span>' + label + '</span>'
-        + '<input type="text" data-nks="' + key + '" value="' + esc(s[key]) + '"></label>';
-    };
     const dez = ' step="0.01" inputmode="decimal"';
 
-    let html = '<div class="tafel"><h3>' + (f.id ? 'Schreiben ' + esc(f.nummer) : 'Neues Schreiben')
-      + ' <span class="anzahl">Nebenkosten ' + esc(nkJahr(f)) + '</span></h3>';
+    const gespeichert = rg ? rg.liste.filter(function (e) { return e.art === 'nk'; }) : [];
+    const offen = nkFormOffen || (rg && !gespeichert.length);
+    let html = '';
+    if (offen) {
+    html += '<div class="tafel rg-form"><h3>' + (f.id ? 'Schreiben ' + esc(f.nummer) : 'Neues Schreiben')
+      + ' <span class="anzahl">Nebenkosten ' + esc(nkJahr(f)) + '</span>'
+      + (gespeichert.length ? '<button class="tiny ghost rg-knopf" data-act="nk-zu">Schließen</button>' : '') + '</h3>';
     html += '<div class="rg-grid">'
       + '<label class="feldchen"><span>Objekt</span><select data-nk="objektId">'
       + data.objects.map(function (x) { return '<option value="' + x.id + '"' + (x.id === f.objektId ? ' selected' : '') + '>' + esc(x.name) + '</option>'; }).join('')
@@ -4704,28 +4713,21 @@
       + '<label class="feldchen breit"><span>Zusätzlicher Hinweis (optional)</span><textarea data-nk="hinweis" rows="2">' + esc(f.hinweis) + '</textarea></label></div>';
     html += '<div class="rg-summe" id="nk-summe">' + nkSummeHtml(r) + '</div>';
     html += '<div class="modal-actions" style="margin-top:14px">'
-      + (f.id ? '<button data-act="nk-neu">Neues Schreiben</button>' : '')
       + '<span class="spacer"></span>'
       + '<button data-act="nk-vorschau">Vorschau &amp; Drucken</button>'
       + '<button class="primary" data-act="nk-speichern">' + (f.id ? 'Änderung speichern' : 'Speichern') + '</button>'
       + '</div></div>';
 
-    html += '<div class="tafel"><h3>Vermieter und Unterschrift'
-      + '<button class="tiny ghost rg-knopf" data-act="nk-stamm">' + (nkStammOffen ? 'Zuklappen' : 'Bearbeiten') + '</button></h3>';
-    if (nkStammOffen) {
-      html += '<div class="rg-grid">' + sf('vermieter', 'Vermieter') + sf('strasse', 'Straße') + sf('ort', 'PLZ und Ort')
-        + sf('telefon', 'Telefon für Rückfragen') + sf('unterschrift', 'Unterschrift') + sf('kontoText', 'Konto-Hinweis bei Nachzahlung')
-        + sf('anlage', 'Anlage (Vorgabe)')
-        + '</div><div class="modal-actions"><button class="primary" data-act="nk-stamm-speichern">Speichern</button></div>';
-    } else {
-      html += '<div class="unit-type">' + esc([s.vermieter, s.strasse, s.ort].filter(Boolean).join(' · '))
-        + (s.telefon ? ' · Tel. ' + esc(s.telefon) : '') + ' · ' + esc(s.unterschrift) + '</div>';
+    if (!s.vermieter) {
+      html += '<div class="rg-hinweis">Vermieter und Unterschrift fehlen noch — '
+        + '<button class="linkknopf" data-act="absender" data-art="nk">jetzt eintragen</button>.</div>';
     }
-    html += '</div>';
+    }
 
-    const gespeichert = rg ? rg.liste.filter(function (e) { return e.art === 'nk'; }) : [];
-    html += '<div class="tafel rg-liste"><h3>Gespeicherte Schreiben'
-      + (gespeichert.length ? ' <span class="anzahl">' + gespeichert.length + '</span>' : '') + '</h3>';
+    html += '<div class="tafel rg-liste"><h3>Nebenkosten-Schreiben'
+      + (gespeichert.length ? ' <span class="anzahl">' + gespeichert.length + '</span>' : '')
+      + (offen && !f.id ? '' : '<button class="tiny primary rg-knopf" data-act="nk-neu">+ Neues Schreiben</button>')
+      + '</h3>';
     if (!rg) html += '<div class="unit-type">Wird geladen …</div>';
     else if (!gespeichert.length) html += '<div class="unit-type">Noch kein Schreiben gespeichert.</div>';
     else gespeichert.forEach(function (e) {
@@ -4780,19 +4782,13 @@
         frisch();
       });
     });
-    root.querySelectorAll('[data-nks]').forEach(function (el) {
-      el.addEventListener('input', function () {
-        if (!rg) rg = { stamm: Object.assign({}, RG_STAMM_LEER), nkStamm: Object.assign({}, NK_STAMM_LEER), liste: [], naechste: {} };
-        rg.nkStamm[el.getAttribute('data-nks')] = el.value;
-      });
-    });
   }
 
   async function nkStammSpeichern() {
     try {
       const e = await api('rechnungen/absender/nk', { method: 'PUT', body: nkStamm() });
       rg.nkStamm = Object.assign({}, NK_STAMM_LEER, e.stamm || {});
-      nkStammOffen = false;
+      if (modal && modal.kind === 'absender') modal = null;
       toast('Gespeichert'); render();
     } catch (e) { toast(e.message); }
   }
@@ -4806,6 +4802,7 @@
         body: { id: f.id, art: 'nk', nummer: f.nummer, objekt: f.objekt, datum: f.datum, brutto: r.diff, inhalt: f } });
       rg.liste = e.liste; rg.naechste = e.naechste;
       nkForm.id = e.id;
+      nkFormOffen = true;
       toast('Schreiben für ' + f.mieter + ' gespeichert'); render();
     } catch (err) { toast(err.message); }
   }
@@ -4814,6 +4811,7 @@
     const e = rg && rg.liste.find(function (x) { return String(x.id) === String(id); });
     if (!e) return;
     nkForm = Object.assign({ posten: [], hinweis: '', anlage: '' }, e.inhalt || {}, { id: e.id, nummer: e.nummer, objekt: e.objekt, datum: e.datum });
+    nkFormOffen = true;
     render(); window.scrollTo(0, 0);
   }
 
@@ -5262,14 +5260,6 @@
     }
   }
 
-  function kpi(l, v, hero, fuss) {
-    return '<div class="kpi' + (hero ? ' hero' : '') + '">'
-      + '<div class="label">' + l + '</div>'
-      + '<div class="value num">' + v + '</div>'
-      + (fuss ? '<div class="kpizeile">' + fuss + '</div>' : '')
-      + '</div>';
-  }
-
   // ---- Suche für alles (Lupe oben, Strg+K) ----
   function sucheTreffer(q) {
     const worte = String(q || '').toLowerCase().split(/\s+/).filter(Boolean);
@@ -5392,7 +5382,9 @@
 
   function renderModal() {
     let body = '';
-    if (modal.kind === 'suche') {
+    if (modal.kind === 'absender') {
+      body = absenderFenster();
+    } else if (modal.kind === 'suche') {
       body = '<div class="such-feld"><input type="search" id="suche-q" placeholder="Suchen …" autocomplete="off" value="' + esc(modal.q || '') + '"></div>'
         + '<div id="suche-treffer">' + sucheTrefferHtml(modal.q) + '</div>';
     } else if (modal.kind === 'unit') {
@@ -5717,7 +5709,7 @@
             + '</tbody></table>')
           + '<div class="modal-actions" style="justify-content:flex-start">'
           + '<button class="primary" data-act="nk-rechnen">Berechnen und speichern</button>'
-          + '<button data-act="nk-neu">Zeile hinzufügen</button></div>';
+          + '<button data-act="nk-zeile-neu">Zeile hinzufügen</button></div>';
 
         if (summeKosten) {
           const ergebnisse = nkRechnung(o);
@@ -6355,7 +6347,7 @@
       wartung: 'Prüfungen', aufgabe: 'Aufgabe', todoist: 'Todoist', zugaenge: 'Zugänge',
       sicherung: 'Daten sichern', serversicherung: 'Server-Sicherung', plan: 'Tagesplan', planeinst: 'Tagesplan', staende: 'Verlauf', menue: 'Menü', google: 'Postfach',
       schreiben: 'Schreiben', nk: 'Betriebskosten', auszug: 'Kontoauszug', beleg: 'Beleg ablegen',
-      schnell: 'Aufgabe hinzufügen', suche: 'Suchen'
+      schnell: 'Aufgabe hinzufügen', suche: 'Suchen', absender: 'Einstellungen'
     }[modal.kind] || '';
 
 
@@ -6422,6 +6414,7 @@
     });
     rgBinden();
     nkBinden();
+    stammBinden();
     sucheBinden();
     // Stimme der Tagesmemo: Wahl merken und sofort kurz anhören
     const stimmwahl = root.querySelector('#memo-stimme');
@@ -6665,6 +6658,7 @@
     }
     else if (act === 'td-fertig') { tdFertig(el.getAttribute('data-tid'), el); }
     else if (act === 'suche') { sucheOeffnen(); }
+    else if (act === 'kenn-details') { kennDetails = !kennDetails; render(); }
     else if (act === 'such-treffer') { sucheSpringen(el); }
     else if (act === 'td-oeffnen') { tdOeffnen(el.getAttribute('data-tid')); }
     else if (act === 'td-menue') {
@@ -6806,27 +6800,30 @@
     }
     else if (act === 'rg-tab') {
       rgTab = el.getAttribute('data-tab') || 'as';
+      rgFormOffen = false; nkFormOffen = false;
       if (rgTab !== 'nk' && (!rgForm || rgArt(rgForm) !== rgTab)) rgNeu(rgTab);
       render(); window.scrollTo(0, 0);
     }
-    else if (act === 'nk-stamm') { nkStammOffen = !nkStammOffen; render(); }
     else if (act === 'nk-stamm-speichern') { nkStammSpeichern(); }
     else if (act === 'nk-vorschau') { nkVorschau(); }
     else if (act === 'nk-speichern') { nkSpeichern(); }
-    else if (act === 'nk-neu') { nkNeu(); render(); window.scrollTo(0, 0); }
+    else if (act === 'nk-neu') { nkNeu(); nkFormOffen = true; render(); window.scrollTo(0, 0); }
+    else if (act === 'nk-zu') { nkFormOffen = false; render(); }
+    else if (act === 'rg-zu') { rgFormOffen = false; render(); }
+    else if (act === 'absender') { absenderOeffnen(el.getAttribute('data-art')); }
+    else if (act === 'absender-rg' || act === 'absender-nk') { seiteOffen = false; absenderOeffnen(act.slice(9)); }
     else if (act === 'nk-laden') { nkAusListe(el.getAttribute('data-id')); }
     else if (act === 'nk-loeschen') { rgLoeschen(el.getAttribute('data-id'), 'nk'); }
     else if (act === 'nk-posten-neu') { nkForm.posten.push({ text: '', betrag: '' }); render(); }
     else if (act === 'nk-posten-weg') { nkForm.posten.splice(Number(el.getAttribute('data-i')), 1); render(); }
     else if (act === 'nk-guthaben') { nkForm.guthabenWie = el.getAttribute('data-w'); render(); }
-    else if (act === 'rg-stamm') { rgStammOffen = !rgStammOffen; render(); }
     else if (act === 'rg-stamm-speichern') { rgStammSpeichern(); }
     else if (act === 'rg-vorschau') { rgVorschau(); }
     else if (act === 'rg-speichern') { rgSpeichern(); }
-    else if (act === 'rg-neu') { rgNeu(el.getAttribute('data-art') || rgTab); render(); window.scrollTo(0, 0); }
+    else if (act === 'rg-neu') { rgNeu(el.getAttribute('data-art') || rgTab); rgFormOffen = true; render(); window.scrollTo(0, 0); }
     else if (act === 'rg-folgejahr') {
       const e = rg && rg.liste.find(function (x) { return String(x.id) === el.getAttribute('data-id'); });
-      if (e) { rgFolgejahr(e); toast('Neue Rechnung vorbereitet — nur noch den neuen Zählerstand eintragen'); render(); window.scrollTo(0, 0); }
+      if (e) { rgFolgejahr(e); rgFormOffen = true; toast('Neue Rechnung vorbereitet — nur noch den neuen Zählerstand eintragen'); render(); window.scrollTo(0, 0); }
     }
     else if (act === 'rg-laden') { rgAusListe(el.getAttribute('data-id')); }
     else if (act === 'rg-loeschen') { rgLoeschen(el.getAttribute('data-id')); }
@@ -7004,7 +7001,7 @@
         posten: NK_VORLAGE.map(function (v) { return { name: v.name, betrag: null, schluessel: v.schluessel }; }) };
       save(); render();
     }
-    else if (act === 'nk-neu') { nkLesen(); findObj(modal.oid).nk.posten.push({ name: '', betrag: null, schluessel: 'flaeche' }); render(); }
+    else if (act === 'nk-zeile-neu') { nkLesen(); findObj(modal.oid).nk.posten.push({ name: '', betrag: null, schluessel: 'flaeche' }); render(); }
     else if (act === 'nk-weg') { nkLesen(); findObj(modal.oid).nk.posten.splice(Number(el.getAttribute('data-i')), 1); save(); render(); }
     else if (act === 'nk-rechnen') { nkLesen(); save('Berechnet'); render(); }
     else if (act === 'nk-text') {
