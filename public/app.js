@@ -1092,6 +1092,20 @@
     window.addEventListener('pagehide', function () { if (!abgebrochen) { clearTimeout(uhr); abgebrochen = true; ausfuehren(); } }, { once: true });
   }
 
+  // Hinweis mit mehreren Knöpfen, z. B. „Morgen · 1 Woche · Rückgängig“
+  function toastKnoepfe(text, knoepfe) {
+    const old = root.querySelector('.toast'); if (old) old.remove();
+    const el = document.createElement('div'); el.className = 'toast mit-aktion';
+    const sp = document.createElement('span'); sp.textContent = text; el.appendChild(sp);
+    knoepfe.forEach(function (k) {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = k.label;
+      b.addEventListener('click', function () { el.remove(); clearTimeout(toastTimer); k.fn(); });
+      el.appendChild(b);
+    });
+    root.appendChild(el);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { el.remove(); }, 9000);
+  }
   function toastAktion(text, label, fn) {
     const old = root.querySelector('.toast'); if (old) old.remove();
     const el = document.createElement('div'); el.className = 'toast mit-aktion';
@@ -1558,7 +1572,7 @@
   function tdMenueHtml(t) {
     if (tdMenue.typ === 'datum') return tdMenueDatum(t.faellig, 'td-setzen', t.id, {});
     if (tdMenue.typ === 'warten') {
-      return '<div class="td-menue"><div class="td-m-titel">Nachfassen in</div>'
+      return '<div class="td-menue"><div class="td-m-titel">Nachhaken in</div>'
         + [[1, 'morgen'], [2, '2 Tagen'], [3, '3 Tagen'], [7, '1 Woche'], [14, '2 Wochen']].map(function (x) {
             return '<button type="button" data-act="td-warten" data-tid="' + t.id + '" data-tage="' + x[0] + '">⏳ ' + x[1]
               + '<span class="td-m-rechts">' + tdWochentag(tdPlus(x[0]), true) + ' ' + tdDatumLang(tdPlus(x[0])) + '</span></button>';
@@ -1590,7 +1604,7 @@
       + '<div class="td-m-trenner"></div>'
       + '<button type="button" data-act="td-menue" data-typ="datum" data-tid="' + t.id + '">' + TDI.kalender + 'Datum<span class="td-m-rechts">›</span></button>'
       + '<button type="button" data-act="td-menue" data-typ="uhrzeit" data-tid="' + t.id + '">◷ Uhrzeit heute<span class="td-m-rechts">›</span></button>'
-      + '<button type="button" data-act="td-menue" data-typ="warten" data-tid="' + t.id + '">⏳ ' + (tdWartet(t) ? 'Wartet · nachfassen' : 'Wartet auf Antwort') + '<span class="td-m-rechts">›</span></button>'
+      + '<button type="button" data-act="td-menue" data-typ="warten" data-tid="' + t.id + '">⏳ ' + (tdWartet(t) ? 'Wartet · nachhaken' : 'Wartet auf Antwort') + '<span class="td-m-rechts">›</span></button>'
       + '<button type="button" data-act="td-menue" data-typ="projekt" data-tid="' + t.id + '">' + TDI.ordner + 'In anderes Projekt<span class="td-m-rechts">›</span></button>'
       + '<button type="button" data-act="td-oeffnen" data-tid="' + t.id + '">' + TDI.stift + 'Bearbeiten</button>'
       + '<a class="td-m-link" href="' + esc(t.url) + '" target="_blank" rel="noopener">' + TDI.extern + 'In Todoist öffnen</a>'
@@ -1627,12 +1641,14 @@
           : (eltern && !o.ebene ? '<span class="td-projekt"><span>' + esc(tdKurz(eltern.inhalt, 30)) + '</span></span>' : ''))
       + '</div></div>'
       + '<div class="td-aktionen">'
+      + (tdWartet(t) ? '' : '<button type="button" class="td-warteknopf" data-act="td-warten" data-tid="' + t.id + '" data-tage="3" title="Wartet auf Antwort — in 3 Tagen nachhaken">⏳</button>')
       + '<button type="button" class="nur-pc" data-act="td-oeffnen" data-tid="' + t.id + '" title="Bearbeiten">' + TDI.stift + '</button>'
       + '<button type="button" class="nur-pc" data-act="td-menue" data-typ="datum" data-tid="' + t.id + '" title="Datum">' + TDI.kalender + '</button>'
       + '<button type="button" data-act="td-menue" data-typ="mehr" data-tid="' + t.id + '" title="Mehr">' + TDI.mehr + '</button>'
       + '</div>'
       + (tdMenue && tdMenue.tid === t.id ? tdMenueHtml(t) : '')
-      + '</div>';
+      + '</div>'
+      + nachhakenHtml(t);
     if (o.klappbar && kinder.length && !zu) {
       html += kinder.map(function (k) {
         return tdZeile(k, Object.assign({}, o, { ebene: Math.min(3, (o.ebene || 0) + 1) }));
@@ -1838,16 +1854,16 @@
       }
 
     } else if (tdAnsicht === 'wartet') {
-      // Wartet auf Antwort: fällig heute oder früher = jetzt nachfassen, der Rest wartet noch
+      // Wartet auf Antwort: fällig heute oder früher = jetzt nachhaken, der Rest wartet noch
       const heuteIso = tdIso(heute0);
       const w = gefiltert(wartend);
       const jetzt = w.filter(function (t) { return !t.faellig || t.faellig <= heuteIso; });
       const noch = w.filter(function (t) { return t.faellig && t.faellig > heuteIso; });
       inhalt += kopf('Wartet auf Antwort') + anzahl(w.length);
       inhalt += filterLeiste(wartend, true);
-      if (jetzt.length) inhalt += tdBlock('ab:nachfassen', 'Jetzt nachfassen', jetzt, { rot: true });
+      if (jetzt.length) inhalt += tdBlock('ab:nachhaken', 'Jetzt nachhaken', jetzt, { rot: true });
       if (noch.length) inhalt += tdBlock('ab:wartet', 'Wartet noch', noch, {});
-      if (!w.length) inhalt += '<div class="td-leer"><b>Du wartest auf niemanden</b>Im Menü einer Aufgabe (⋯) „Wartet auf Antwort“ wählen — dann erinnert dich die App ans Nachfassen.</div>';
+      if (!w.length) inhalt += '<div class="td-leer"><b>Du wartest auf niemanden</b>Im Menü einer Aufgabe (⋯) „Wartet auf Antwort“ wählen — dann erinnert dich die App ans Nachhaken.</div>';
 
     } else if (tdAnsicht.indexOf('projekt:') === 0) {
       const pid = tdAnsicht.slice(8);
@@ -2704,7 +2720,7 @@
         punkte.push({
           rang: 2, sort: t.faellig, zeit: '', was: t.inhalt,
           wo: tdProjektName(t.projektId),
-          warum: tdWartet(t) ? 'nachfassen — wartet seit ' + tage + (tage === 1 ? ' Tag' : ' Tagen') + ' auf Antwort'
+          warum: tdWartet(t) ? 'nachhaken — wartet seit ' + tage + (tage === 1 ? ' Tag' : ' Tagen') + ' auf Antwort'
             : 'liegt seit ' + tage + (tage === 1 ? ' Tag' : ' Tagen') + ' — wird nicht besser',
           tid: t.id, rot: true
         });
@@ -2721,7 +2737,7 @@
     const m = memoMieten();
     if (m.rueckstand > 0.5) {
       punkte.push({
-        rang: 3, sort: 'a', zeit: '', was: money(m.rueckstand) + ' Rückstand nachfassen',
+        rang: 3, sort: 'a', zeit: '', was: money(m.rueckstand) + ' Rückstand nachhaken',
         wo: 'Mieten', warum: 'Geld, das dir gehört', act: 'zu-mieten', rot: true
       });
     } else if (m.offenAnzahl && m.tag >= 5) {
@@ -2752,7 +2768,7 @@
         punkte.push({
           rang: 5, sort: String(5 - p), zeit: '', was: t.inhalt,
           wo: tdProjektName(t.projektId),
-          warum: tdWartet(t) ? 'heute nachfassen — wartet auf Antwort'
+          warum: tdWartet(t) ? 'heute nachhaken — wartet auf Antwort'
             : (p >= 4 ? 'als wichtig markiert' : (p === 3 ? 'heute eingeplant' : 'für heute vorgemerkt')),
           tid: t.id
         });
@@ -3270,24 +3286,75 @@
     const labels = (t.labels || []).filter(function (l) { return !WARTET_MUSTER.test(l); }).concat([label]);
     const datum = tdIso(tdPlus(tage));
     const alt = { labels: t.labels, faellig: t.faellig, zeit: t.faelligZeit };
-    t.labels = labels; t.faellig = datum; t.faelligZeit = null; tdAbleiten(); render();
+    t.labels = labels; t.faellig = datum; t.faelligZeit = null; fensterFelderNachziehen(t); tdAbleiten(); render();
     api('todoist/aufgabe/' + encodeURIComponent(tid), { method: 'POST', body: { labels: labels, faellig: datum } })
       .then(function () {
-        toastAktion('Wartet — nachfassen ' + planTag(datum), 'Rückgängig', function () {
-          api('todoist/aufgabe/' + encodeURIComponent(tid), { method: 'POST', body: { labels: alt.labels || [], faellig: alt.faellig || '' } })
-            .then(function () { return alleLaden(); }).then(function () { render(); });
-        });
+        toastKnoepfe('Wartet — nachhaken ' + planTag(datum), [
+          { label: 'Morgen', fn: function () { tdWartenSetzen(tid, 1); } },
+          { label: '1 Woche', fn: function () { tdWartenSetzen(tid, 7); } },
+          { label: 'Rückgängig', fn: function () {
+              api('todoist/aufgabe/' + encodeURIComponent(tid), { method: 'POST', body: { labels: alt.labels || [], faellig: alt.faellig || '' } })
+                .then(function () { return alleLaden(); }).then(function () { render(); });
+            } }
+        ]);
         return alleLaden();
       })
       .then(function () { render(); })
       .catch(function (e) { toast(e.message); Object.assign(t, { labels: alt.labels, faellig: alt.faellig, faelligZeit: alt.zeit }); tdAbleiten(); render(); });
   }
+  function tdNachgehakt(tid) {
+    const t = tdFinde(tid); if (!t) return;
+    tdMenue = null;
+    const datum = tdIso(tdPlus(3));
+    const alt = { faellig: t.faellig, beschreibung: t.beschreibung };
+    const besch = verlaufAnhaengen(t.beschreibung, 'Nachgehakt');
+    t.faellig = datum; t.faelligZeit = null; t.beschreibung = besch; fensterFelderNachziehen(t); tdAbleiten(); render();
+    api('todoist/aufgabe/' + encodeURIComponent(tid), { method: 'POST', body: { faellig: datum, beschreibung: besch } })
+      .then(function () {
+        toastKnoepfe('Nachgehakt — nächstes Mal ' + planTag(datum), [
+          { label: 'Morgen', fn: function () { tdDatumSetzen(tid, tdIso(tdPlus(1))); } },
+          { label: '1 Woche', fn: function () { tdDatumSetzen(tid, tdIso(tdPlus(7))); } },
+          { label: 'Rückgängig', fn: function () {
+              api('todoist/aufgabe/' + encodeURIComponent(tid), { method: 'POST', body: { faellig: alt.faellig || '', beschreibung: alt.beschreibung || '' } })
+                .then(function () { return alleLaden(); }).then(function () { render(); });
+            } }
+        ]);
+        return alleLaden();
+      })
+      .then(function () { render(); })
+      .catch(function (e) { toast(e.message); t.faellig = alt.faellig; t.beschreibung = alt.beschreibung; tdAbleiten(); render(); });
+  }
+  // Ist das Aufgabenfenster offen, den Entwurf auf den neuen Stand bringen
+  function fensterNachziehen(t) {
+    if (!modal || modal.kind !== 'aufgabe' || !modal.aufgabe || modal.aufgabe.id !== t.id || !modal.entwurf) return;
+    modal.entwurf.faellig = t.faellig || '';
+    modal.entwurf.beschreibung = t.beschreibung || '';
+  }
+  // Beim Neuaufbau liest das Fenster seine Felder aus — deshalb die Felder selbst mitziehen
+  function fensterFelderNachziehen(t) {
+    if (!modal || modal.kind !== 'aufgabe' || !modal.aufgabe || modal.aufgabe.id !== t.id) return;
+    const f = root.querySelector('#t-faellig'); if (f) f.value = t.faellig || '';
+    const b = root.querySelector('#t-besch'); if (b) b.value = t.beschreibung || '';
+    fensterNachziehen(t);
+  }
+  // Die Knöpfe fürs Nachhaken — überall gleich: in der Aufgabenliste und auf „Heute“
+  function nachhakenHtml(t) {
+    if (!tdWartet(t)) return '';
+    const heuteIso = heuteISO();
+    const faellig = !t.faellig || t.faellig <= heuteIso;
+    return '<div class="td-nachhaken' + (faellig ? ' faellig' : '') + '">'
+      + '<span class="nh-text">' + (faellig ? '⏳ Nachhaken fällig' : '⏳ wartet · nachhaken ' + esc(planTag(t.faellig))) + '</span>'
+      + (faellig ? '<button type="button" class="nh-knopf primaer" data-act="td-nachgehakt" data-tid="' + t.id + '">↻ Nachgehakt</button>' : '')
+      + '<button type="button" class="nh-knopf" data-act="td-warten-ende" data-tid="' + t.id + '">✓ Antwort da</button>'
+      + '</div>';
+  }
   function tdWartenEnde(tid) {
     const t = tdFinde(tid); if (!t) return;
     tdMenue = null;
     const labels = (t.labels || []).filter(function (l) { return !WARTET_MUSTER.test(l); });
-    t.labels = labels; t.faellig = heuteISO(); t.faelligZeit = null; tdAbleiten(); render();
-    api('todoist/aufgabe/' + encodeURIComponent(tid), { method: 'POST', body: { labels: labels, faellig: heuteISO() } })
+    const besch = verlaufAnhaengen(t.beschreibung, 'Antwort erhalten');
+    t.labels = labels; t.faellig = heuteISO(); t.faelligZeit = null; t.beschreibung = besch; fensterFelderNachziehen(t); tdAbleiten(); render();
+    api('todoist/aufgabe/' + encodeURIComponent(tid), { method: 'POST', body: { labels: labels, faellig: heuteISO(), beschreibung: besch } })
       .then(function () { toast('Antwort ist da — steht wieder auf heute'); return alleLaden(); })
       .then(function () { render(); })
       .catch(function (e) { toast(e.message); });
@@ -3865,7 +3932,8 @@
               + (e.tid && !mobil ? ' draggable="true" data-zieh="' + e.tid + '" title="In den Zeitplan ziehen, um die Uhrzeit zu ändern"' : '') + '>'
               + '<span class="mtext"><span class="mwas">' + esc(e.titel) + '</span>'
               + '<span class="mwarum">' + (abgehakt ? 'erledigt' : (jetzt ? 'läuft gerade' : (liegen ? '<span class="rot">noch offen</span>' : 'geplant')))
-              + (e.unten ? ' · ' + esc(e.unten) : '') + '</span></span>'
+              + (e.unten ? ' · ' + esc(e.unten) : '') + '</span>'
+              + (e.tid && tdFinde(e.tid) ? nachhakenHtml(tdFinde(e.tid)) : '') + '</span>'
               + (e.tid
                   ? '<button type="button" class="td-kreis" data-act="td-fertig" data-tid="' + e.tid + '" title="Abhaken">' + TDI.check + '</button>'
                   : '<button type="button" class="td-kreis' + (abgehakt ? ' an' : '') + '" data-act="kal-abhaken" data-k="' + esc(schluessel) + '" title="' + (abgehakt ? 'Wieder offen' : 'Abhaken') + '">' + TDI.check + '</button>')
@@ -3892,7 +3960,10 @@
               + '<span class="mtext">'
               + '<span class="mwas">' + esc(p.was) + '</span>'
               + '<span class="mwarum">' + (p.wo ? esc(p.wo) + ' · ' : '') + esc(p.warum) + '</span>'
+              + (p.tid && tdFinde(p.tid) ? nachhakenHtml(tdFinde(p.tid)) : '')
               + '</span>'
+              + (p.tid && tdFinde(p.tid) && !tdWartet(tdFinde(p.tid))
+                  ? '<button type="button" class="td-warteknopf mini" data-act="td-warten" data-tid="' + p.tid + '" data-tage="3" title="Wartet auf Antwort — in 3 Tagen nachhaken">⏳</button>' : '')
               + (p.tid ? '<button type="button" class="td-kreis" data-act="td-fertig" data-tid="' + p.tid + '" title="Abhaken">' + TDI.check + '</button>' : '')
               + '</li>';
           }).join('') + '</ol>';
@@ -5839,6 +5910,19 @@
         + '</div>'
         + '<div class="td-f-feld"><label>Priorität</label>' + tdFlaggen(prio, 't-prio', t.id)
         + '<input type="hidden" id="t-prio" value="' + prio + '"></div>'
+        // Nachhaken direkt im Fenster: warten lassen oder nachgehakt / Antwort da
+        + '<div class="td-f-feld td-f-warten"><label>⏳ Wartet auf Antwort</label>'
+        + (tdWartet(t)
+            ? '<div class="td-f-klein' + (!t.faellig || t.faellig <= heuteISO() ? ' rot' : '') + '">'
+              + (!t.faellig || t.faellig <= heuteISO() ? 'Nachhaken ist fällig' : 'Nachhaken am ' + esc(planTag(t.faellig))) + '</div>'
+              + '<div class="td-f-wknoepfe">'
+              + '<button type="button" class="nh-knopf primaer" data-act="td-nachgehakt" data-tid="' + t.id + '">↻ Nachgehakt</button>'
+              + '<button type="button" class="nh-knopf" data-act="td-warten-ende" data-tid="' + t.id + '">✓ Antwort da</button></div>'
+            : '<div class="td-f-klein">Nachhaken in</div><div class="td-f-wknoepfe">'
+              + [[1, 'Morgen'], [3, '3 Tagen'], [7, '1 Woche']].map(function (x) {
+                  return '<button type="button" class="nh-knopf" data-act="td-warten" data-tid="' + t.id + '" data-tage="' + x[0] + '">' + x[1] + '</button>';
+                }).join('') + '</div>')
+        + '</div>'
         + ((t.labels || []).length
             ? '<div class="td-f-feld"><label>Labels</label><div class="td-f-labels">'
               + t.labels.map(function (l) { return '<span>' + esc(l) + '</span>'; }).join('') + '</div></div>'
@@ -7017,6 +7101,7 @@
     }
     else if (act === 'td-warten') { tdWartenSetzen(el.getAttribute('data-tid'), Number(el.getAttribute('data-tage')) || 3); }
     else if (act === 'td-warten-ende') { tdWartenEnde(el.getAttribute('data-tid')); }
+    else if (act === 'td-nachgehakt') { tdNachgehakt(el.getAttribute('data-tid')); }
     else if (act === 'td-uhrzeit') { tdUhrzeitSetzen(el.getAttribute('data-tid'), heuteISO(), el.getAttribute('data-zeit')); }
     else if (act === 't-verlauf') { verlaufEintragen(); }
     else if (act === 't-verlauf-diktat') { verlaufDiktieren(); }
