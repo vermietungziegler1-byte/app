@@ -518,6 +518,15 @@
     });
   }
   let theme = 'dark';
+  let themeWahl = 'auto';   // auto = wie das Gerät | light | dark
+  const geraetDunkel = window.matchMedia('(prefers-color-scheme: dark)');
+  function themeAnwenden() {
+    theme = themeWahl === 'auto' ? (geraetDunkel.matches ? 'dark' : 'light') : themeWahl;
+    root.setAttribute('data-theme', theme);
+    const dlg = document.getElementById('dialog');
+    if (dlg) dlg.setAttribute('data-theme', theme);
+  }
+  geraetDunkel.addEventListener('change', function () { if (themeWahl === 'auto') themeAnwenden(); });
   let letzteSpeicher = [];
   let speicherFehler = false;   // letzte Änderung kam nicht beim Server an
   let sicherungInfo = null;     // Stand der Server- und Drive-Sicherung (nur Verwalter)
@@ -558,9 +567,9 @@
   async function load() {
     try {
       const t = window.localStorage.getItem('vermietung:theme');
-      if (t) theme = t;
+      if (t === 'light' || t === 'dark') themeWahl = t;
     } catch (e) { /* Voreinstellung */ }
-    root.setAttribute('data-theme', theme);
+    themeAnwenden();
 
     data = structuredClone(SEED);
     normalisieren();
@@ -633,6 +642,7 @@
   let nutzerRolle = 'nutzer';
   let phase = 'start';        // start | einrichten | anmelden | app
   let zuletztGeaendert = null;
+  let gespeichertUm = 0;      // wann dieses Gerät zuletzt gespeichert hat (für den kurzen Hinweis unten)
   let speicherLaeuft = false;
   let nochmalSpeichern = false;
 
@@ -1921,6 +1931,23 @@
     eingabe.click();
   }
 
+  // Fußzeile: meldet sich nur, wenn etwas schiefging oder gerade still gespeichert wurde
+  function fussInhalt() {
+    if (speicherFehler) return '<span class="warnung">Letzte Änderung nicht gespeichert</span>';
+    return Date.now() - gespeichertUm < 6000 ? '<span class="foot-frisch">✓ Gespeichert</span>' : '';
+  }
+  function fussVerblassen() {
+    if (Date.now() - gespeichertUm >= 6000) return;
+    setTimeout(function () {
+      const f = root.querySelector('.foot-frisch');
+      if (f) f.classList.add('weg');
+    }, 6000 - (Date.now() - gespeichertUm));
+  }
+  function fussZeigen() {
+    const f = root.querySelector('.foot');
+    if (f) { f.innerHTML = fussInhalt(); fussVerblassen(); }
+  }
+
   async function save(msg, erzwingen) {
     if (phase !== 'app') return;
     if (speicherLaeuft) { nochmalSpeichern = true; return; }
@@ -1933,12 +1960,14 @@
         data: data, basis: zuletztGeaendert ? zuletztGeaendert.wann : null, erzwingen: !!erzwingen
       } });
       zuletztGeaendert = { wer: res.wer, wann: res.wann };
+      gespeichertUm = msg ? 0 : Date.now();   // mit Meldung sagt es schon der Hinweis
       letzteSpeicher = ['Server'];
       speicherFehler = false;
       if (msg) toast(msg);
+      fussZeigen();
     } catch (e) {
       letzteSpeicher = [];
-      if (e.status !== 409) speicherFehler = true;
+      if (e.status !== 409) { speicherFehler = true; fussZeigen(); }
       if (e.status === 401) { phase = 'anmelden'; render(); toast('Bitte neu anmelden'); }
       else if (e.status === 409) {
         nochmalSpeichern = false;
@@ -3312,14 +3341,10 @@
     html += '<div class="top"><div class="marke">'
       + '<button class="burger" data-act="seite" title="Menü"><span></span><span></span><span></span></button>'
       + '<div class="siegel">Z</div>'
-      + '<div><h1>Ziegler</h1>'
-      + '<div class="sub"><span class="nur-breit">Objektübersicht · </span>' + data.objects.length + ' Objekte · '
-      + units.length + ' Einheiten</div></div></div>'
+      + '<div><h1>Ziegler</h1></div></div>'
       + '<div class="top-actions">'
       + '<button class="theme lupe" data-act="suche" title="Suchen (Strg+K)" aria-label="Suchen">'
       + '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg></button>'
-      + '<button class="theme" data-act="theme" title="Hell oder dunkel">'
-      + (theme === 'dark' ? '☾' : '☀') + '</button>'
       + '</div></div>';
 
     html += '<div class="seitennav">'
@@ -3342,21 +3367,22 @@
         + '<div class="sl-nutzer">' + esc(nutzerName) + '</div></div>'
         + '<button class="sl-zu" data-act="seite-zu">✕</button></div>'
 
-        + '<div class="sl-gruppe"><span>Bereiche</span>'
-        + eintrag('zu-heute', 'Heute')
-        + eintrag('zu-aufgaben', 'Aufgaben')
-        + eintrag('zu-objekte', 'Objekte')
-        + eintrag('zu-mieten', 'Mieten')
-        + eintrag('zu-interessenten', 'Interessenten')
-        + eintrag('zu-post', 'Post', postListe && postListe.length ? String(postListe.length) : '')
-        + eintrag('zu-rechnungen', 'Abrechnungen')
-        + '</div>'
+        // Am PC stehen alle Bereiche als Reiter oben, am Handy fünf unten in der Leiste
+        + (mobil
+            ? '<div class="sl-gruppe"><span>Weitere Bereiche</span>'
+              + eintrag('zu-interessenten', 'Interessenten')
+              + eintrag('zu-rechnungen', 'Abrechnungen')
+              + '</div>'
+            : '')
 
         + '<div class="sl-gruppe"><span>Verwaltung</span>'
         + eintrag('add-object', 'Objekt anlegen')
         + eintrag('interessent-neu', 'Interessent vormerken')
         + eintrag('auszug', 'Kontoauszug einlesen')
-        + eintrag('staende', 'Verlauf')
+        + eintrag('staende', 'Verlauf', zuletztGeaendert
+            ? new Date(zuletztGeaendert.wann).toLocaleString('de-DE', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' })
+              + ' · ' + esc(zuletztGeaendert.wer)
+            : '')
         + '</div>'
 
         + '<div class="sl-gruppe"><span>Verbindungen</span>'
@@ -3386,6 +3412,7 @@
 
         // Zugänge für alle: dort ändert jeder sein eigenes Passwort, Verwaltung sieht nur der Verwalter
         + '<div class="sl-gruppe"><span>Konto</span>'
+        + eintrag('theme', 'Darstellung', { auto: 'wie das Gerät', light: 'hell', dark: 'dunkel' }[themeWahl])
         + eintrag('zugaenge', nutzerRolle === 'verwalter' ? 'Zugänge' : 'Passwort ändern') + '</div>'
 
         + '<div class="sl-fuss">' + eintrag('abmelden', 'Abmelden') + '</div>'
@@ -4038,21 +4065,13 @@
         + '</div>';
     }
 
-    html += '<div class="foot">'
-      + '<span class="verbunden">' + esc(nutzerName) + '</span> · '
-      + (speicherFehler
-          ? '<span class="warnung">Letzte Änderung nicht gespeichert</span>'
-          : (zuletztGeaendert
-            ? 'gespeichert · ' + new Date(zuletztGeaendert.wann).toLocaleString('de-DE', {
-                day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit'
-              }) + ' Uhr von ' + esc(zuletztGeaendert.wer)
-            : 'noch nichts gespeichert'))
-      + '</div>';
+    html += '<div class="foot">' + fussInhalt() + '</div>';
 
     if (modal) html += renderModal();
     const alterToast = root.querySelector('.toast');   // Hinweis unten überlebt den Neuaufbau
     root.innerHTML = html;
     if (alterToast) root.appendChild(alterToast);
+    fussVerblassen();
     scrollSperre(!!modal);
 
     const bd = root.querySelector('.backdrop');
@@ -7348,9 +7367,12 @@
         .catch(function (e) { toast(e.message); });
     }
     else if (act === 'theme') {
-      theme = theme === 'dark' ? 'light' : 'dark';
-      root.setAttribute('data-theme', theme);
-      try { window.localStorage.setItem('vermietung:theme', theme); } catch (e) { /* egal */ }
+      themeWahl = { auto: 'light', light: 'dark', dark: 'auto' }[themeWahl];
+      themeAnwenden();
+      try {
+        if (themeWahl === 'auto') window.localStorage.removeItem('vermietung:theme');
+        else window.localStorage.setItem('vermietung:theme', themeWahl);
+      } catch (e) { /* egal */ }
       render();
     }
   }

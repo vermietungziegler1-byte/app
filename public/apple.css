@@ -366,3 +366,8 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 #app .td-zeile.wischt::after { content: 'Auf morgen'; left: 100%; justify-content: flex-start; padding-left: 16px; background: #8e8e93; }
 #app .td-zeile.wisch-fertig::before { background: #34c759; }
 #app .td-zeile.wisch-morgen::after { background: #ff9500; }
+
+/* Fußzeile: nur ein kurzes "Gespeichert", das von selbst verblasst */
+#app .foot { min-height: 16px; }
+#app .foot-frisch { color: var(--muted); transition: opacity .6s; }
+#app .foot-frisch.weg { opacity: 0; }

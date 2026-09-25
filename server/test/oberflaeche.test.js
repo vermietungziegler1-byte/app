@@ -226,3 +226,50 @@ test('Oberfläche: Suche für alles und Wischen am Handy', { skip: pw ? false : 
     todoist.stoppen();
   }
 });
+
+test('Oberfläche: Darstellung folgt dem Gerät, Fußzeile meldet stilles Speichern', { skip: pw ? false : 'Playwright nicht installiert' }, async function () {
+  const server = await serverStarten();
+  const browser = await pw.chromium.launch();
+  try {
+    await sitzung(server).post('/api/setup', { name: 'louis', passwort: 'geheim123' });
+    const seite = await (await browser.newContext({ colorScheme: 'dark', viewport: { width: 1280, height: 900 } })).newPage();
+    const fehler = [];
+    seite.on('pageerror', function (e) { fehler.push(e.message); });
+    await seite.goto(server.basis + '/');
+    await seite.evaluate(async function () {
+      await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'louis', passwort: 'geheim123' }) });
+    });
+    await seite.reload();
+    await seite.waitForSelector('[data-act="seite"]');
+    const thema = function () { return seite.getAttribute('#app', 'data-theme'); };
+    const umschalten = async function () {
+      await seite.evaluate(function () { document.querySelector('[data-act="seite"]').click(); });
+      await seite.evaluate(function () { document.querySelector('.seitenleiste [data-act="theme"]').click(); });
+      const zusatz = await seite.textContent('.seitenleiste [data-act="theme"] .sl-zusatz');
+      await seite.evaluate(function () { document.querySelector('[data-act="seite-zu"]').click(); });
+      return zusatz;
+    };
+
+    assert.equal(await thema(), 'dark', 'ohne Wahl wie das Gerät');
+    assert.equal(await seite.$('.top [data-act="theme"]'), null, 'kein Knopf mehr oben');
+    assert.equal(await umschalten(), 'hell');
+    assert.equal(await thema(), 'light');
+    assert.equal(await umschalten(), 'dunkel');
+    assert.equal(await umschalten(), 'wie das Gerät');
+    await seite.emulateMedia({ colorScheme: 'light' });
+    await seite.waitForFunction(function () { return document.getElementById('app').getAttribute('data-theme') === 'light'; });
+
+    // Stilles Speichern (Status einer Einheit weiterschalten) zeigt kurz „Gespeichert“
+    assert.equal((await seite.textContent('.foot')).trim(), '');
+    await seite.evaluate(function () { document.querySelector('[data-act="zu-objekte"]').click(); });
+    await seite.click('.obj-head');
+    await seite.click('[data-act="status"]');
+    await seite.waitForSelector('.foot-frisch');
+    await seite.waitForSelector('.foot-frisch.weg', { state: 'attached', timeout: 9000 });
+    assert.deepEqual(fehler, []);
+  } finally {
+    await browser.close();
+    await server.stoppen();
+  }
+});
