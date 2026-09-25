@@ -378,3 +378,28 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
   display: inline; border: 0; background: none; padding: 0; margin: 0; min-height: 0; box-shadow: none;
   color: var(--messing); font: inherit; font-weight: 600; cursor: pointer; text-decoration: underline;
 }
+
+/* Heute: eine Karte für Reihenfolge, Woche und Zeitplan */
+#app .tagkarte .tagnav { display: inline-flex; gap: 6px; }
+#app .tagkarte .tagnav button {
+  border: none; background: var(--fuellung); color: var(--messing); border-radius: 8px;
+  padding: 5px 10px; font-size: 13px; min-height: 0; box-shadow: none;
+}
+#app .tagkarte .tagnav button:hover { background: var(--fuellung-stark); }
+#app .tagkarte .kalwochenstreifen { margin: 12px 0 4px; }
+#app .tagspalten { display: grid; grid-template-columns: 1fr; gap: 6px 24px; margin-top: 4px; }
+@media (min-width: 900px) {
+  #app .tagspalten { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
+  #app .tagzeit { border-left: 1px solid var(--line-soft); padding-left: 24px; }
+}
+#app .tagzeit-kopf {
+  font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em;
+  margin: 12px 0 6px;
+}
+#app .tagzeit .kalleer { padding: 14px 0; }
+#app button.memomehr {
+  display: block; border: 0; background: none; padding: 8px 0 0; min-height: 0; box-shadow: none;
+  font: inherit; font-size: 13px; color: var(--messing); font-weight: 600; cursor: pointer; text-align: left;
+}
+#app ol.memoliste.ohnenr .mpunkt { padding-left: 2px; }
+#app ol.memoliste .mpunkt.frist .mwas { color: var(--sperr); }
