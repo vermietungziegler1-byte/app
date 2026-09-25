@@ -366,3 +366,15 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 #app .td-zeile.wischt::after { content: 'Auf morgen'; left: 100%; justify-content: flex-start; padding-left: 16px; background: #8e8e93; }
 #app .td-zeile.wisch-fertig::before { background: #34c759; }
 #app .td-zeile.wisch-morgen::after { background: #ff9500; }
+
+/* Fußzeile: nur ein kurzes "Gespeichert", das von selbst verblasst */
+#app .foot { min-height: 16px; }
+#app .foot-frisch { color: var(--muted); transition: opacity .6s; }
+#app .foot-frisch.weg { opacity: 0; }
+
+/* Abrechnungen: Liste zuerst, Formular auf Wunsch */
+#app .tafel h3 .rg-knopf.primary { background: var(--messing); color: #fff; border: 0; padding: 6px 12px; border-radius: 999px; font-weight: 600; }
+#app .linkknopf {
+  display: inline; border: 0; background: none; padding: 0; margin: 0; min-height: 0; box-shadow: none;
+  color: var(--messing); font: inherit; font-weight: 600; cursor: pointer; text-decoration: underline;
+}
