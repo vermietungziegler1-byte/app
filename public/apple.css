@@ -467,3 +467,11 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 }
 #app .mpunkt:hover .td-warteknopf.mini, #app .td-warteknopf.mini:focus { opacity: 1; }
 @media (max-width: 620px) { #app .td-warteknopf.mini { opacity: .7; } }
+#app .td-f-warten .td-f-klein { margin: 0 0 6px; }
+#app .td-f-warten .td-f-klein.rot { color: var(--sperr); font-weight: 600; }
+#app .td-f-wknoepfe { display: flex; flex-wrap: wrap; gap: 6px; }
+#app .td-f-wknoepfe .nh-knopf {
+  border: 0; background: var(--fuellung); color: var(--messing); border-radius: 999px;
+  padding: 5px 12px; font-size: 13px; font-weight: 600; min-height: 0; box-shadow: none; cursor: pointer;
+}
+#app .td-f-wknoepfe .nh-knopf.primaer { background: var(--messing); color: #fff; }

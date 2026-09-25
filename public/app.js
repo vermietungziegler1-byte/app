@@ -3286,7 +3286,7 @@
     const labels = (t.labels || []).filter(function (l) { return !WARTET_MUSTER.test(l); }).concat([label]);
     const datum = tdIso(tdPlus(tage));
     const alt = { labels: t.labels, faellig: t.faellig, zeit: t.faelligZeit };
-    t.labels = labels; t.faellig = datum; t.faelligZeit = null; tdAbleiten(); render();
+    t.labels = labels; t.faellig = datum; t.faelligZeit = null; fensterFelderNachziehen(t); tdAbleiten(); render();
     api('todoist/aufgabe/' + encodeURIComponent(tid), { method: 'POST', body: { labels: labels, faellig: datum } })
       .then(function () {
         toastKnoepfe('Wartet — nachhaken ' + planTag(datum), [
@@ -3308,7 +3308,7 @@
     const datum = tdIso(tdPlus(3));
     const alt = { faellig: t.faellig, beschreibung: t.beschreibung };
     const besch = verlaufAnhaengen(t.beschreibung, 'Nachgehakt');
-    t.faellig = datum; t.faelligZeit = null; t.beschreibung = besch; tdAbleiten(); render();
+    t.faellig = datum; t.faelligZeit = null; t.beschreibung = besch; fensterFelderNachziehen(t); tdAbleiten(); render();
     api('todoist/aufgabe/' + encodeURIComponent(tid), { method: 'POST', body: { faellig: datum, beschreibung: besch } })
       .then(function () {
         toastKnoepfe('Nachgehakt — nächstes Mal ' + planTag(datum), [
@@ -3323,6 +3323,19 @@
       })
       .then(function () { render(); })
       .catch(function (e) { toast(e.message); t.faellig = alt.faellig; t.beschreibung = alt.beschreibung; tdAbleiten(); render(); });
+  }
+  // Ist das Aufgabenfenster offen, den Entwurf auf den neuen Stand bringen
+  function fensterNachziehen(t) {
+    if (!modal || modal.kind !== 'aufgabe' || !modal.aufgabe || modal.aufgabe.id !== t.id || !modal.entwurf) return;
+    modal.entwurf.faellig = t.faellig || '';
+    modal.entwurf.beschreibung = t.beschreibung || '';
+  }
+  // Beim Neuaufbau liest das Fenster seine Felder aus — deshalb die Felder selbst mitziehen
+  function fensterFelderNachziehen(t) {
+    if (!modal || modal.kind !== 'aufgabe' || !modal.aufgabe || modal.aufgabe.id !== t.id) return;
+    const f = root.querySelector('#t-faellig'); if (f) f.value = t.faellig || '';
+    const b = root.querySelector('#t-besch'); if (b) b.value = t.beschreibung || '';
+    fensterNachziehen(t);
   }
   // Die Knöpfe fürs Nachhaken — überall gleich: in der Aufgabenliste und auf „Heute“
   function nachhakenHtml(t) {
@@ -3340,7 +3353,7 @@
     tdMenue = null;
     const labels = (t.labels || []).filter(function (l) { return !WARTET_MUSTER.test(l); });
     const besch = verlaufAnhaengen(t.beschreibung, 'Antwort erhalten');
-    t.labels = labels; t.faellig = heuteISO(); t.faelligZeit = null; t.beschreibung = besch; tdAbleiten(); render();
+    t.labels = labels; t.faellig = heuteISO(); t.faelligZeit = null; t.beschreibung = besch; fensterFelderNachziehen(t); tdAbleiten(); render();
     api('todoist/aufgabe/' + encodeURIComponent(tid), { method: 'POST', body: { labels: labels, faellig: heuteISO(), beschreibung: besch } })
       .then(function () { toast('Antwort ist da — steht wieder auf heute'); return alleLaden(); })
       .then(function () { render(); })
@@ -5897,6 +5910,19 @@
         + '</div>'
         + '<div class="td-f-feld"><label>Priorität</label>' + tdFlaggen(prio, 't-prio', t.id)
         + '<input type="hidden" id="t-prio" value="' + prio + '"></div>'
+        // Nachhaken direkt im Fenster: warten lassen oder nachgehakt / Antwort da
+        + '<div class="td-f-feld td-f-warten"><label>⏳ Wartet auf Antwort</label>'
+        + (tdWartet(t)
+            ? '<div class="td-f-klein' + (!t.faellig || t.faellig <= heuteISO() ? ' rot' : '') + '">'
+              + (!t.faellig || t.faellig <= heuteISO() ? 'Nachhaken ist fällig' : 'Nachhaken am ' + esc(planTag(t.faellig))) + '</div>'
+              + '<div class="td-f-wknoepfe">'
+              + '<button type="button" class="nh-knopf primaer" data-act="td-nachgehakt" data-tid="' + t.id + '">↻ Nachgehakt</button>'
+              + '<button type="button" class="nh-knopf" data-act="td-warten-ende" data-tid="' + t.id + '">✓ Antwort da</button></div>'
+            : '<div class="td-f-klein">Nachhaken in</div><div class="td-f-wknoepfe">'
+              + [[1, 'Morgen'], [3, '3 Tagen'], [7, '1 Woche']].map(function (x) {
+                  return '<button type="button" class="nh-knopf" data-act="td-warten" data-tid="' + t.id + '" data-tage="' + x[0] + '">' + x[1] + '</button>';
+                }).join('') + '</div>')
+        + '</div>'
         + ((t.labels || []).length
             ? '<div class="td-f-feld"><label>Labels</label><div class="td-f-labels">'
               + t.labels.map(function (l) { return '<span>' + esc(l) + '</span>'; }).join('') + '</div></div>'

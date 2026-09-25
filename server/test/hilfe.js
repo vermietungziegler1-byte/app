@@ -112,6 +112,8 @@ function fakeTodoist(aufgaben) {
         else if (k.due_date) a.due = { date: k.due_date, is_recurring: false, string: '' };
         else if (k.due_string === 'no date') a.due = null;
         if (k.duration) a.duration = { amount: k.duration, unit: k.duration_unit };
+        if (Array.isArray(k.labels)) a.labels = k.labels;
+        if (k.description !== undefined) a.description = k.description;
         return res.end(JSON.stringify(a));
       }
       res.statusCode = 404; res.end('{}');
