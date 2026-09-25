@@ -209,9 +209,13 @@ app.post('/api/todoist/aufgabe/:id', nurAngemeldet, async function (req, res) {
     else koerper.due_string = 'no date';   // so nimmt Todoist das Datum weg
   }
   try {
-    await todoist('/tasks/' + encodeURIComponent(req.params.id), {
+    const neu = await todoist('/tasks/' + encodeURIComponent(req.params.id), {
       method: 'POST', body: JSON.stringify(koerper)
     });
+    // Uhrzeit von Hand gesetzt oder weggenommen: der Eintrag im Kalender „Aufgaben“ zieht mit
+    if (neu && (faelligZeit || faellig !== undefined || dueString !== undefined)) {
+      require('./aufgabenkalender').aufgabeAbgleichen(aufgabeMappen(neu, null));
+    }
     res.json({ ok: true });
   } catch (e) { res.status(502).json({ fehler: e.message }); }
 });

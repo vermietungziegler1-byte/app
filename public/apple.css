@@ -422,3 +422,27 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 /* Heute: der Zeitplan darf fast die ganze Fensterhöhe nutzen */
 #app .tagzeit .zeitrahmen { max-height: max(520px, calc(100vh - 230px)); }
 @media (max-width: 899px) { #app .tagzeit .zeitrahmen { max-height: 70vh; } }
+
+/* Aufgaben: Filter-Chips, Wartet, Verlauf */
+#app .td-filter { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 12px; }
+#app .td-fchip {
+  border: 0; background: var(--fuellung); color: var(--ink); border-radius: 999px; padding: 4px 11px;
+  font-size: 13px; font-weight: 600; min-height: 0; box-shadow: none; cursor: pointer;
+}
+#app .td-fchip span { color: var(--muted); font-weight: 500; margin-left: 2px; }
+#app .td-fchip.an { background: var(--messing); color: #fff; }
+#app .td-fchip.an span { color: rgba(255,255,255,.8); }
+#app .td-ftrenner { width: 1px; height: 18px; background: var(--line-soft); margin: 0 4px; }
+#app .td-sanduhr { width: 18px; text-align: center; font-size: 14px; flex: none; }
+#app .td-uhrchips { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 8px 8px; }
+#app .td-m-leer { padding: 6px 10px; color: var(--muted); font-size: 13px; }
+#app .td-m-zeit { margin: 4px 8px 8px; width: calc(100% - 16px); }
+#app .td-verlauf { display: flex; gap: 6px; margin: 6px 0 4px; }
+#app .td-verlauf input { flex: 1; }
+/* Ziehen in den Zeitplan */
+#app [data-zieh] { cursor: grab; }
+#app.zieht .tagkarte .zeitachse { outline: 2px dashed var(--messing); outline-offset: 4px; border-radius: 8px; }
+#app .zmarke {
+  position: absolute; left: 0; right: 0; height: 0; border-top: 2px solid var(--messing); z-index: 70; pointer-events: none;
+  font-size: 11px; font-weight: 700; color: var(--messing); padding-left: 52px; line-height: 16px;
+}

@@ -273,3 +273,72 @@ test('Oberfläche: Darstellung folgt dem Gerät, Fußzeile meldet stilles Speich
     await server.stoppen();
   }
 });
+
+test('Oberfläche Aufgaben: Filter, Wartet, Verlauf und Ziehen in den Zeitplan', { skip: pw ? false : 'Playwright nicht installiert' }, async function () {
+  const heute = new Date().toISOString().slice(0, 10);
+  const aufgaben = [
+    { id: '1', content: 'Stadtwerke anrufen', priority: 1, project_id: '1', labels: ['Technik'], description: 'Rechnung zu hoch', due: { date: heute, is_recurring: false } },
+    { id: '2', content: 'Aldo nachfragen', priority: 1, project_id: '1', labels: ['Wartet-auf-Antwort'], due: { date: '2099-01-01', is_recurring: false } },
+    { id: '3', content: 'Nebenkosten wegschicken', priority: 1, project_id: '1', labels: [], due: { date: heute, is_recurring: false } }
+  ];
+  const todoist = await fakeTodoist(aufgaben);
+  const server = await serverStarten({ TODOIST_BASIS: todoist.basis });
+  const browser = await pw.chromium.launch();
+  try {
+    const s = sitzung(server);
+    await s.post('/api/setup', { name: 'louis', passwort: 'geheim123' });
+    await s.put('/api/todoist', { token: 'test' });
+    const seite = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
+    const fehler = [];
+    seite.on('pageerror', function (e) { fehler.push(e.message); });
+    await seite.goto(server.basis + '/');
+    await seite.evaluate(async function () {
+      await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'louis', passwort: 'geheim123' }) });
+    });
+    await seite.reload();
+    await seite.waitForSelector('.tagkarte [data-zieh="1"]');
+
+    // Ziehen: „Stadtwerke anrufen“ auf 16 Uhr im Zeitplan
+    const achse = await seite.$('.tagkarte .zeitachse');
+    const box = await achse.boundingBox();
+    const hoehe = await seite.evaluate(function () { return parseFloat(document.querySelector('.tagkarte .zstunde:nth-child(2)').style.top); });
+    await seite.dragAndDrop('.tagkarte [data-zieh="1"]', '.tagkarte .zeitachse', { targetPosition: { x: box.width / 2, y: hoehe * 16 + 2 } });
+    await seite.waitForFunction(function () { return document.querySelector('.toast') && /16:00/.test(document.querySelector('.toast').textContent); });
+    const zeit = todoist.aenderungen.find(function (a) { return a.id === '1'; });
+    assert.equal(zeit.koerper.due_datetime, heute + 'T16:00:00');
+
+    // Aufgaben-Seite: Wartet-Liste und Filter
+    await seite.evaluate(function () { document.querySelector('[data-act="zu-aufgaben"]').click(); });
+    await seite.click('.td-seite [data-a="wartet"]');
+    await seite.waitForSelector('text=Aldo nachfragen');
+    await seite.click('.td-seite [data-a="alle"]');
+    await seite.click('.td-fchip[data-wert="Technik"]');
+    assert.equal(await seite.$('.td-zeile[data-tid="3"]'), null, 'Filter Technik blendet Nebenkosten aus');
+    await seite.click('.td-fchip[data-wert="Technik"]');
+    await seite.waitForSelector('.td-zeile[data-tid="3"]');
+
+    // Wartet setzen: Label dazu, Datum in 3 Tagen
+    await seite.click('.td-zeile[data-tid="3"] [data-act="td-menue"][data-typ="mehr"]');
+    await seite.click('[data-act="td-menue"][data-typ="warten"]');
+    await seite.click('[data-act="td-warten"][data-tage="3"]');
+    await seite.waitForFunction(function () { return /Wartet — nachfassen/.test((document.querySelector('.toast') || {}).textContent || ''); });
+    const warten = todoist.aenderungen.filter(function (a) { return a.id === '3'; }).pop().koerper;
+    assert.deepEqual(warten.labels, ['Wartet-auf-Antwort']);
+    assert.ok(warten.due_date > heute);
+
+    // Verlauf: Datum kommt automatisch davor
+    await seite.click('.td-zeile[data-tid="1"] .td-mitte');
+    await seite.waitForSelector('#t-verlauf');
+    await seite.fill('#t-verlauf', 'Mail an Stadtwerke geschickt');
+    await seite.click('[data-act="t-verlauf"]');
+    await seite.waitForFunction(function () { return /Verlauf:/.test(document.querySelector('#t-besch').value); });
+    const besch = todoist.aenderungen.filter(function (a) { return a.id === '1' && a.koerper.description; }).pop().koerper.description;
+    assert.match(besch, /^Rechnung zu hoch\n\nVerlauf:\n\d\d\.\d\d\. Mail an Stadtwerke geschickt$/);
+    assert.deepEqual(fehler, []);
+  } finally {
+    await browser.close();
+    await server.stoppen();
+    todoist.stoppen();
+  }
+});

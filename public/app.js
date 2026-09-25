@@ -799,7 +799,21 @@
   // =================================================================
   let tdProjekte = [];        // Todoist-Projekte mit Farbe
   let tdSektionen = [];       // Todoist-Abschnitte
-  let tdAnsicht = 'heute';    // 'heute' | 'demnaechst' | 'alle' | 'projekt:<id>'
+  let tdAnsicht = 'heute';    // 'heute' | 'demnaechst' | 'alle' | 'wartet' | 'projekt:<id>'
+  // Filter oben in der Aufgabenliste: Projekt (= Objekt) und Label, dazu „nach Objekt gruppieren“
+  let tdFilter = { projekt: '', label: '' };
+  let tdGruppiert = false;
+  try { tdGruppiert = window.localStorage.getItem('vermietung:td-gruppiert') === '1'; } catch (e) { /* egal */ }
+  // Wartet auf Antwort: das vorhandene Label nutzen, sonst dieses anlegen
+  const WARTET_MUSTER = /wartet|warten|waiting/i;
+  function tdWartet(t) { return (t.labels || []).some(function (l) { return WARTET_MUSTER.test(l); }); }
+  function tdWartetLabel() {
+    let gefunden = '';
+    (alleAufgaben || []).some(function (t) {
+      return (t.labels || []).some(function (l) { if (WARTET_MUSTER.test(l)) { gefunden = l; return true; } return false; });
+    });
+    return gefunden || 'Wartet-auf-Antwort';
+  }
   let tdZu = {};              // eingeklappte Abschnitte und Aufgaben
   let tdEditor = null;        // offener Eingabekasten für eine neue Aufgabe
   let tdMenue = null;         // offenes Ausklappmenü { typ, tid }
@@ -943,6 +957,8 @@
     return zeilen.length ? tdKurz(zeilen[0], 110) : '';
   }
   function tdPasst(t) {
+    if (tdFilter.projekt && t.projektId !== tdFilter.projekt) return false;
+    if (tdFilter.label && (t.labels || []).indexOf(tdFilter.label) === -1) return false;
     if (!tdSuche) return true;
     const q = tdSuche.toLowerCase();
     return (t.inhalt || '').toLowerCase().indexOf(q) !== -1
@@ -1220,6 +1236,8 @@
       inhalt: i.value, beschreibung: val('t-besch'), faellig: val('t-faellig'),
       prioritaet: Number(val('t-prio')) || 1, projektId: val('t-projekt')
     };
+    const v = root.querySelector('#t-verlauf');
+    if (v) modal.verlaufText = v.value;
   }
   async function aufgabeSpeichern() {
     const t = modal.aufgabe;
@@ -1486,6 +1504,27 @@
     try { el.setSelectionRange(el.value.length, el.value.length); } catch (e) { /* egal */ }
   }
 
+  // Freie Anfangszeiten heute: Arbeitszeit aus dem Tagesplan minus alles mit Uhrzeit, ab jetzt
+  function freieLueckenHeute(dauer) {
+    const e = planEinst || {};
+    const min = function (hhmm, st) { const m = /^(\d{1,2}):(\d{2})$/.exec(hhmm || ''); return m ? Number(m[1]) * 60 + Number(m[2]) : st; };
+    const jetzt = new Date();
+    let von = Math.max(min(e.start, 480), Math.ceil((jetzt.getHours() * 60 + jetzt.getMinutes()) / 5) * 5);
+    const ende = min(e.ende, 1020);
+    const belegt = kalZeitplan(heuteISO(), kalBelegung()).map(function (x) { return [x.von, x.von + (x.dauer || 30)]; });
+    if (e.pauseVon && e.pauseBis) belegt.push([min(e.pauseVon, 720), min(e.pauseBis, 780)]);
+    belegt.sort(function (a, b) { return a[0] - b[0]; });
+    const zeiten = [];
+    const uhr = function (m) { return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); };
+    while (von + dauer <= ende && zeiten.length < 6) {
+      const stoert = belegt.find(function (b) { return b[0] < von + dauer && b[1] > von; });
+      if (stoert) { von = Math.ceil(stoert[1] / 5) * 5; continue; }
+      zeiten.push(uhr(von));
+      von += Math.max(30, dauer);
+    }
+    return zeiten;
+  }
+
   // ---- Bausteine der Anzeige ----
   function tdMenueDatum(aktuell, act, tid, opt) {
     opt = opt || {};
@@ -1518,6 +1557,27 @@
   }
   function tdMenueHtml(t) {
     if (tdMenue.typ === 'datum') return tdMenueDatum(t.faellig, 'td-setzen', t.id, {});
+    if (tdMenue.typ === 'warten') {
+      return '<div class="td-menue"><div class="td-m-titel">Nachfassen in</div>'
+        + [[1, 'morgen'], [2, '2 Tagen'], [3, '3 Tagen'], [7, '1 Woche'], [14, '2 Wochen']].map(function (x) {
+            return '<button type="button" data-act="td-warten" data-tid="' + t.id + '" data-tage="' + x[0] + '">⏳ ' + x[1]
+              + '<span class="td-m-rechts">' + tdWochentag(tdPlus(x[0]), true) + ' ' + tdDatumLang(tdPlus(x[0])) + '</span></button>';
+          }).join('')
+        + (tdWartet(t) ? '<div class="td-m-trenner"></div><button type="button" data-act="td-warten-ende" data-tid="' + t.id + '">✓ Antwort ist da</button>' : '')
+        + '</div>';
+    }
+    if (tdMenue.typ === 'uhrzeit') {
+      const frei = freieLueckenHeute(t.dauer || 30);
+      return '<div class="td-menue"><div class="td-m-titel">Freie Zeit heute' + (t.dauer ? ' · ' + t.dauer + ' Min' : '') + '</div>'
+        + (frei.length
+            ? '<div class="td-uhrchips">' + frei.map(function (z) {
+                return '<button type="button" class="td-fchip" data-act="td-uhrzeit" data-tid="' + t.id + '" data-zeit="' + z + '">' + z + '</button>';
+              }).join('') + '</div>'
+            : '<div class="td-m-leer">Heute ist nichts mehr frei.</div>')
+        + '<div class="td-m-trenner"></div>'
+        + '<div class="td-m-titel">Andere Zeit</div><input type="time" class="td-m-zeit" data-tid="' + t.id + '">'
+        + '</div>';
+    }
     if (tdMenue.typ === 'projekt') {
       return '<div class="td-menue"><div class="td-m-titel">Verschieben nach</div>'
         + tdProjektListe().map(function (p) {
@@ -1529,6 +1589,8 @@
     return '<div class="td-menue"><div class="td-m-titel">Priorität</div>' + tdFlaggen(t.prioritaet || 1, 'td-prio', t.id)
       + '<div class="td-m-trenner"></div>'
       + '<button type="button" data-act="td-menue" data-typ="datum" data-tid="' + t.id + '">' + TDI.kalender + 'Datum<span class="td-m-rechts">›</span></button>'
+      + '<button type="button" data-act="td-menue" data-typ="uhrzeit" data-tid="' + t.id + '">◷ Uhrzeit heute<span class="td-m-rechts">›</span></button>'
+      + '<button type="button" data-act="td-menue" data-typ="warten" data-tid="' + t.id + '">⏳ ' + (tdWartet(t) ? 'Wartet · nachfassen' : 'Wartet auf Antwort') + '<span class="td-m-rechts">›</span></button>'
       + '<button type="button" data-act="td-menue" data-typ="projekt" data-tid="' + t.id + '">' + TDI.ordner + 'In anderes Projekt<span class="td-m-rechts">›</span></button>'
       + '<button type="button" data-act="td-oeffnen" data-tid="' + t.id + '">' + TDI.stift + 'Bearbeiten</button>'
       + '<a class="td-m-link" href="' + esc(t.url) + '" target="_blank" rel="noopener">' + TDI.extern + 'In Todoist öffnen</a>'
@@ -1645,12 +1707,50 @@
     const zaehl = {};
     alle.forEach(function (t) { zaehl[t.projektId] = (zaehl[t.projektId] || 0) + 1; });
     const projekte = tdProjektListe();
+    const wartend = alle.filter(tdWartet);
+
+    // Filter-Chips: Objekt/Projekt und Label, dazu „Nach Objekt“ — nur was es wirklich gibt
+    const filterLeiste = function (liste, mitProjekt) {
+      const pz = {}, lz = {};
+      liste.forEach(function (t) {
+        pz[t.projektId] = (pz[t.projektId] || 0) + 1;
+        (t.labels || []).forEach(function (l) { lz[l] = (lz[l] || 0) + 1; });
+      });
+      const chip = function (act, wert, name, zahl, an) {
+        return '<button type="button" class="td-fchip' + (an ? ' an' : '') + '" data-act="' + act + '" data-wert="' + esc(wert) + '">'
+          + esc(name) + (zahl ? ' <span>' + zahl + '</span>' : '') + '</button>';
+      };
+      let h = '<div class="td-filter">';
+      if (mitProjekt) {
+        h += chip('td-filter-projekt', '', 'Alle', liste.length, !tdFilter.projekt);
+        h += projekte.filter(function (p) { return pz[p.id]; }).map(function (p) {
+          return chip('td-filter-projekt', p.id, p.eingang ? 'Eingang' : p.name, pz[p.id], tdFilter.projekt === p.id);
+        }).join('');
+      }
+      const labels = Object.keys(lz).sort();
+      if (labels.length) {
+        h += '<span class="td-ftrenner"></span>' + labels.map(function (l) {
+          return chip('td-filter-label', l, l, lz[l], tdFilter.label === l);
+        }).join('');
+      }
+      if (mitProjekt) h += '<span class="td-ftrenner"></span>' + chip('td-gruppieren', '', 'Nach Objekt', '', tdGruppiert);
+      return h + '</div>';
+    };
+    // Gruppiert: ein Block je Projekt/Objekt statt nach Datum
+    const nachObjekt = function (schluessel, liste) {
+      const je = {};
+      liste.forEach(function (t) { (je[t.projektId] = je[t.projektId] || []).push(t); });
+      return projekte.filter(function (p) { return je[p.id]; }).map(function (p) {
+        return tdBlock(schluessel + ':' + p.id, (p.eingang ? 'Eingang' : p.name) + ' · ' + je[p.id].length, je[p.id], {});
+      }).join('');
+    };
 
     // Seitenleiste (PC) und Chips (Handy)
     let seite = '<aside class="td-seite">'
       + '<button type="button" class="td-plus" data-act="td-schnell"><span class="td-neu-kreis">' + TDI.plus + '</span><span class="td-name">Aufgabe hinzufügen</span></button>'
       + tdEintrag('heute', tdHeuteZeichen(heute0.getDate()), 'Heute', spaet.length + heuteL.length)
       + tdEintrag('demnaechst', TDI.demnaechst, 'Demnächst', '')
+      + tdEintrag('wartet', '<span class="td-sanduhr">⏳</span>', 'Wartet', wartend.length)
       + tdEintrag('alle', TDI.alle, 'Alle offenen', alle.length)
       + '<div class="td-gruppe">Meine Projekte</div>'
       + projekte.map(function (p) { return tdEintrag('projekt:' + p.id, '', p.eingang ? 'Eingang' : p.name, zaehl[p.id] || '', p.farbe); }).join('')
@@ -1658,6 +1758,7 @@
     let chips = '<div class="td-chips">'
       + tdEintrag('heute', tdHeuteZeichen(heute0.getDate()), 'Heute', spaet.length + heuteL.length)
       + tdEintrag('demnaechst', TDI.demnaechst, 'Demnächst', '')
+      + tdEintrag('wartet', '<span class="td-sanduhr">⏳</span>', 'Wartet', wartend.length)
       + tdEintrag('alle', TDI.alle, 'Alle', alle.length)
       + projekte.map(function (p) { return tdEintrag('projekt:' + p.id, '', p.eingang ? 'Eingang' : p.name, zaehl[p.id] || '', p.farbe); }).join('')
       + '</div>';
@@ -1684,8 +1785,12 @@
     if (tdAnsicht === 'heute') {
       const s = gefiltert(spaet), h = gefiltert(heuteL);
       inhalt += kopf('Heute', tdWochentag(heute0, true) + ' ' + tdDatumLang(heute0)) + anzahl(s.length + h.length);
-      if (s.length) inhalt += tdBlock('ab:spaet', 'Überfällig', s, { rot: true, neuplanen: true });
-      inhalt += tdBlock('ab:heute', tagTitel(heute0), h, { neu: { ort: 'heute', projektId: tdStandardProjekt(), faellig: tdIso(heute0) } });
+      inhalt += filterLeiste(spaet.concat(heuteL), true);
+      if (tdGruppiert) inhalt += nachObjekt('gh', s.concat(h));
+      else {
+        if (s.length) inhalt += tdBlock('ab:spaet', 'Überfällig', s, { rot: true, neuplanen: true });
+        inhalt += tdBlock('ab:heute', tagTitel(heute0), h, { neu: { ort: 'heute', projektId: tdStandardProjekt(), faellig: tdIso(heute0) } });
+      }
       if (!s.length && !h.length && !tdSuche) inhalt += '<div class="td-leer"><b>Für heute ist alles erledigt</b>Genieß den freien Kopf — oder plane oben schon den nächsten Schritt.</div>';
 
     } else if (tdAnsicht === 'demnaechst') {
@@ -1722,11 +1827,27 @@
       });
       const gs = gefiltert(g.spaet), gh = gefiltert(g.heute), gw = gefiltert(g.woche), gsp = gefiltert(g.spaeter), go = gefiltert(g.ohne);
       inhalt += kopf('Alle offenen Aufgaben') + anzahl(gs.length + gh.length + gw.length + gsp.length + go.length);
-      if (gs.length) inhalt += tdBlock('ab:spaet', 'Überfällig', gs, { rot: true, neuplanen: true });
-      if (gh.length) inhalt += tdBlock('ab:heute', 'Heute', gh, {});
-      if (gw.length) inhalt += tdBlock('ab:woche', 'Diese Woche', gw, {});
-      if (gsp.length) inhalt += tdBlock('ab:spaeter', 'Später', gsp, {});
-      inhalt += tdBlock('ab:ohne', 'Ohne Datum', go, { neu: { ort: 'alle', projektId: tdStandardProjekt() } });
+      inhalt += filterLeiste(alle, true);
+      if (tdGruppiert) inhalt += nachObjekt('ga', gs.concat(gh, gw, gsp, go));
+      else if (gs.length) inhalt += tdBlock('ab:spaet', 'Überfällig', gs, { rot: true, neuplanen: true });
+      if (!tdGruppiert) {
+        if (gh.length) inhalt += tdBlock('ab:heute', 'Heute', gh, {});
+        if (gw.length) inhalt += tdBlock('ab:woche', 'Diese Woche', gw, {});
+        if (gsp.length) inhalt += tdBlock('ab:spaeter', 'Später', gsp, {});
+        inhalt += tdBlock('ab:ohne', 'Ohne Datum', go, { neu: { ort: 'alle', projektId: tdStandardProjekt() } });
+      }
+
+    } else if (tdAnsicht === 'wartet') {
+      // Wartet auf Antwort: fällig heute oder früher = jetzt nachfassen, der Rest wartet noch
+      const heuteIso = tdIso(heute0);
+      const w = gefiltert(wartend);
+      const jetzt = w.filter(function (t) { return !t.faellig || t.faellig <= heuteIso; });
+      const noch = w.filter(function (t) { return t.faellig && t.faellig > heuteIso; });
+      inhalt += kopf('Wartet auf Antwort') + anzahl(w.length);
+      inhalt += filterLeiste(wartend, true);
+      if (jetzt.length) inhalt += tdBlock('ab:nachfassen', 'Jetzt nachfassen', jetzt, { rot: true });
+      if (noch.length) inhalt += tdBlock('ab:wartet', 'Wartet noch', noch, {});
+      if (!w.length) inhalt += '<div class="td-leer"><b>Du wartest auf niemanden</b>Im Menü einer Aufgabe (⋯) „Wartet auf Antwort“ wählen — dann erinnert dich die App ans Nachfassen.</div>';
 
     } else if (tdAnsicht.indexOf('projekt:') === 0) {
       const pid = tdAnsicht.slice(8);
@@ -1735,6 +1856,7 @@
       const n = alle.filter(function (t) { return t.projektId === pid; }).length;
       inhalt += kopf('<span class="td-punkt" style="background:' + (p ? p.farbe : 'var(--muted)') + '"></span>' + esc(p ? (p.eingang ? 'Eingang' : p.name) : 'Projekt'),
         o ? esc(o.name) : '') + anzahl(n);
+      inhalt += filterLeiste(alle.filter(function (t) { return t.projektId === pid; }), false);
       inhalt += tdProjektInhalt(pid, 'projekt:' + pid);
       if (!n && !tdSuche) inhalt += '<div class="td-leer"><b>Noch nichts offen</b>Hier steht später alles, was zu diesem Projekt gehört.</div>';
     } else {
@@ -2582,7 +2704,8 @@
         punkte.push({
           rang: 2, sort: t.faellig, zeit: '', was: t.inhalt,
           wo: tdProjektName(t.projektId),
-          warum: 'liegt seit ' + tage + (tage === 1 ? ' Tag' : ' Tagen') + ' — wird nicht besser',
+          warum: tdWartet(t) ? 'nachfassen — wartet seit ' + tage + (tage === 1 ? ' Tag' : ' Tagen') + ' auf Antwort'
+            : 'liegt seit ' + tage + (tage === 1 ? ' Tag' : ' Tagen') + ' — wird nicht besser',
           tid: t.id, rot: true
         });
       });
@@ -2629,7 +2752,8 @@
         punkte.push({
           rang: 5, sort: String(5 - p), zeit: '', was: t.inhalt,
           wo: tdProjektName(t.projektId),
-          warum: p >= 4 ? 'als wichtig markiert' : (p === 3 ? 'heute eingeplant' : 'für heute vorgemerkt'),
+          warum: tdWartet(t) ? 'heute nachfassen — wartet auf Antwort'
+            : (p >= 4 ? 'als wichtig markiert' : (p === 3 ? 'heute eingeplant' : 'für heute vorgemerkt')),
           tid: t.id
         });
       });
@@ -3125,6 +3249,92 @@
       g.forEach(function (e, i) { e.spalte = i; e.spalten = g.length; });
     });
     return liste;
+  }
+
+  // Aufgabe auf eine Uhrzeit legen (heute oder gewählter Tag) — der Server trägt sie auch in den Kalender „Aufgaben“ ein
+  function tdUhrzeitSetzen(tid, datum, hhmm) {
+    const t = tdFinde(tid); if (!t) return;
+    tdMenue = null;
+    const alt = { faellig: t.faellig, zeit: t.faelligZeit };
+    t.faellig = datum; t.faelligZeit = datum + 'T' + hhmm + ':00'; tdAbleiten(); render();
+    api('todoist/aufgabe/' + encodeURIComponent(tid), { method: 'POST', body: { faelligZeit: datum + 'T' + hhmm + ':00' } })
+      .then(function () { toast('„' + tdKurz(t.inhalt, 30) + '“ um ' + hhmm + ' eingeplant'); return alleLaden(); })
+      .then(function () { render(); })
+      .catch(function (e) { toast(e.message); t.faellig = alt.faellig; t.faelligZeit = alt.zeit; tdAbleiten(); render(); });
+  }
+  // Wartet auf Antwort: Label dazu, Datum = Nachfass-Tag
+  function tdWartenSetzen(tid, tage) {
+    const t = tdFinde(tid); if (!t) return;
+    tdMenue = null;
+    const label = tdWartetLabel();
+    const labels = (t.labels || []).filter(function (l) { return !WARTET_MUSTER.test(l); }).concat([label]);
+    const datum = tdIso(tdPlus(tage));
+    const alt = { labels: t.labels, faellig: t.faellig, zeit: t.faelligZeit };
+    t.labels = labels; t.faellig = datum; t.faelligZeit = null; tdAbleiten(); render();
+    api('todoist/aufgabe/' + encodeURIComponent(tid), { method: 'POST', body: { labels: labels, faellig: datum } })
+      .then(function () {
+        toastAktion('Wartet — nachfassen ' + planTag(datum), 'Rückgängig', function () {
+          api('todoist/aufgabe/' + encodeURIComponent(tid), { method: 'POST', body: { labels: alt.labels || [], faellig: alt.faellig || '' } })
+            .then(function () { return alleLaden(); }).then(function () { render(); });
+        });
+        return alleLaden();
+      })
+      .then(function () { render(); })
+      .catch(function (e) { toast(e.message); Object.assign(t, { labels: alt.labels, faellig: alt.faellig, faelligZeit: alt.zeit }); tdAbleiten(); render(); });
+  }
+  function tdWartenEnde(tid) {
+    const t = tdFinde(tid); if (!t) return;
+    tdMenue = null;
+    const labels = (t.labels || []).filter(function (l) { return !WARTET_MUSTER.test(l); });
+    t.labels = labels; t.faellig = heuteISO(); t.faelligZeit = null; tdAbleiten(); render();
+    api('todoist/aufgabe/' + encodeURIComponent(tid), { method: 'POST', body: { labels: labels, faellig: heuteISO() } })
+      .then(function () { toast('Antwort ist da — steht wieder auf heute'); return alleLaden(); })
+      .then(function () { render(); })
+      .catch(function (e) { toast(e.message); });
+  }
+  // Verlauf: „25.09. Text“ unten an die Beschreibung hängen
+  function verlaufAnhaengen(besch, text) {
+    const d = new Date();
+    const zeile = String(d.getDate()).padStart(2, '0') + '.' + String(d.getMonth() + 1).padStart(2, '0') + '. ' + text.trim();
+    const b = String(besch || '').replace(/\s+$/, '');
+    if (/(^|\n)Verlauf:?\s*(\n|$)/i.test(b)) return b + '\n' + zeile;
+    return (b ? b + '\n\n' : '') + 'Verlauf:\n' + zeile;
+  }
+  async function verlaufEintragen() {
+    const feld = root.querySelector('#t-verlauf');
+    if (!feld || !feld.value.trim() || !modal || modal.kind !== 'aufgabe') return;
+    modalEntwurfMerken();
+    const t = modal.aufgabe;
+    const e = modal.entwurf || {};
+    const alt = e.beschreibung !== undefined ? e.beschreibung : (t.beschreibung || '');
+    const neu = verlaufAnhaengen(alt, feld.value);
+    try {
+      await api('todoist/aufgabe/' + encodeURIComponent(t.id), { method: 'POST', body: { beschreibung: neu } });
+      const echt = tdFinde(t.id); if (echt) echt.beschreibung = neu;
+      if (modal.entwurf) modal.entwurf.beschreibung = neu;
+      // Beim Neuaufbau werden die Felder ausgelesen — deshalb auch direkt ins Feld schreiben
+      const tb = root.querySelector('#t-besch'); if (tb) tb.value = neu;
+      const tv = root.querySelector('#t-verlauf'); if (tv) tv.value = '';
+      modal.verlaufText = '';
+      toast('Im Verlauf eingetragen');
+      render();
+    } catch (x) { toast(x.message); }
+  }
+  // Diktieren mit der Spracherkennung des Browsers (Chrome, Edge, Safari)
+  function verlaufDiktieren() {
+    const Erkennung = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const feld = root.querySelector('#t-verlauf');
+    if (!Erkennung || !feld) { toast('Dein Browser kann nicht diktieren — bitte tippen'); return; }
+    const r = new Erkennung();
+    r.lang = 'de-DE'; r.interimResults = false; r.maxAlternatives = 1;
+    r.onresult = function (ev) {
+      const text = ev.results[0][0].transcript;
+      feld.value = (feld.value ? feld.value + ' ' : '') + text;
+      feld.focus();
+    };
+    r.onerror = function () { toast('Nicht verstanden — bitte nochmal'); };
+    r.start();
+    toast('Ich höre zu …');
   }
 
   function kalSchiebenAuf(iso) {
@@ -3651,7 +3861,8 @@
             const abgehakt = !e.tid && kalAbgehakt(schluessel);
             // Vorbei, aber nicht abgehakt: nicht verblassen lassen, sondern als offen zeigen
             const liegen = vorbei && !abgehakt;
-            return '<li class="mpunkt' + (ziel ? ' klickbar' : '') + (abgehakt ? ' abgehakt' : '') + (liegen ? ' liegen' : '') + (jetzt ? ' jetzt' : '') + '"' + ziel + '>'
+            return '<li class="mpunkt' + (ziel ? ' klickbar' : '') + (abgehakt ? ' abgehakt' : '') + (liegen ? ' liegen' : '') + (jetzt ? ' jetzt' : '') + '"' + ziel
+              + (e.tid && !mobil ? ' draggable="true" data-zieh="' + e.tid + '" title="In den Zeitplan ziehen, um die Uhrzeit zu ändern"' : '') + '>'
               + '<span class="mtext"><span class="mwas">' + esc(e.titel) + '</span>'
               + '<span class="mwarum">' + (abgehakt ? 'erledigt' : (jetzt ? 'läuft gerade' : (liegen ? '<span class="rot">noch offen</span>' : 'geplant')))
               + (e.unten ? ' · ' + esc(e.unten) : '') + '</span></span>'
@@ -3675,7 +3886,8 @@
             const ziel = p.tid
               ? ' data-act="td-oeffnen" data-tid="' + p.tid + '"'
               : (p.act ? ' data-act="' + p.act + '"' + (p.id ? ' data-id="' + p.id + '"' : '') : '');
-            return '<li class="mpunkt' + (ziel ? ' klickbar' : '') + '"' + ziel + '>'
+            return '<li class="mpunkt' + (ziel ? ' klickbar' : '') + '"' + ziel
+              + (p.tid && !mobil ? ' draggable="true" data-zieh="' + p.tid + '" title="In den Zeitplan ziehen, um sie einzuplanen"' : '') + '>'
               + '<span class="mnr' + (p.rot ? ' rot' : '') + '">' + (i + 1) + '</span>'
               + '<span class="mtext">'
               + '<span class="mwas">' + esc(p.was) + '</span>'
@@ -3725,7 +3937,8 @@
       // Rechte Spalte (am Handy darunter): der Zeitplan mit Uhrzeiten
       html += '<div class="tagzeit"><div class="tagzeit-kopf">Zeitplan</div>';
       // Ohne einen einzigen Eintrag mit Uhrzeit reicht eine Zeile statt eines leeren Rasters.
-      if (!zeitplan.length) {
+      // Am PC bleibt das Raster auch leer stehen — man kann Aufgaben hineinziehen
+      if (!zeitplan.length && mobil) {
         html += '<div class="kalleer">'
           + (istHeute ? 'Heute' : 'An diesem Tag')
           + ' keine Termine mit Uhrzeit.</div>';
@@ -5590,7 +5803,10 @@
         + '<div class="td-f-titel td-zeile p' + prio + '" id="t-kopf">'
         + '<button type="button" class="td-kreis" data-act="t-fertig" title="Abhaken">' + TDI.check + '</button>'
         + '<input type="text" id="t-inhalt" value="' + esc(inhalt) + '" placeholder="Aufgabenname"></div>'
-        + '<div class="td-f-besch"><textarea id="t-besch" rows="3" placeholder="Beschreibung">' + esc(besch) + '</textarea></div>'
+        + '<div class="td-f-besch"><textarea id="t-besch" rows="' + Math.max(3, Math.min(14, String(besch).split('\n').length + 1)) + '" placeholder="Beschreibung">' + esc(besch) + '</textarea></div>'
+        + '<div class="td-verlauf"><input type="text" id="t-verlauf" placeholder="+ Verlauf, z. B. „Aldo angerufen, kommt Dienstag“" value="' + esc(modal.verlaufText || '') + '">'
+        + ((window.SpeechRecognition || window.webkitSpeechRecognition) ? '<button type="button" class="tiny" data-act="t-verlauf-diktat" title="Diktieren">🎤</button>' : '')
+        + '<button type="button" class="tiny primary" data-act="t-verlauf">Eintragen</button></div>'
         + '<div class="td-f-ueber">Unteraufgaben' + (kinder.length ? '<span class="td-zahl">' + kinder.length + '</span>' : '') + '</div>'
         + kinder.map(function (k) { return tdZeile(k, { mitProjekt: false }); }).join('')
         + tdNeuHtml('unter:' + t.id, { eltern: t.id, projektId: t.projektId, text: 'Unteraufgabe hinzufügen' })
@@ -6615,6 +6831,48 @@
         if (ev.key === 'Escape') { ev.preventDefault(); tdSuche = ''; render(); }
       });
     }
+    // Aufgaben aus der Liste in den Zeitplan ziehen (PC)
+    root.querySelectorAll('[data-zieh]').forEach(function (el) {
+      el.addEventListener('dragstart', function (ev) {
+        ev.dataTransfer.setData('text/plain', 'aufgabe:' + el.getAttribute('data-zieh'));
+        ev.dataTransfer.effectAllowed = 'move';
+        root.classList.add('zieht');
+      });
+      el.addEventListener('dragend', function () { root.classList.remove('zieht'); });
+    });
+    const achseZiel = root.querySelector('.tagkarte .zeitachse');
+    if (achseZiel) {
+      let marke = null;
+      const minuteAus = function (ev) {
+        const r = achseZiel.getBoundingClientRect();
+        const m = Math.round(((ev.clientY - r.top) / KAL_HOEHE * 60) / 15) * 15;
+        return Math.max(0, Math.min(23 * 60 + 45, m));
+      };
+      const uhr = function (m) { return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); };
+      achseZiel.addEventListener('dragover', function (ev) {
+        ev.preventDefault();
+        const m = minuteAus(ev);
+        if (!marke) { marke = document.createElement('div'); marke.className = 'zmarke'; achseZiel.appendChild(marke); }
+        marke.style.top = (m / 60 * KAL_HOEHE) + 'px';
+        marke.textContent = uhr(m);
+      });
+      achseZiel.addEventListener('dragleave', function (ev) {
+        if (marke && !achseZiel.contains(ev.relatedTarget)) { marke.remove(); marke = null; }
+      });
+      achseZiel.addEventListener('drop', function (ev) {
+        ev.preventDefault();
+        if (marke) { marke.remove(); marke = null; }
+        root.classList.remove('zieht');
+        const d = String(ev.dataTransfer.getData('text/plain') || '');
+        if (d.indexOf('aufgabe:') !== 0) return;
+        tdUhrzeitSetzen(d.slice(8), kalTag || heuteISO(), uhr(minuteAus(ev)));
+      });
+    }
+    root.querySelectorAll('.td-m-zeit').forEach(function (feld) {
+      feld.addEventListener('change', function () {
+        if (feld.value) tdUhrzeitSetzen(feld.getAttribute('data-tid'), heuteISO(), feld.value);
+      });
+    });
     root.querySelectorAll('.td-m-datum').forEach(function (feld) {
       feld.addEventListener('change', function () {
         if (!feld.value) return;
@@ -6666,6 +6924,7 @@
         if (t.id === 'td-e-titel' || t.id === 'td-e-besch') { tdEditorAbsenden(); return; }
         if (t.id === 'm-docname' || t.id === 'm-docurl') { addDoc(); return; }
         if (t.id === 't-kommentar') { kommentarSenden(); return; }
+        if (t.id === 't-verlauf') { verlaufEintragen(); return; }
         if (modal.kind === 'aufgabe') { aufgabeSpeichern(); return; }
         if (modal.kind === 'schnell') { tdEditorAbsenden(); return; }
         if (modal.kind === 'interessent') { interessentSpeichern(); return; }
@@ -6746,6 +7005,21 @@
       tdMenue = (menueWar && menueWar.typ === typ && menueWar.tid === tid) ? null : { typ: typ, tid: tid };
       render();
     }
+    else if (act === 'td-filter-projekt') { tdFilter.projekt = el.getAttribute('data-wert') || ''; render(); }
+    else if (act === 'td-filter-label') {
+      const l = el.getAttribute('data-wert') || '';
+      tdFilter.label = tdFilter.label === l ? '' : l; render();
+    }
+    else if (act === 'td-gruppieren') {
+      tdGruppiert = !tdGruppiert;
+      try { window.localStorage.setItem('vermietung:td-gruppiert', tdGruppiert ? '1' : '0'); } catch (e) { /* egal */ }
+      render();
+    }
+    else if (act === 'td-warten') { tdWartenSetzen(el.getAttribute('data-tid'), Number(el.getAttribute('data-tage')) || 3); }
+    else if (act === 'td-warten-ende') { tdWartenEnde(el.getAttribute('data-tid')); }
+    else if (act === 'td-uhrzeit') { tdUhrzeitSetzen(el.getAttribute('data-tid'), heuteISO(), el.getAttribute('data-zeit')); }
+    else if (act === 't-verlauf') { verlaufEintragen(); }
+    else if (act === 't-verlauf-diktat') { verlaufDiktieren(); }
     else if (act === 'td-setzen') { tdDatumSetzen(el.getAttribute('data-tid'), el.getAttribute('data-datum') || ''); }
     else if (act === 'td-prio') { tdPrioSetzen(el.getAttribute('data-tid'), Number(el.getAttribute('data-p')) || 1); }
     else if (act === 'td-verschieben') { tdVerschieben(el.getAttribute('data-tid'), el.getAttribute('data-projekt')); }
