@@ -2488,6 +2488,7 @@
   let kalSchiebt = null;      // Aufgabe, die auf einen anderen Tag soll
   // Eine Stunde in Bildpunkten — am Handy höher, damit Text in die Blöcke passt
   const KAL_HOEHE = (window.innerWidth || 1000) < 560 ? 58 : 46;
+  let memoAlle = false;       // Heute: alle Punkte statt der ersten fünf
   let kalGanzAuf = false;     // Liste "ohne Uhrzeit" aufgeklappt?
   let sprichQuelle = null;    // wer gerade vorliest: 'memo' oder 'kal'
   let kalRolle = null;        // gemerkte Rollposition der Zeitachse
@@ -3529,33 +3530,76 @@
     } // Kennzahlen (Objekte)
 
     if (ansicht === 'heute') {
-    html += '<div class="heute-raster"><div class="heute-links">';
-
-    // ---- Tagesmemo: die Reihenfolge des Tages ----
+    // ---- Mein Tag: Reihenfolge, Woche und Zeitplan in einer Karte ----
     (function () {
+      const heuteIso = heuteISO();
+      if (!kalTag) kalTag = heuteIso;
+      const istHeute = kalTag === heuteIso;
+      const belegung = kalBelegung();
+      const gewaehlt = new Date(Number(kalTag.slice(0, 4)), Number(kalTag.slice(5, 7)) - 1, Number(kalTag.slice(8, 10)));
+      const tages = kalTagListe(kalTag, belegung);
+      const zeitplan = kalZeitplan(kalTag, belegung);
       const punkte = memoPunkte();
-      const datum = new Date().toLocaleDateString('de-DE',
-        { weekday: 'long', day: 'numeric', month: 'long' });
       const kannSprechen = stimme.verbunden || ('speechSynthesis' in window);
       const naechsteFrist = faelligkeiten().filter(function (f) { return f.art === 'bald'; })[0];
 
-      html += '<div class="tafel heute memo' + (memoWunsch ? ' wunsch' : '') + '">'
-        + '<div class="memokopf"><h3>Heute · ' + esc(datum) + '</h3>'
+      // Google-Termine rund um den gewählten Tag holen (läuft im Hintergrund)
+      (function () {
+        const von = new Date(gewaehlt); von.setDate(von.getDate() - 10);
+        const bis = new Date(gewaehlt); bis.setDate(bis.getDate() + 21);
+        gkalNachladen(kalIso(von), kalIso(bis));
+      })();
+
+      // Vorlesen liest heute die Reihenfolge, an anderen Tagen den gewählten Tag
+      const quelle = istHeute ? 'memo' : 'kal';
+      const laeuft = (istHeute ? sprichQuelle !== 'kal' : sprichQuelle === 'kal');
+
+      html += '<div class="tafel heute memo tagkarte' + (memoWunsch ? ' wunsch' : '') + '">'
+        + '<div class="memokopf"><h3>' + (istHeute ? 'Heute · ' : '')
+        + esc(gewaehlt.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' })) + '</h3>'
         + '<div class="memoknoepfe">'
-        + (assistent.verbunden
+        + (assistent.verbunden && istHeute
             ? '<button type="button" class="mikro' + (hoert ? ' hoert' : '') + '" data-act="memo-hoeren">'
               + '<span class="punkt"></span>'
               + (hoert ? 'Fertig' : (denkt ? 'Moment …' : 'Sagen')) + '</button>'
             : '')
         + (kannSprechen
-            ? '<button type="button" class="vorlesen' + (sprichQuelle !== 'kal' && (memoLaeuft || memoLaedt) ? ' laeuft' : '') + '" data-act="memo-sprechen">'
+            ? '<button type="button" class="vorlesen' + (laeuft && (memoLaeuft || memoLaedt) ? ' laeuft' : '') + '" data-act="' + quelle + '-sprechen">'
               + '<span class="punkt"></span>'
-              + (sprichQuelle !== 'kal' && memoLaedt ? 'Moment …' : (sprichQuelle !== 'kal' && memoLaeuft ? 'Stopp' : 'Vorlesen')) + '</button>'
+              + (laeuft && memoLaedt ? 'Moment …' : (laeuft && memoLaeuft ? 'Stopp' : 'Vorlesen')) + '</button>'
             : '')
+        + '<span class="tagnav">'
+        + '<button type="button" data-act="kal-zurueck" title="Woche zurück">‹</button>'
+        + (istHeute ? '' : '<button type="button" data-act="kal-heute">Heute</button>')
+        + '<button type="button" data-act="kal-vor" title="Woche vor">›</button>'
+        + '</span>'
         + '</div></div>';
 
-      // Tagesplan steckt mit in dieser Karte: eine Zeile Stand, daneben die Knöpfe
-      html += planLeisteHtml();
+      // --- Wochenstreifen ---
+      const wochenstart = new Date(gewaehlt);
+      wochenstart.setDate(gewaehlt.getDate() - ((gewaehlt.getDay() + 6) % 7));
+      html += '<div class="kalwochenstreifen">';
+      for (let i = 0; i < 7; i++) {
+        const tag = new Date(wochenstart); tag.setDate(wochenstart.getDate() + i);
+        const iso = kalIso(tag);
+        const b = belegung[iso] || { aufgaben: [], termine: [], fristen: [], gtermine: [] };
+        const punkte = [];
+        if (b.aufgaben.length) punkte.push('<span class="kalpunkt' + (iso < heuteIso ? ' spaet' : '') + '"></span>');
+        if (b.termine.length) punkte.push('<span class="kalpunkt termin"></span>');
+        if (b.gtermine.length) punkte.push('<span class="kalpunkt gkal"></span>');
+        if (b.fristen.length) punkte.push('<span class="kalpunkt spaet"></span>');
+        html += '<div class="kaltag' + (iso === heuteIso ? ' heute' : '')
+          + (iso === kalTag ? ' gewaehlt' : '') + (kalSchiebt ? ' ziel' : '')
+          + '" data-act="kal-tag" data-datum="' + iso + '">'
+          + '<span class="wtag">' + esc(tag.toLocaleDateString('de-DE', { weekday: 'short' }).slice(0, 2)) + '</span>'
+          + '<span class="wzahl">' + tag.getDate() + '</span>'
+          + (punkte.length ? '<div class="kalpunkte">' + punkte.slice(0, 3).join('') + '</div>' : '')
+          + '</div>';
+      }
+      html += '</div>';
+
+
+      if (istHeute) html += planLeisteHtml();
 
       if (stimme.verbunden) {
         html += '<div class="memostimme"><label for="memo-stimme">Stimme</label>'
@@ -3581,171 +3625,81 @@
           + '</select></div>';
       }
 
-      if (!punkte.length) {
-        html += '<div class="memosatz">Nichts Dringendes. Guter Tag zum Aufräumen.</div>';
+
+      html += '<div class="tagspalten"><div class="tagliste">';
+
+      if (istHeute) {
+        if (!punkte.length) {
+          html += '<div class="memosatz">Nichts Dringendes. Guter Tag zum Aufräumen.</div>';
+        } else {
+          const ersterTermin = punkte.filter(function (p) { return p.zeit; })[0];
+          html += '<div class="memosatz">' + punkte.length + (punkte.length === 1 ? ' Sache' : ' Sachen')
+            + ' — von oben nach unten abarbeiten'
+            + (ersterTermin ? ', der Termin um ' + esc(ersterTermin.zeit) + ' gibt den Takt vor' : '')
+            + '.</div>';
+          const zeigen = memoAlle ? punkte : punkte.slice(0, 5);
+          html += '<ol class="memoliste">' + zeigen.map(function (p, i) {
+            const ziel = p.tid
+              ? ' data-act="td-oeffnen" data-tid="' + p.tid + '"'
+              : (p.act ? ' data-act="' + p.act + '"' + (p.id ? ' data-id="' + p.id + '"' : '') : '');
+            return '<li class="mpunkt' + (ziel ? ' klickbar' : '') + '"' + ziel + '>'
+              + '<span class="mnr' + (p.rot ? ' rot' : '') + '">' + (i + 1) + '</span>'
+              + '<span class="mtext">'
+              + '<span class="mwas">' + esc(p.was) + '</span>'
+              + '<span class="mwarum">' + (p.wo ? esc(p.wo) + ' · ' : '') + esc(p.warum) + '</span>'
+              + '</span>'
+              + (p.zeit ? '<span class="mzeit num">' + esc(p.zeit) + '</span>' : '')
+              + (p.tid ? '<button type="button" class="td-kreis" data-act="td-fertig" data-tid="' + p.tid + '" title="Abhaken">' + TDI.check + '</button>' : '')
+              + '</li>';
+          }).join('') + '</ol>';
+          if (punkte.length > 5) {
+            html += '<button type="button" class="memomehr" data-act="memo-alle">'
+              + (memoAlle ? 'Weniger zeigen' : 'und ' + (punkte.length - 5) + ' weitere zeigen') + '</button>';
+          }
+        }
+        // Ganztägige Google-Termine stehen sonst nirgends in der Liste
+        const ganzeGkal = tages.gtermine.filter(function (g) { return g.ganztags; });
+        if (ganzeGkal.length) {
+          html += '<div class="ganztags">' + ganzeGkal.map(function (g) {
+            return '<div class="gpille gkal" data-act="gkal-info" data-id="' + esc(g.id) + '"><span>' + esc(g.titel) + '</span></div>';
+          }).join('') + '</div>';
+        }
       } else {
-        const ersterTermin = punkte.filter(function (p) { return p.zeit; })[0];
-        html += '<div class="memosatz">' + punkte.length + (punkte.length === 1 ? ' Sache' : ' Sachen')
-          + ' — von oben nach unten abarbeiten'
-          + (ersterTermin ? ', der Termin um ' + esc(ersterTermin.zeit) + ' gibt den Takt vor' : '')
-          + '.</div>';
-
-        html += '<ol class="memoliste">' + punkte.slice(0, 5).map(function (p, i) {
-          const ziel = p.tid
-            ? ' data-act="td-oeffnen" data-tid="' + p.tid + '"'
-            : (p.act ? ' data-act="' + p.act + '"' + (p.id ? ' data-id="' + p.id + '"' : '') : '');
-          return '<li class="mpunkt' + (ziel ? ' klickbar' : '') + '"' + ziel + '>'
-            + '<span class="mnr' + (p.rot ? ' rot' : '') + '">' + (i + 1) + '</span>'
-            + '<span class="mtext">'
-            + '<span class="mwas">' + esc(p.was) + '</span>'
-            + '<span class="mwarum">' + (p.wo ? esc(p.wo) + ' · ' : '') + esc(p.warum) + '</span>'
-            + '</span>'
-            + (p.zeit ? '<span class="mzeit num">' + esc(p.zeit) + '</span>' : '')
-            + (p.tid ? '<button type="button" class="td-kreis" data-act="td-fertig" data-tid="' + p.tid + '" title="Abhaken">' + TDI.check + '</button>' : '')
-            + '</li>';
-        }).join('') + '</ol>';
-
-        if (punkte.length > 5) {
-          html += '<div class="memomehr">und ' + (punkte.length - 5)
-            + ' weitere — stehen unten im Tagesplan</div>';
+        // Ein anderer Tag: was dort ohne Uhrzeit ansteht
+        const ohneZeit = tages.aufgaben.filter(function (t) { return !t.faelligZeit; });
+        const liste = []
+          .concat(tages.fristen.map(function (f) { return { art: 'frist', text: f.was, unten: String(f.objekt || '').split(',')[0] }; }))
+          .concat(tages.gtermine.filter(function (g) { return g.ganztags; }).map(function (g) {
+            return { art: 'gkal', text: g.titel, unten: 'ganztägig', ziel: 'data-act="gkal-info" data-id="' + esc(g.id) + '"' };
+          }))
+          .concat(ohneZeit.map(function (t) {
+            return { art: kalTag < heuteIso ? 'spaet' : '', text: t.inhalt, unten: tdProjektName(t.projektId) || '', tid: t.id,
+              ziel: 'data-act="td-oeffnen" data-tid="' + t.id + '"' };
+          }));
+        if (!liste.length) html += '<div class="memosatz">Ohne Uhrzeit steht an diesem Tag nichts an.</div>';
+        else {
+          html += '<div class="memosatz">' + liste.length + (liste.length === 1 ? ' Sache' : ' Sachen') + ' ohne Uhrzeit.</div>';
+          html += '<ol class="memoliste ohnenr">' + liste.map(function (e) {
+            return '<li class="mpunkt' + (e.ziel ? ' klickbar' : '') + ' ' + e.art + '" ' + (e.ziel || '') + '>'
+              + '<span class="mtext"><span class="mwas">' + esc(e.text) + '</span>'
+              + (e.unten ? '<span class="mwarum">' + esc(e.unten) + '</span>' : '') + '</span>'
+              + (e.tid ? '<button type="button" class="td-kreis" data-act="td-fertig" data-tid="' + e.tid + '" title="Abhaken">' + TDI.check + '</button>' : '')
+              + '</li>';
+          }).join('') + '</ol>';
         }
       }
-
-      if (assistent.verbunden && (gespraech.length || hoert || denkt)) {
-        html += '<div class="gespraech">'
-          + gespraech.slice(-4).map(function (z) {
-              return '<div class="g-zeile"><b>' + (z.wer === 'ich' ? 'Du' : 'Ich') + '</b>'
-                + '<span class="' + (z.wer === 'ich' ? 'g-ich' : 'g-du') + '">' + esc(z.text) + '</span></div>';
-            }).join('')
-          + (hoert ? '<div class="g-zeile"><b></b><span class="g-du">Ich höre zu …</span></div>' : '')
-          + (denkt ? '<div class="g-zeile"><b></b><span class="g-du">Einen Moment …</span></div>' : '')
-          + '</div>';
-      }
-      if (assistent.verbunden) {
-        html += '<div class="g-feld">'
-          + '<input type="text" id="a-text" placeholder="oder tippen: „Kaminkehrer anrufen, Bertha, morgen“">'
-          + '<button type="button" class="tiny" data-act="assistent-senden">Senden</button></div>';
-      }
-
-      if (naechsteFrist) {
-        html += '<div class="memofrist">Nächste Frist: ' + esc(naechsteFrist.was) + ' · '
-          + esc(String(naechsteFrist.objekt || '').split(',')[0]) + ' · '
-          + esc(naechsteFrist.wann.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }))
-          + '</div>';
-      }
-
-      html += '</div>';
-    })();
-
-    html += '</div><div class="heute-rechts">';
-
-    // ---- Tagesplan: Woche zum Springen, Zeitachse, Aufgaben zum Bearbeiten ----
-    (function () {
-      const heuteIso = heuteISO();
-      if (!kalTag) kalTag = heuteIso;
-      const belegung = kalBelegung();
-      const gewaehlt = new Date(Number(kalTag.slice(0, 4)), Number(kalTag.slice(5, 7)) - 1, Number(kalTag.slice(8, 10)));
-      const tages = kalTagListe(kalTag, belegung);
-      const zeitplan = kalZeitplan(kalTag, belegung);
-
-      // Google-Termine rund um den gewählten Tag holen (läuft im Hintergrund)
-      (function () {
-        const von = new Date(gewaehlt); von.setDate(von.getDate() - 10);
-        const bis = new Date(gewaehlt); bis.setDate(bis.getDate() + 21);
-        gkalNachladen(kalIso(von), kalIso(bis));
-      })();
-
-      html += '<div class="tafel">'
-        + '<div class="kalkopf"><h3>'
-        + (kalTag === heuteIso ? 'Heute · ' : '')
-        + esc(gewaehlt.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' }))
-        + '</h3>'
-        + ((stimme.verbunden || ('speechSynthesis' in window))
-            ? '<button type="button" class="vorlesen' + (sprichQuelle === 'kal' && (memoLaeuft || memoLaedt) ? ' laeuft' : '') + '" data-act="kal-sprechen" title="Den Tag vorlesen">'
-              + '<span class="punkt"></span><span class="wort">'
-              + (sprichQuelle === 'kal' && memoLaedt ? 'Moment …' : (sprichQuelle === 'kal' && memoLaeuft ? 'Stopp' : 'Vorlesen'))
-              + '</span></button>'
-            : '')
-        + '<button type="button" data-act="kal-zurueck" title="Woche zurück">‹</button>'
-        + '<button type="button" data-act="kal-heute">Heute</button>'
-        + '<button type="button" data-act="kal-vor" title="Woche vor">›</button>'
-        + '</div>';
-
-      // --- Wochenstreifen ---
-      const wochenstart = new Date(gewaehlt);
-      wochenstart.setDate(gewaehlt.getDate() - ((gewaehlt.getDay() + 6) % 7));
-      html += '<div class="kalwochenstreifen">';
-      for (let i = 0; i < 7; i++) {
-        const tag = new Date(wochenstart); tag.setDate(wochenstart.getDate() + i);
-        const iso = kalIso(tag);
-        const b = belegung[iso] || { aufgaben: [], termine: [], fristen: [], gtermine: [] };
-        const punkte = [];
-        if (b.aufgaben.length) punkte.push('<span class="kalpunkt' + (iso < heuteIso ? ' spaet' : '') + '"></span>');
-        if (b.termine.length) punkte.push('<span class="kalpunkt termin"></span>');
-        if (b.gtermine.length) punkte.push('<span class="kalpunkt gkal"></span>');
-        if (b.fristen.length) punkte.push('<span class="kalpunkt spaet"></span>');
-        html += '<div class="kaltag' + (iso === heuteIso ? ' heute' : '')
-          + (iso === kalTag ? ' gewaehlt' : '') + (kalSchiebt ? ' ziel' : '')
-          + '" data-act="kal-tag" data-datum="' + iso + '">'
-          + '<span class="wtag">' + esc(tag.toLocaleDateString('de-DE', { weekday: 'short' }).slice(0, 2)) + '</span>'
-          + '<span class="wzahl">' + tag.getDate() + '</span>'
-          + (punkte.length ? '<div class="kalpunkte">' + punkte.slice(0, 3).join('') + '</div>' : '')
-          + '</div>';
-      }
       html += '</div>';
 
-      // --- Ganztägiges: Fristen und Aufgaben ohne Uhrzeit ---
-      const ohneZeit = tages.aufgaben.filter(function (t) { return !t.faelligZeit; });
-      const ganzeGkal = tages.gtermine.filter(function (g) { return g.ganztags; });
-      // Am heutigen Tag gehört auch das Liegengebliebene ins Bild
-      const liegen = kalTag === heuteIso
-        ? (alleAufgaben || []).filter(function (t) { return t.faellig && t.faellig < heuteIso; })
-        : [];
-      const ganzAnzahl = tages.fristen.length + ohneZeit.length + liegen.length + ganzeGkal.length;
-      const ganzRot = (tages.fristen.length + liegen.length) > 0;
-      // Alles ohne Uhrzeit als eine Liste: [Klasse, Attribute, Text]
-      const ganzListe = []
-        .concat(liegen.map(function (t) {
-          return ['spaet', 'data-act="td-oeffnen" data-tid="' + t.id + '"', t.inhalt];
-        }))
-        .concat(tages.fristen.map(function (f) { return ['frist', '', f.was]; }))
-        .concat(ganzeGkal.map(function (g) {
-          return ['gkal', 'data-act="gkal-info" data-id="' + esc(g.id) + '"', g.titel];
-        }))
-        .concat(ohneZeit.map(function (t) {
-          return [kalTag < heuteIso ? 'spaet' : '', 'data-act="td-oeffnen" data-tid="' + t.id + '"', t.inhalt];
-        }));
-      if (ganzAnzahl && ganzAnzahl <= 3) {
-        // Wenige Einträge: als kleine Kästchen, das passt in eine Zeile
-        html += '<div class="ganztags">' + ganzListe.map(function (e) {
-          return '<div class="gpille ' + e[0] + '" ' + e[1] + '><span>' + esc(e[2]) + '</span></div>';
-        }).join('') + '</div>';
-      } else if (ganzAnzahl && !kalGanzAuf) {
-        // Viele Einträge: nur eine schmale Zeile, aufklappbar
-        html += '<div class="ganzzu" data-act="kal-ganz">'
-          + (ganzRot ? '<span class="punktrot"></span>' : '')
-          + '<span>' + ganzAnzahl + ' ohne Uhrzeit'
-          + (liegen.length ? ' · davon ' + liegen.length + ' überfällig' : '')
-          + '</span><span class="ganzmehr">anzeigen</span></div>';
-      } else if (ganzAnzahl) {
-        // Aufgeklappt: eine kompakte Liste, eine Zeile je Eintrag, mit eigenem Rollbalken
-        html += '<div class="ganzliste">' + ganzListe.map(function (e) {
-          return '<div class="gzeile ' + e[0] + '" ' + e[1] + ' title="' + esc(e[2]) + '">'
-            + '<span class="gpunkt"></span><span class="gtext">' + esc(e[2]) + '</span></div>';
-        }).join('') + '</div>'
-          + '<div class="ganzauf" data-act="kal-ganz">einklappen</div>';
-      }
-
-      // --- Zeitachse: alle 24 Stunden, im Rahmen rollbar ---
+      // Rechte Spalte (am Handy darunter): der Zeitplan mit Uhrzeiten
+      html += '<div class="tagzeit"><div class="tagzeit-kopf">Zeitplan</div>';
       // Ohne einen einzigen Eintrag mit Uhrzeit reicht eine Zeile statt eines leeren Rasters.
       if (!zeitplan.length) {
         html += '<div class="kalleer">'
-          + (kalTag === heuteIso ? 'Heute' : 'An diesem Tag')
+          + (istHeute ? 'Heute' : 'An diesem Tag')
           + ' keine Termine mit Uhrzeit.</div>';
       } else (function () {
         const HOEHE = KAL_HOEHE;
         const jetzt = new Date();
-        const istHeute = kalTag === heuteIso;
         const oben = function (minuten) { return minuten / 60 * HOEHE; };
 
         html += '<div class="zeitrahmen"><div class="zeitachse" style="height:' + (24 * HOEHE) + 'px">';
@@ -3777,6 +3731,8 @@
         html += '</div></div>';
       })();
 
+      html += '</div></div>';
+
       // --- darunter nur noch: neue Aufgabe für diesen Tag ---
       if (todoist.verbunden) {
         html += tdNeuHtml('kal:' + kalTag, { faellig: kalTag });
@@ -3786,10 +3742,32 @@
           + '<button class="tiny" data-act="todoist">Verbinden</button></div>';
       }
 
+
+      if (assistent.verbunden && (gespraech.length || hoert || denkt)) {
+        html += '<div class="gespraech">'
+          + gespraech.slice(-4).map(function (z) {
+              return '<div class="g-zeile"><b>' + (z.wer === 'ich' ? 'Du' : 'Ich') + '</b>'
+                + '<span class="' + (z.wer === 'ich' ? 'g-ich' : 'g-du') + '">' + esc(z.text) + '</span></div>';
+            }).join('')
+          + (hoert ? '<div class="g-zeile"><b></b><span class="g-du">Ich höre zu …</span></div>' : '')
+          + (denkt ? '<div class="g-zeile"><b></b><span class="g-du">Einen Moment …</span></div>' : '')
+          + '</div>';
+      }
+      if (assistent.verbunden) {
+        html += '<div class="g-feld">'
+          + '<input type="text" id="a-text" placeholder="oder tippen: „Kaminkehrer anrufen, Bertha, morgen“">'
+          + '<button type="button" class="tiny" data-act="assistent-senden">Senden</button></div>';
+      }
+
+      if (naechsteFrist) {
+        html += '<div class="memofrist">Nächste Frist: ' + esc(naechsteFrist.was) + ' · '
+          + esc(String(naechsteFrist.objekt || '').split(',')[0]) + ' · '
+          + esc(naechsteFrist.wann.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' }))
+          + '</div>';
+      }
+
       html += '</div>';
     })();
-
-    html += '</div></div>';
     } // Heute-Seite
 
     if (ansicht === 'objekte') {
@@ -6504,7 +6482,10 @@
         let ziel = 7 * HOEHE;                                  // sonst: der Morgen
         const erster = rahmen.querySelector('.ztermin');
         if (kalTag === heuteISO()) {
-          ziel = Math.max(0, (new Date().getHours() - 2) * HOEHE);   // heute: die aktuelle Stunde
+          ziel = Math.max(0, (new Date().getHours() - 2) * HOEHE);   // heute: die aktuelle Stunde …
+          // … aber frühere Termine des Tages mit zeigen, solange „jetzt“ noch ins Bild passt
+          const frueh = erster ? Math.max(0, parseFloat(erster.style.top) - HOEHE) : ziel;
+          if (frueh < ziel && ziel - frueh < rahmen.clientHeight - 2 * HOEHE) ziel = frueh;
         } else if (erster) {
           ziel = Math.max(0, parseFloat(erster.style.top) - HOEHE);  // sonst: der erste Termin
         }
@@ -6763,6 +6744,7 @@
       kalTag = kalIso(d); render();
     }
     else if (act === 'kal-heute') { kalTag = heuteISO(); render(); }
+    else if (act === 'memo-alle') { memoAlle = !memoAlle; render(); }
     else if (act === 'kal-ganz') { kalGanzAuf = !kalGanzAuf; render(); }
     else if (act === 'kal-sprechen') { kalVorlesen(); }
     else if (act === 'memo-hoeren') { zuhoeren(); }
