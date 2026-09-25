@@ -404,3 +404,15 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 #app ol.memoliste.ohnenr .mpunkt { padding-left: 2px; }
 #app ol.memoliste .mpunkt.frist .mwas { color: var(--sperr); }
 #app .plankal { margin-top: 14px; padding: 12px 14px; border-radius: 12px; background: var(--fuellung); }
+
+/* Heute links: erst „Heute eingeplant“ (mit Uhrzeit), dann „Noch nicht eingeplant“ */
+#app .tagabschnitt {
+  display: flex; align-items: center; gap: 8px; margin: 14px 0 2px;
+  font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .04em;
+}
+#app .tagabschnitt:first-child { margin-top: 12px; }
+#app .tagabschnitt .anzahl.rot { background: var(--sperr-soft); color: var(--sperr); }
+#app .planliste .muhr { width: 44px; flex: none; font-size: 14px; font-weight: 600; color: var(--messing); margin-top: 1px; }
+#app .planliste .mpunkt.vorbei { opacity: .5; }
+#app .planliste .mpunkt.jetzt .mwas { color: var(--messing); }
+#app .planliste .mpunkt.liegen .muhr { color: var(--sperr); } #app .planliste .mwarum .rot { color: var(--sperr); }

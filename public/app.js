@@ -3630,15 +3630,41 @@
       html += '<div class="tagspalten"><div class="tagliste">';
 
       if (istHeute) {
-        if (!punkte.length) {
-          html += '<div class="memosatz">Nichts Dringendes. Guter Tag zum Aufräumen.</div>';
+        // 1 — was rechts im Zeitplan für heute steht, in der Reihenfolge des Tages
+        const jetztMin = new Date().getHours() * 60 + new Date().getMinutes();
+        const uhr = function (m) { return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); };
+        const geplant = zeitplan.slice().sort(function (x, y) { return x.von - y.von; });
+        html += '<div class="tagabschnitt"><span>Heute eingeplant</span>'
+          + (geplant.length ? '<span class="anzahl">' + geplant.length + '</span>' : '') + '</div>';
+        if (!geplant.length) {
+          html += '<div class="memosatz">Noch nichts mit Uhrzeit — „Tag planen“ legt Aufgaben in die freie Zeit.</div>';
         } else {
-          const ersterTermin = punkte.filter(function (p) { return p.zeit; })[0];
-          html += '<div class="memosatz">' + punkte.length + (punkte.length === 1 ? ' Sache' : ' Sachen')
-            + ' — von oben nach unten abarbeiten'
-            + (ersterTermin ? ', der Termin um ' + esc(ersterTermin.zeit) + ' gibt den Takt vor' : '')
-            + '.</div>';
-          const zeigen = memoAlle ? punkte : punkte.slice(0, 5);
+          html += '<ol class="memoliste planliste">' + geplant.map(function (e) {
+            const vorbei = e.von + (e.dauer || 30) <= jetztMin;
+            const jetzt = !vorbei && e.von <= jetztMin;
+            const ziel = e.tid ? ' data-act="td-oeffnen" data-tid="' + e.tid + '"'
+              : (e.act ? ' data-act="' + e.act + '"' + (e.id ? ' data-id="' + esc(String(e.id)) + '"' : '') : '');
+            // Vorbei, aber nicht abgehakt: nicht verblassen lassen, sondern als offen zeigen
+            const liegen = vorbei && !!e.tid;
+            return '<li class="mpunkt' + (ziel ? ' klickbar' : '') + (vorbei && !liegen ? ' vorbei' : '') + (liegen ? ' liegen' : '') + (jetzt ? ' jetzt' : '') + '"' + ziel + '>'
+              + '<span class="muhr num">' + uhr(e.von) + '</span>'
+              + '<span class="mtext"><span class="mwas">' + esc(e.titel) + '</span>'
+              + '<span class="mwarum">' + (jetzt ? 'läuft gerade · ' : '') + (liegen ? '<span class="rot">Zeit vorbei, noch offen</span> · ' : '') + (e.dauer ? e.dauer + ' Min' : '')
+              + (e.unten ? ' · ' + esc(e.unten) : '') + '</span></span>'
+              + (e.tid ? '<button type="button" class="td-kreis" data-act="td-fertig" data-tid="' + e.tid + '" title="Abhaken">' + TDI.check + '</button>' : '')
+              + '</li>';
+          }).join('') + '</ol>';
+        }
+
+        // 2 — was noch nicht eingeplant ist: Überfälliges, Heutiges ohne Uhrzeit, Fristen, Geld, Anfragen
+        const offen = punkte.filter(function (p) { return !p.zeit; });
+        html += '<div class="tagabschnitt"><span>Noch nicht eingeplant</span>'
+          + (offen.length ? '<span class="anzahl' + (offen.some(function (p) { return p.rot; }) ? ' rot' : '') + '">' + offen.length + '</span>' : '') + '</div>';
+        if (!offen.length) {
+          html += '<div class="memosatz">Alles hat seinen Platz.</div>';
+        } else {
+          html += '<div class="memosatz">Daran ist noch nichts passiert — von oben nach unten.</div>';
+          const zeigen = memoAlle ? offen : offen.slice(0, 5);
           html += '<ol class="memoliste">' + zeigen.map(function (p, i) {
             const ziel = p.tid
               ? ' data-act="td-oeffnen" data-tid="' + p.tid + '"'
@@ -3649,13 +3675,12 @@
               + '<span class="mwas">' + esc(p.was) + '</span>'
               + '<span class="mwarum">' + (p.wo ? esc(p.wo) + ' · ' : '') + esc(p.warum) + '</span>'
               + '</span>'
-              + (p.zeit ? '<span class="mzeit num">' + esc(p.zeit) + '</span>' : '')
               + (p.tid ? '<button type="button" class="td-kreis" data-act="td-fertig" data-tid="' + p.tid + '" title="Abhaken">' + TDI.check + '</button>' : '')
               + '</li>';
           }).join('') + '</ol>';
-          if (punkte.length > 5) {
+          if (offen.length > 5) {
             html += '<button type="button" class="memomehr" data-act="memo-alle">'
-              + (memoAlle ? 'Weniger zeigen' : 'und ' + (punkte.length - 5) + ' weitere zeigen') + '</button>';
+              + (memoAlle ? 'Weniger zeigen' : 'und ' + (offen.length - 5) + ' weitere zeigen') + '</button>';
           }
         }
         // Ganztägige Google-Termine stehen sonst nirgends in der Liste
