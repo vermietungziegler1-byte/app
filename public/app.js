@@ -4310,7 +4310,7 @@
     const alt = rgZahl(f.standAlt), neu = rgZahl(f.standNeu);
     const mitZaehler = !!(alt || neu);
     const manuell = rgZahl(f.menge);
-    const menge = manuell > 0 ? manuell : (mitZaehler ? neu - alt : 0);
+    const menge = manuell > 0 ? manuell : (mitZaehler && neu ? neu - alt : 0);   // ohne neuen Stand noch nichts rechnen
     const preis = rgZahl(f.preis);
     const strom = Math.round(menge * preis) / 100;
     const extra = Math.round(rgZahl(f.extraBetrag) * 100) / 100;
