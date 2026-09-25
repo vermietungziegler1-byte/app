@@ -419,3 +419,6 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 #app .planliste .td-kreis.an { background: var(--messing); border-color: var(--messing); color: #fff; }
 #app .planliste .mpunkt.abgehakt .mwas { text-decoration: line-through; color: var(--muted); }
 #app .planliste .td-kreis.an svg { opacity: 1; color: #fff; }
+/* Heute: der Zeitplan darf fast die ganze Fensterhöhe nutzen */
+#app .tagzeit .zeitrahmen { max-height: max(520px, calc(100vh - 230px)); }
+@media (max-width: 899px) { #app .tagzeit .zeitrahmen { max-height: 70vh; } }
