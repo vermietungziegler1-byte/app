@@ -318,14 +318,22 @@ test('Oberfläche Aufgaben: Filter, Wartet, Verlauf und Ziehen in den Zeitplan',
     await seite.click('.td-fchip[data-wert="Technik"]');
     await seite.waitForSelector('.td-zeile[data-tid="3"]');
 
-    // Wartet setzen: Label dazu, Datum in 3 Tagen
-    await seite.click('.td-zeile[data-tid="3"] [data-act="td-menue"][data-typ="mehr"]');
-    await seite.click('[data-act="td-menue"][data-typ="warten"]');
-    await seite.click('[data-act="td-warten"][data-tage="3"]');
-    await seite.waitForFunction(function () { return /Wartet — nachfassen/.test((document.querySelector('.toast') || {}).textContent || ''); });
+    // Wartet setzen mit einem Tipp (⏳ an der Zeile): Label dazu, Datum in 3 Tagen
+    await seite.click('.td-zeile[data-tid="3"] .td-warteknopf');
+    await seite.waitForFunction(function () { return /Wartet — nachhaken/.test((document.querySelector('.toast') || {}).textContent || ''); });
     const warten = todoist.aenderungen.filter(function (a) { return a.id === '3'; }).pop().koerper;
     assert.deepEqual(warten.labels, ['Wartet-auf-Antwort']);
     assert.ok(warten.due_date > heute);
+
+    // In der Wartet-Liste: „Antwort da“ nimmt das Label weg und schreibt es in den Verlauf
+    await seite.click('.td-seite [data-a="wartet"]');
+    await seite.waitForSelector('.td-nachhaken [data-act="td-warten-ende"][data-tid="2"]');
+    await seite.click('.td-nachhaken [data-act="td-warten-ende"][data-tid="2"]');
+    await seite.waitForFunction(function () { return /Antwort ist da/.test((document.querySelector('.toast') || {}).textContent || ''); });
+    const antwort = todoist.aenderungen.filter(function (a) { return a.id === '2'; }).pop().koerper;
+    assert.deepEqual(antwort.labels, []);
+    assert.match(antwort.description, /Verlauf:\n\d\d\.\d\d\. Antwort erhalten$/);
+    await seite.click('.td-seite [data-a="alle"]');
 
     // Verlauf: Datum kommt automatisch davor
     await seite.click('.td-zeile[data-tid="1"] .td-mitte');
