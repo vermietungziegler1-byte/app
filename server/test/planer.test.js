@@ -137,3 +137,28 @@ test('Einstellungen: Unsinn wird abgefangen', function () {
   assert.equal(e.maxMinuten, 16 * 60);
   assert.deepEqual(e.arbeitstage, [1]);
 });
+
+test('Aufgaben ohne Datum: erst in die freie Zeit von heute, dann auf die nächsten Arbeitstage', function () {
+  const p = planen({ datum: DONNERSTAG, einstellungen: Object.assign({}, E, { maxMinuten: 120 }), aufgaben: [
+    aufgabe('heute', { dauer: 60 }),
+    aufgabe('alt', { faellig: null, dauer: 60, angelegt: '2026-08-01' }),
+    aufgabe('neu', { faellig: null, dauer: 60, angelegt: '2026-09-01' }),
+    aufgabe('wichtig', { faellig: null, dauer: 60, prioritaet: 4, angelegt: '2026-09-20' })
+  ] });
+  // Heute: die fällige Aufgabe, dann die wichtigste ohne Datum; der Rest ab Freitag
+  assert.deepEqual(p.bloecke.map(function (b) { return b.id; }), ['heute', 'wichtig']);
+  assert.ok(p.bloecke[1].ohneDatum);
+  assert.deepEqual(p.eingeplant.map(function (v) { return [v.id, v.nach]; }), [['alt', '2026-09-25'], ['neu', '2026-09-25']]);
+});
+
+test('Ohne Datum bleibt liegen: Unteraufgaben, „wartet auf Antwort“ und wenn es ausgeschaltet ist', function () {
+  const aufgaben = [
+    aufgabe('unter', { faellig: null, eltern: 'x' }),
+    aufgabe('wartet', { faellig: null, labels: ['Wartet-auf-Antwort'] }),
+    aufgabe('frei', { faellig: null })
+  ];
+  let p = planen({ datum: DONNERSTAG, einstellungen: E, aufgaben: aufgaben });
+  assert.deepEqual(p.bloecke.map(function (b) { return b.id; }), ['frei']);
+  p = planen({ datum: DONNERSTAG, einstellungen: Object.assign({}, E, { ohneDatum: false }), aufgaben: aufgaben });
+  assert.equal(p.bloecke.length + p.eingeplant.length, 0);
+});

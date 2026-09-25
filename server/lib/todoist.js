@@ -277,6 +277,8 @@ app.post('/api/todoist/aufgabe/:id/wieder', nurAngemeldet, async function (req, 
 app.post('/api/todoist/aufgabe/:id/erledigt', nurAngemeldet, async function (req, res) {
   try {
     await todoist('/tasks/' + encodeURIComponent(req.params.id) + '/close', { method: 'POST' });
+    // Erledigt: der Block im Kalender „Aufgaben“ wird nicht mehr gebraucht
+    require('./aufgabenkalender').spaeterEntfernen([req.params.id]);
     res.json({ ok: true });
   } catch (e) { res.status(502).json({ fehler: e.message }); }
 });
