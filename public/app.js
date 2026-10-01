@@ -536,7 +536,8 @@
   let swReg = null, pushAbo = null, pushGeraete = null, pushEinst = null, pushFehler = null;
   let absagenOffen = false;
   let mietVersatz = 0;   // 0 = laufender Monat, -1 = Vormonat …
-  let ansicht = 'heute';   // heute | objekte | mieten | interessenten | post
+  let ansicht = 'heute';   // heute | objekte | mieten | interessenten | post | kaufen
+  let kauf = { daten: null, fehler: null, geholt: 0, filter: 'aktiv' };   // Kaufangebote vom Server
   let verstecktOffen = false;
   let rg = null;             // Rechnungen: Absender, gespeicherte Liste, nächste Nummer (vom Server)
   let rgForm = null;         // Entwurf der Rechnung, die gerade bearbeitet wird
@@ -1243,6 +1244,13 @@
   function aufgabeOeffnen(oid, tid) { tdOeffnen(tid); }
   // Was gerade im Fenster steht, vor einem Neuaufbau festhalten
   function modalEntwurfMerken() {
+    if (modal && modal.entwurf && modal.kind.indexOf('kauf') === 0) {
+      // nur aus dem Fenster derselben Art, sonst landen Felder des vorigen Fensters im neuen
+      root.querySelectorAll('.modal[data-fenster="' + modal.kind + '"] [data-kf]').forEach(function (el) {
+        modal.entwurf[el.getAttribute('data-kf')] = el.value;
+      });
+      return;
+    }
     if (!modal || modal.kind !== 'aufgabe') return;
     const i = root.querySelector('#t-inhalt');
     if (!i) return;
@@ -3630,7 +3638,7 @@
 
     html += '<div class="seitennav">'
       + [['heute', 'Heute'], ['aufgaben', 'Aufgaben'], ['objekte', 'Objekte'], ['mieten', 'Mieten'],
-         ['interessenten', 'Interessenten'], ['post', 'Post'], ['rechnungen', 'Abrechnungen']].map(function (t) {
+         ['interessenten', 'Interessenten'], ['post', 'Post'], ['rechnungen', 'Abrechnungen'], ['kaufen', 'Kaufen']].map(function (t) {
           return '<button class="' + (ansicht === t[0] ? 'aktiv' : '') + '" data-act="zu-' + t[0] + '">' + t[1] + '</button>';
         }).join('')
       + '</div>';
@@ -3653,6 +3661,7 @@
             ? '<div class="sl-gruppe"><span>Weitere Bereiche</span>'
               + eintrag('zu-interessenten', 'Interessenten')
               + eintrag('zu-rechnungen', 'Abrechnungen')
+              + eintrag('zu-kaufen', 'Kaufen')
               + '</div>'
             : '')
 
@@ -3732,6 +3741,11 @@
           + '<div class="modal-actions" style="justify-content:flex-start;margin-top:10px">'
           + '<button class="tiny" data-act="google">Verbinden</button></div></div>';
       }
+    }
+
+    // ---- Eigene Seite: Kaufen ----
+    if (ansicht === 'kaufen') {
+      html += kaufenAbschnitt();
     }
 
     // ---- Eigene Seite: Rechnungen ----
@@ -4522,6 +4536,418 @@
       }
       html += '</div>';
     return html;
+  }
+
+  // ---------------------------------------------------------------
+  //  Kaufen — Angebote aus den ImmoScout-Suchaufträgen im Postfach,
+  //  durchgerechnet und nach Punkten sortiert (Rechnung: kaufrechner.js)
+  // ---------------------------------------------------------------
+  const KAUF_URTEIL = { gut: 'Lohnt sich', mittel: 'Genauer prüfen', schwach: 'Eher nicht', unvollstaendig: 'Angaben fehlen' };
+  const KAUF_ANNAHMEN = [
+    ['Finanzierung', [
+      ['ekProzent', 'Eigenkapital', '% vom Kaufpreis', 'Die Kaufnebenkosten kommen zusätzlich aus eigener Tasche'],
+      ['zins', 'Sollzins', '% pro Jahr'],
+      ['tilgung', 'Tilgung', '% pro Jahr', 'Tilgung ist Vermögensaufbau — im Überschuss ist sie schon abgezogen']]],
+    ['Kaufnebenkosten', [
+      ['grunderwerbsteuer', 'Grunderwerbsteuer', '%', 'Baden-Württemberg: 5 %'],
+      ['notar', 'Notar und Grundbuch', '%'],
+      ['makler', 'Makler', '%', 'Pro Angebot auf 0 setzbar, wenn provisionsfrei']]],
+    ['Laufende Kosten', [
+      ['instandhaltung', 'Instandhaltung', '€ pro m² und Jahr', 'Gilt nur, solange kein Hausgeld eingetragen ist'],
+      ['verwaltung', 'Hausverwaltung', '€ im Monat je Wohnung'],
+      ['mietausfall', 'Mietausfall', '% der Jahresmiete']]],
+    ['Miete', [
+      ['abschlag', 'Abschlag auf die Angebotsmiete', '%', 'Angebote liegen meist über dem, was nach Mietspiegel und Mietpreisbremse erlaubt ist'],
+      ['mieteProQm', 'Miete, wenn nichts bekannt ist', '€ pro m²', 'Nur falls die Suchaufträge zu wenig Mietangebote liefern']]],
+    ['Steuer', [
+      ['gebaeudeanteil', 'Gebäudeanteil am Kaufpreis', '%'],
+      ['afa', 'Abschreibung', '% pro Jahr', '2 % für Baujahre ab 1925, 2,5 % davor, 3 % für Neubauten ab 2023'],
+      ['steuersatz', 'Persönlicher Steuersatz', '%']]],
+    ['Mitteilung', [
+      ['meldenAb', 'Aufs Handy ab', 'Punkten', 'Neue Angebote mit so vielen Punkten melden sich sofort']]]
+  ];
+
+  function kEuro(v) { return v == null || !isFinite(v) ? '—' : Math.round(v).toLocaleString('de-DE') + ' €'; }
+  function kVz(v) { return (Math.round(v) > 0 ? '+' : '') + kEuro(v); }
+  function kZahl(v, st) {
+    return v == null || !isFinite(v) ? '—'
+      : Number(v).toLocaleString('de-DE', { minimumFractionDigits: st, maximumFractionDigits: st });
+  }
+  function kProz(v) { return v == null || !isFinite(v) ? '—' : kZahl(v, 1) + ' %'; }
+  function kFeld(v) { return v === '' || v == null ? '' : String(v).replace('.', ','); }
+
+  async function kaufLaden(neu) {
+    try {
+      kauf.daten = await api('kaufen' + (neu ? '?neu=1' : ''));
+      kauf.fehler = null;
+      kauf.geholt = Date.now();
+    } catch (e) { kauf.fehler = e.message; }
+  }
+  function kaufAngebot(id) {
+    return kauf.daten ? kauf.daten.angebote.find(function (a) { return a.id === id; }) : null;
+  }
+  function kaufRechnen(a) {
+    const d = kauf.daten;
+    return window.Kaufrechner.bewerten(a, d.annahmen, d.miete, d.angebote);
+  }
+  function kaufErsetzen(neu) {
+    const liste = kauf.daten.angebote;
+    const i = liste.findIndex(function (a) { return a.id === neu.id; });
+    if (i === -1) liste.unshift(neu); else liste[i] = neu;
+  }
+
+  // Was die eigenen vermieteten Wohnungen kalt pro m² bringen — als Anhaltspunkt
+  function eigeneMieteProQm() {
+    const werte = allUnits().filter(function (t) {
+      return t.u.status === 'vermietet' && t.u.type === 'Wohnung' && n(t.u.area) > 10 && n(t.u.rent) > 0;
+    }).map(function (t) { return n(t.u.rent) / n(t.u.area); });
+    return werte.length ? { proQm: window.Kaufrechner.median(werte), anzahl: werte.length } : null;
+  }
+
+  function kaufenAbschnitt() {
+    const d = kauf.daten;
+    if (!d) {
+      // Direkt geöffnet (z. B. aus der Mitteilung): Daten nachholen
+      if (!kauf.laedt && !kauf.fehler) {
+        kauf.laedt = true;
+        kaufLaden().then(function () { kauf.laedt = false; if (ansicht === 'kaufen') render(); });
+      }
+      return '<div class="tafel"><h3>Kaufen</h3><div class="unit-type">'
+        + (kauf.fehler ? esc(kauf.fehler) : 'Angebote werden geladen …') + '</div></div>';
+    }
+    const K = window.Kaufrechner;
+    const p = d.annahmen;
+    const alle = d.angebote.map(function (a) { return { a: a, r: kaufRechnen(a) }; });
+    const imFilter = function (x, f) { return f === 'aktiv' ? x.a.status !== 'verworfen' : x.a.status === f; };
+    const passt = function (x) {
+      if (!query) return true;
+      return [x.a.titel, x.a.ort, x.a.adresse, x.a.notiz].join(' ').toLowerCase().indexOf(query.toLowerCase()) !== -1;
+    };
+    const sichtbar = alle.filter(function (x) { return imFilter(x, kauf.filter) && passt(x); }).sort(function (x, y) {
+      const px = x.r.punkte == null ? -1 : x.r.punkte, py = y.r.punkte == null ? -1 : y.r.punkte;
+      return py - px || y.a.gefunden - x.a.gefunden;
+    });
+
+    // Marktmiete der häufigsten Orte
+    const zaehler = {};
+    d.miete.forEach(function (m) { if (m.ort) zaehler[m.ort] = (zaehler[m.ort] || 0) + 1; });
+    const orte = Object.keys(zaehler).sort(function (x, y) { return zaehler[y] - zaehler[x]; }).slice(0, 4)
+      .map(function (o) { return K.marktmiete(d.miete, o); })
+      .filter(function (m) { return m && m.ort; });
+
+    let html = '<div class="tafel kauf-kopf"><h3>Kaufen'
+      + (alle.filter(function (x) { return x.a.status === 'neu'; }).length
+          ? '<span class="anzahl">' + alle.filter(function (x) { return x.a.status === 'neu'; }).length + ' neu</span>' : '')
+      + '<span class="zeitraum">'
+      + '<button class="tiny ghost" data-act="kauf-neu">+ Eintragen</button>'
+      + '<button class="tiny ghost" data-act="kauf-annahmen">Annahmen</button>'
+      + (d.verbunden ? '<button class="tiny ghost" data-act="kauf-abrufen">Abrufen</button>' : '')
+      + '</span></h3>'
+      + '<div class="kauf-info"><b>Finanzierung</b> ' + kZahl(p.ekProzent, 0) + ' % Eigenkapital plus Nebenkosten · '
+      + kProz(p.zins) + ' Zins · ' + kProz(p.tilgung) + ' Tilgung · Steuersatz ' + kZahl(p.steuersatz, 0) + ' %</div>'
+      + '<div class="kauf-info"><b>Marktmiete</b> '
+      + (orte.length
+          ? orte.map(function (m) { return esc(m.ort) + ' ' + kZahl(m.proQm, 2) + ' €/m²'; }).join(' · ')
+            + ' — aus ' + d.miete.length + ' Mietangeboten, gerechnet wird mit ' + kZahl(p.abschlag, 0) + ' % weniger'
+          : 'noch zu wenig Mietangebote — gerechnet wird mit ' + kZahl(p.mieteProQm, 2) + ' €/m². '
+            + 'Ein Suchauftrag für Mietwohnungen im selben Ort macht das genauer.')
+      + '</div>'
+      + '<div class="poststand">'
+      + (!d.verbunden ? 'Das Postfach ist nicht verbunden — Angebote kommen erst, wenn es unter Menü → Postfach verbunden ist.'
+          : d.fehler ? 'Postfach: ' + esc(d.fehler)
+            : d.abgleich ? 'Postfach abgeglichen um ' + new Date(d.abgleich).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })
+              + ' · danach alle 30 Minuten von selbst' : '')
+      + '</div>'
+      + '<div class="rg-tabs kauf-filter">'
+      + [['aktiv', 'Beste zuerst'], ['gemerkt', 'Gemerkt'], ['verworfen', 'Verworfen']].map(function (t) {
+          const anzahl = alle.filter(function (x) { return imFilter(x, t[0]); }).length;
+          return '<button data-act="kauf-filter" data-f="' + t[0] + '" class="' + (kauf.filter === t[0] ? 'aktiv' : '') + '">'
+            + t[1] + (anzahl ? ' <span class="anzahl">' + anzahl + '</span>' : '') + '</button>';
+        }).join('')
+      + '</div></div>';
+
+    if (!alle.length) {
+      html += '<div class="tafel"><h3>So kommen Angebote hierher</h3>'
+        + '<div class="kauf-schritte">'
+        + '<div><b>1.</b> Bei ImmoScout24 einen Suchauftrag anlegen: „Wohnung kaufen" oder „Haus kaufen", Ort und Preisrahmen wählen, '
+        + 'Benachrichtigung per E-Mail an ' + esc(google.adresse || 'das verbundene Postfach') + '.</div>'
+        + '<div><b>2.</b> Jede neue Mail liest die App von selbst, rechnet jedes Angebot durch und sortiert die besten nach oben. '
+        + 'Richtig gute melden sich sofort aufs Handy.</div>'
+        + '<div><b>3.</b> Mietsuchaufträge im selben Ort laufen lassen — daraus kommt die Marktmiete für die Rechnung.</div>'
+        + '</div>'
+        + '<div class="modal-actions" style="justify-content:flex-start">'
+        + '<a class="kauf-link" href="https://www.immobilienscout24.de/" target="_blank" rel="noopener">ImmoScout24 öffnen</a>'
+        + '<button class="tiny ghost" data-act="kauf-neu">Angebot selbst eintragen</button>'
+        + '</div></div>';
+      return html;
+    }
+
+    html += '<div class="tafel kauf-liste">';
+    if (!sichtbar.length) {
+      html += '<div class="unit-type">' + (query ? 'Keine Treffer für die Suche.'
+        : kauf.filter === 'gemerkt' ? 'Noch nichts gemerkt.' : kauf.filter === 'verworfen' ? 'Nichts verworfen.' : 'Alles verworfen.') + '</div>';
+    }
+    sichtbar.forEach(function (x) {
+      const a = x.a, r = x.r;
+      const meta = [a.ort, a.typ === 'haus' ? 'Haus' : 'Wohnung',
+        a.zimmer ? kZahl(a.zimmer, a.zimmer % 1 ? 1 : 0) + ' Zi.' : '',
+        a.flaeche ? kZahl(a.flaeche, 0) + ' m²' : '',
+        a.preis ? kEuro(a.preis) + (r.preisQm ? ' (' + kEuro(r.preisQm) + '/m²)' : '') : ''].filter(Boolean).join(' · ');
+      html += '<div class="kauf-karte klickbar k-' + r.urteil + '" data-act="kauf-oeffnen" data-id="' + esc(a.id) + '">'
+        + '<div class="kauf-punkte">' + (r.punkte == null ? '?' : r.punkte) + '<small>Punkte</small></div>'
+        + '<div class="fgrow">'
+        + '<div class="kauf-titel">' + esc(a.titel || 'Ohne Titel')
+        + (a.status === 'neu' ? ' <span class="anzahl">neu</span>' : '')
+        + (a.status === 'gemerkt' ? ' <span class="anzahl">gemerkt</span>' : '') + '</div>'
+        + '<div class="fobj">' + esc(meta) + '</div>'
+        + (r.vollstaendig
+            ? '<div class="kauf-zahlen">'
+              + '<span><b>' + kProz(r.brutto) + '</b> Rendite</span>'
+              + '<span><b>' + kZahl(r.faktor, 1) + '</b> Faktor</span>'
+              + '<span class="' + (r.cashflowNachSteuer < 0 ? 'neg' : 'pos') + '"><b>' + kVz(r.cashflowNachSteuer) + '</b> im Monat</span>'
+              + (r.zielpreis ? '<span>gut bis <b>' + kEuro(r.zielpreis) + '</b></span>' : '')
+              + '</div>'
+            : '<div class="kauf-zahlen neg">Es fehlt: ' + esc(r.fehlt.join(', ')) + ' — antippen und ergänzen</div>')
+        + '</div>'
+        + '<div class="kauf-urteil">' + KAUF_URTEIL[r.urteil] + '</div>'
+        + '</div>';
+    });
+    html += '</div>';
+    return html;
+  }
+
+  // Das Angebot so, wie es im Fenster gerade eingetragen ist
+  function kaufFormAngebot() {
+    const K = window.Kaufrechner;
+    const a = kaufAngebot(modal.id);
+    const e = modal.entwurf;
+    const z = Object.assign({}, a.original, { id: a.id, ort: a.ort, titel: a.titel, typ: a.typ });
+    ['preis', 'flaeche', 'miete', 'hausgeld', 'renovierung', 'makler'].forEach(function (k) {
+      if (e[k] === '' || e[k] == null) return;
+      const w = K.zahl(e[k]);
+      if (w !== null) z[k] = w;
+    });
+    if (e.typ) z.typ = e.typ;
+    return z;
+  }
+
+  function kaufRechnungHtml(a) {
+    const r = kaufRechnen(a);
+    const p = kauf.daten.annahmen;
+    if (!r.vollstaendig) {
+      return '<div class="hintbox">Zum Rechnen fehlt: ' + esc(r.fehlt.join(', ')) + '. Oben eintragen — die Rechnung erscheint sofort.</div>';
+    }
+    const zeile = function (l, v, klasse) {
+      return '<div class="kz' + (klasse ? ' ' + klasse : '') + '"><span>' + l + '</span><span class="betrag">' + v + '</span></div>';
+    };
+    const mm = r.marktmiete;
+    const mieteHer = r.mieteGeschaetzt
+      ? 'geschätzt: ' + kZahl(a.flaeche, 0) + ' m² × ' + kZahl(r.mieteProQm, 2) + ' €/m²'
+      : 'eingetragen';
+    let html = '<div class="kauf-urteilbox k-' + r.urteil + '">'
+      + '<div class="kauf-punkte">' + r.punkte + '<small>Punkte</small></div>'
+      + '<div><b>' + KAUF_URTEIL[r.urteil] + '</b>'
+      + '<div class="fobj">Rendite ' + r.teile.rendite + ' von 45 · Überschuss ' + r.teile.cashflow + ' von 35 · Preis '
+      + r.teile.preis + ' von 20</div></div></div>';
+    if (r.zielpreis && a.preis) {
+      html += '<div class="hintbox">Ein gutes Angebot (ab 70 Punkten) wäre es bis etwa <b>' + kEuro(r.zielpreis) + '</b> — '
+        + kEuro(a.preis - r.zielpreis) + ' (' + kZahl((a.preis - r.zielpreis) / a.preis * 100, 0) + ' %) unter dem Preis. '
+        + 'Das ist die Grenze für die Verhandlung.</div>';
+    }
+    html += '<div class="kauf-tabelle"><div class="kauf-spalte">'
+      + '<strong>Kauf</strong>'
+      + zeile('Kaufpreis', kEuro(a.preis))
+      + zeile('Nebenkosten (' + kZahl(r.nebenkostenProzent, 2) + ' %)', kEuro(r.nebenkosten))
+      + (r.renovierung ? zeile('Renovierung', kEuro(r.renovierung)) : '')
+      + zeile('Gesamt', kEuro(r.gesamt), 'summe')
+      + '<strong>Finanzierung</strong>'
+      + zeile('Eigenkapital', kEuro(r.eigenkapital))
+      + zeile('Darlehen', kEuro(r.darlehen))
+      + zeile('Rate (' + kProz(p.zins) + ' + ' + kProz(p.tilgung) + ')', kEuro(r.rate) + ' / Monat')
+      + '<strong>Kennzahlen</strong>'
+      + zeile('Bruttomietrendite', kProz(r.brutto))
+      + zeile('Nettomietrendite', kProz(r.netto))
+      + zeile('Kaufpreisfaktor', kZahl(r.faktor, 1))
+      + (r.preisQm ? zeile('Preis pro m²', kEuro(r.preisQm) + (r.marktPreisQm ? ' <small>Ort Ø ' + kEuro(r.marktPreisQm) + '</small>' : '')) : '')
+      + zeile('Eigenkapitalrendite', kProz(r.ekRendite))
+      + '</div><div class="kauf-spalte">'
+      + '<strong>Jeden Monat</strong>'
+      + zeile('Kaltmiete <small>' + mieteHer + '</small>', kEuro(r.miete))
+      + zeile('Laufende Kosten <small>' + (r.hausgeldBekannt ? 'Hausgeld' : 'Instandhaltung' + (a.typ === 'haus' ? '' : ', Verwaltung'))
+          + ', Mietausfall</small>', kVz(-r.bewirtschaftung / 12))
+      + zeile('Zins', kVz(-r.zinsJahr / 12))
+      + zeile('Tilgung', kVz(-r.tilgungJahr / 12))
+      + zeile('Überschuss vor Steuer', kVz(r.cashflow), 'summe')
+      + zeile(r.steuerJahr < 0 ? 'Steuererstattung <small>Abschreibung ' + kEuro(r.afaJahr) + ' im Jahr</small>' : 'Steuer',
+          kVz(-r.steuerJahr / 12))
+      + zeile('Überschuss nach Steuer', kVz(r.cashflowNachSteuer), 'summe ' + (r.cashflowNachSteuer < 0 ? 'neg' : 'pos'))
+      + '</div></div>'
+      + '<div class="rg-hinweis">'
+      + (r.mieteGeschaetzt
+          ? (mm ? 'Die Miete kommt aus ' + mm.anzahl + ' Mietangeboten' + (mm.ort ? ' in ' + esc(mm.ort) : ' aller Orte')
+              + ' (Mitte ' + kZahl(mm.proQm, 2) + ' €/m²), davon ' + kZahl(p.abschlag, 0) + ' % abgezogen. '
+            : 'Für die Miete gibt es noch keine Mietangebote — gerechnet mit ' + kZahl(p.mieteProQm, 2) + ' €/m² aus den Annahmen. ')
+            + 'Ist die Wohnung vermietet, die echte Miete eintragen. '
+          : '')
+      + 'Die Tilgung zahlt den Kredit ab und bleibt dein Vermögen. Alles ohne Gewähr — vor dem Kauf Unterlagen, Rücklage und Teilungserklärung prüfen.'
+      + '</div>';
+    return html;
+  }
+
+  function kaufFenster() {
+    const K = window.Kaufrechner;
+    const e = modal.entwurf;
+    const eingabe = function (k, platzhalter, art) {
+      return '<input type="text" inputmode="' + (art || 'decimal') + '" data-kf="' + k + '" value="' + esc(e[k] == null ? '' : e[k])
+        + '" placeholder="' + esc(platzhalter || '') + '">';
+    };
+    if (modal.kind === 'kauf') {
+      const a = kaufAngebot(modal.id);
+      if (!a) return '<div class="unit-type">Dieses Angebot gibt es nicht mehr.</div>';
+      const o = a.original || {};
+      const r = kaufRechnen(kaufFormAngebot());
+      return '<h2>' + esc(a.titel || 'Angebot') + '</h2>'
+        + '<div class="hint">' + esc([a.adresse || a.ort, a.quelle, a.gefunden ? 'seit ' + new Date(a.gefunden).toLocaleDateString('de-DE') : '']
+            .filter(Boolean).join(' · '))
+        + (a.url ? ' · <a href="' + esc(a.url) + '" target="_blank" rel="noopener">Exposé öffnen</a>' : '')
+        + (o.merkmale ? '<br>' + esc(o.merkmale) : '') + '</div>'
+        + '<div class="kauf-felder">'
+        + f('Kaufpreis €', eingabe('preis', o.preis ? kFeld(o.preis) : 'fehlt'))
+        + f('Wohnfläche m²', eingabe('flaeche', o.flaeche ? kFeld(o.flaeche) : 'fehlt'))
+        + f('Miete kalt / Monat', eingabe('miete', r.vollstaendig && r.mieteGeschaetzt ? 'geschätzt ' + Math.round(r.miete) : 'falls vermietet'))
+        + f('Hausgeld nicht umlagefähig', eingabe('hausgeld', 'aus dem Exposé'))
+        + f('Renovierung €', eingabe('renovierung', '0'))
+        + f('Makler %', eingabe('makler', kFeld(kauf.daten.annahmen.makler) + ' · 0 = provisionsfrei'))
+        + f('Art', '<select data-kf="typ">' + [['', a.typ === 'haus' ? 'Haus' : 'Wohnung'], ['wohnung', 'Wohnung'], ['haus', 'Haus']]
+            .map(function (t) { return '<option value="' + t[0] + '"' + ((e.typ || '') === t[0] ? ' selected' : '') + '>' + t[1] + '</option>'; }).join('')
+          + '</select>')
+        + '</div>'
+        + '<div id="kauf-rechnung">' + kaufRechnungHtml(kaufFormAngebot()) + '</div>'
+        + f('Notiz', '<textarea data-kf="notiz" rows="2" placeholder="Besichtigung, Rückfragen, Eindruck">' + esc(e.notiz || '') + '</textarea>')
+        + '<div class="modal-actions">'
+        + (a.status === 'verworfen'
+            ? '<button data-act="kauf-status" data-st="neu">Wieder aufnehmen</button>'
+            : '<button data-act="kauf-status" data-st="verworfen">Verwerfen</button>')
+        + (a.id.indexOf('eigen:') === 0 ? '<button class="danger" data-act="kauf-loeschen">Löschen</button>' : '')
+        + '<div class="spacer"></div><button data-act="close">Schließen</button>'
+        + (a.status === 'gemerkt'
+            ? '<button class="primary" data-act="kauf-speichern">Speichern</button>'
+            : '<button class="primary" data-act="kauf-status" data-st="gemerkt">Merken</button>')
+        + '</div>';
+    }
+    if (modal.kind === 'kauf-neu') {
+      return '<h2>Angebot eintragen</h2>'
+        + '<div class="hint">Für Angebote, die nicht über einen Suchauftrag kommen — vom Makler, aus der Zeitung, von Bekannten.</div>'
+        + f('Text aus dem Exposé', '<textarea data-kf="text" rows="4" placeholder="Einfach den Text der Anzeige hier einfügen — Kaufpreis, Wohnfläche, Zimmer, Hausgeld werden herausgelesen. Oder unten von Hand eintragen."></textarea>')
+        + '<div class="divider"></div>'
+        + f('Titel', eingabe('titel', 'z. B. 3-Zimmer-Wohnung mit Balkon', 'text'))
+        + '<div class="two">' + f('Ort', eingabe('ort', 'Waiblingen', 'text'))
+        + f('Art', '<select data-kf="typ"><option value="wohnung"' + (e.typ === 'haus' ? '' : ' selected') + '>Wohnung</option>'
+            + '<option value="haus"' + (e.typ === 'haus' ? ' selected' : '') + '>Haus</option></select>') + '</div>'
+        + '<div class="two">' + f('Kaufpreis €', eingabe('preis', '289000')) + f('Wohnfläche m²', eingabe('flaeche', '72')) + '</div>'
+        + '<div class="two">' + f('Zimmer', eingabe('zimmer', '3')) + f('Miete kalt / Monat', eingabe('miete', 'falls vermietet')) + '</div>'
+        + '<div class="two">' + f('Hausgeld nicht umlagefähig', eingabe('hausgeld', '')) + f('Makler %', eingabe('makler', 'leer = Standard, 0 = frei')) + '</div>'
+        + f('Link', eingabe('url', 'https://…', 'url'))
+        + '<div class="modal-actions"><div class="spacer"></div><button data-act="close">Abbrechen</button>'
+        + '<button class="primary" data-act="kauf-neu-speichern">Durchrechnen</button></div>';
+    }
+    // Annahmen
+    const d = kauf.daten;
+    const eigene = eigeneMieteProQm();
+    return '<h2>Annahmen für die Rechnung</h2>'
+      + '<div class="hint">Gilt für alle Angebote. Leer lassen heißt: Standardwert.</div>'
+      + (eigene ? '<div class="hintbox">Deine vermieteten Wohnungen bringen im Mittel ' + kZahl(eigene.proQm, 2) + ' €/m² kalt ('
+          + eigene.anzahl + ' Wohnungen).</div>' : '')
+      + KAUF_ANNAHMEN.map(function (g) {
+          return '<div class="kauf-gruppe"><strong>' + g[0] + '</strong><div class="two">'
+            + g[1].map(function (z) {
+                return f(z[1] + ' <small>' + z[2] + '</small>',
+                  '<input type="text" inputmode="decimal" data-kf="' + z[0] + '" value="' + esc(e[z[0]] == null ? '' : e[z[0]])
+                    + '" placeholder="' + kFeld(d.standard[z[0]]) + '">'
+                  + (z[3] ? '<div class="kauf-erkl">' + z[3] + '</div>' : ''));
+              }).join('')
+            + '</div></div>';
+        }).join('')
+      + '<div class="modal-actions"><button data-act="kauf-annahmen-standard">Alles auf Standard</button>'
+      + '<div class="spacer"></div><button data-act="close">Abbrechen</button>'
+      + '<button class="primary" data-act="kauf-annahmen-speichern">Speichern</button></div>';
+  }
+
+  // Im Fenster rechnet alles sofort mit, ohne das Fenster neu aufzubauen
+  function kaufBinden() {
+    if (!modal || modal.kind !== 'kauf') return;
+    root.querySelectorAll('[data-kf]').forEach(function (el) {
+      const los = function () {
+        modal.entwurf[el.getAttribute('data-kf')] = el.value;
+        const ziel = root.querySelector('#kauf-rechnung');
+        if (ziel && kaufAngebot(modal.id)) ziel.innerHTML = kaufRechnungHtml(kaufFormAngebot());
+      };
+      el.addEventListener('input', los);
+      el.addEventListener('change', los);
+    });
+  }
+
+  async function kaufKlick(act, el) {
+    try {
+      if (act === 'kauf-filter') { kauf.filter = el.getAttribute('data-f'); render(); }
+      else if (act === 'kauf-abrufen') {
+        const vorher = kauf.daten ? kauf.daten.angebote.length : 0;
+        await kaufLaden(true);
+        const neu = kauf.daten ? kauf.daten.angebote.length - vorher : 0;
+        toast(kauf.fehler || (kauf.daten && kauf.daten.fehler) || (neu > 0 ? neu + (neu === 1 ? ' neues Angebot' : ' neue Angebote') : 'Nichts Neues'));
+        render();
+      }
+      else if (act === 'kauf-oeffnen') {
+        const a = kaufAngebot(el.getAttribute('data-id'));
+        if (!a) return;
+        const entwurf = {};
+        Object.keys(a.eigenes || {}).forEach(function (k) { entwurf[k] = k === 'notiz' || k === 'typ' ? a.eigenes[k] : kFeld(a.eigenes[k]); });
+        modal = { kind: 'kauf', id: a.id, entwurf: entwurf };
+        render();
+      }
+      else if (act === 'kauf-status' || act === 'kauf-speichern') {
+        modalEntwurfMerken();
+        const koerper = { eigenes: modal.entwurf };
+        if (act === 'kauf-status') koerper.status = el.getAttribute('data-st');
+        const a = await api('kaufen/angebote/' + encodeURIComponent(modal.id), { method: 'PUT', body: koerper });
+        kaufErsetzen(a.angebot);
+        modal = null;
+        toast(koerper.status === 'verworfen' ? 'Verworfen' : koerper.status === 'gemerkt' ? 'Gemerkt' : 'Gespeichert');
+        render();
+      }
+      else if (act === 'kauf-loeschen') {
+        await api('kaufen/angebote/' + encodeURIComponent(modal.id), { method: 'DELETE' });
+        kauf.daten.angebote = kauf.daten.angebote.filter(function (a) { return a.id !== modal.id; });
+        modal = null; toast('Gelöscht'); render();
+      }
+      else if (act === 'kauf-neu') { modal = { kind: 'kauf-neu', entwurf: { typ: 'wohnung' } }; render(); }
+      else if (act === 'kauf-neu-speichern') {
+        modalEntwurfMerken();
+        const a = await api('kaufen/angebote', { method: 'POST', body: modal.entwurf });
+        if (!kauf.daten) await kaufLaden(); else kaufErsetzen(a.angebot);
+        ansicht = 'kaufen';
+        modal = null;
+        await kaufKlick('kauf-oeffnen', { getAttribute: function () { return a.angebot.id; } });
+      }
+      else if (act === 'kauf-annahmen') {
+        if (!kauf.daten) await kaufLaden();
+        if (!kauf.daten) { toast(kauf.fehler || 'Nicht erreichbar'); return; }
+        const entwurf = {};
+        const d = kauf.daten;
+        Object.keys(d.standard).forEach(function (k) { if (d.annahmen[k] !== d.standard[k]) entwurf[k] = kFeld(d.annahmen[k]); });
+        modal = { kind: 'kauf-annahmen', entwurf: entwurf };
+        render();
+      }
+      else if (act === 'kauf-annahmen-speichern' || act === 'kauf-annahmen-standard') {
+        modalEntwurfMerken();
+        const r = await api('kaufen/annahmen', { method: 'PUT',
+          body: { annahmen: act === 'kauf-annahmen-standard' ? {} : modal.entwurf } });
+        kauf.daten.annahmen = r.annahmen;
+        modal = null;
+        toast('Neu gerechnet');
+        render();
+      }
+    } catch (fehler) { toast(fehler.message); }
   }
 
   // ---------------------------------------------------------------
@@ -5762,6 +6188,8 @@
         + (modal.isNew ? '' : '<button class="danger" data-act="delete-unit">Löschen</button>')
         + '<div class="spacer"></div><button data-act="close">Abbrechen</button>'
         + '<button class="primary" data-act="save-unit">Speichern</button></div>';
+    } else if (modal.kind === 'kauf' || modal.kind === 'kauf-neu' || modal.kind === 'kauf-annahmen') {
+      body = kaufFenster();
     } else if (modal.kind === 'interessent') {
       const inter = modal.i;
       const auswahl = [['', '— noch offen —']].concat(
@@ -6716,7 +7144,7 @@
         + '<button class="primary" data-act="save-object">Speichern</button></div>';
     }
     const breit = (modal.kind === 'strom' || modal.kind === 'konto' || modal.kind === 'wartung'
-      || modal.kind === 'nk' || modal.kind === 'auszug') ? ' breit'
+      || modal.kind === 'nk' || modal.kind === 'auszug' || modal.kind === 'kauf') ? ' breit'
       : (modal.kind === 'aufgabe' ? ' mittel' : '');
 
     const titel = {
@@ -6724,7 +7152,8 @@
       wartung: 'Prüfungen', aufgabe: 'Aufgabe', todoist: 'Todoist', zugaenge: 'Zugänge',
       sicherung: 'Daten sichern', serversicherung: 'Server-Sicherung', plan: 'Tagesplan', planeinst: 'Tagesplan', staende: 'Verlauf', menue: 'Menü', google: 'Postfach',
       schreiben: 'Schreiben', nk: 'Betriebskosten', auszug: 'Kontoauszug', beleg: 'Beleg ablegen',
-      schnell: 'Aufgabe hinzufügen', suche: 'Suchen', absender: 'Einstellungen'
+      schnell: 'Aufgabe hinzufügen', suche: 'Suchen', absender: 'Einstellungen',
+      kauf: 'Durchgerechnet', 'kauf-neu': 'Angebot eintragen', 'kauf-annahmen': 'Annahmen'
     }[modal.kind] || '';
 
 
@@ -6790,6 +7219,7 @@
       });
     });
     rgBinden();
+    kaufBinden();
     nkBinden();
     stammBinden();
     sucheBinden();
@@ -7237,6 +7667,15 @@
     else if (act === 'zu-mieten') {
       ansicht = 'mieten'; render(); window.scrollTo(0, 0);
     }
+    else if (act === 'zu-kaufen') {
+      ansicht = 'kaufen';
+      if (!kauf.daten) kauf.fehler = null;   // ohne Daten lädt die Seite selbst nach, auch nach einem Fehler
+      render(); window.scrollTo(0, 0);
+      if (kauf.daten && Date.now() - kauf.geholt > 5 * 60 * 1000) {
+        kaufLaden().then(function () { if (ansicht === 'kaufen') render(); });
+      }
+    }
+    else if (act.indexOf('kauf-') === 0) { kaufKlick(act, el); }
     else if (act === 'zu-interessenten') {
       ansicht = 'interessenten'; render(); window.scrollTo(0, 0);
     }
@@ -8094,6 +8533,7 @@
       }
       if (todoist.verbunden) { await alleLaden(); await planLaden(); }
       if (ansicht === 'post' && google.verbunden) await postLaden();
+      if (ansicht === 'kaufen') await kaufLaden();
       zuletztAufgefrischt = Date.now();
       const tipptGerade = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].indexOf(document.activeElement.tagName) !== -1;
       if (!tipptGerade && !document.getElementById('dialog')) render();
@@ -8116,6 +8556,11 @@
         && new URLSearchParams(location.search).get('memo') === '1') {
       memoWunsch = true;
       ansicht = 'heute';
+      if (history.replaceState) history.replaceState({}, '', location.pathname);
+    }
+    if (typeof URLSearchParams === 'function'
+        && new URLSearchParams(location.search).get('kaufen') === '1') {
+      ansicht = 'kaufen';
       if (history.replaceState) history.replaceState({}, '', location.pathname);
     }
     if (typeof URLSearchParams === 'function'
