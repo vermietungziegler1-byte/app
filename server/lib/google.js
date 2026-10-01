@@ -6,6 +6,7 @@ const { nurAngemeldet, nurVerwalter } = require('./anmeldung');
 
 const app = express.Router();
 const TOKEN_URL = process.env.GOOGLE_TOKEN_URL || 'https://oauth2.googleapis.com/token';
+const GMAIL_BASIS = process.env.GMAIL_BASIS || 'https://gmail.googleapis.com';
 
 // ---------------- Google Mail ----------------
 //  OAuth: Der Server kennt nur ein widerrufbares Zugriffsrecht, kein Passwort.
@@ -62,7 +63,7 @@ async function googleToken() {
 
 // Eine Gmail-Abfrage. Wirft bei Fehlern, statt still eine leere Antwort zu liefern.
 async function gmail(token, pfad) {
-  const antwort = await holen('https://gmail.googleapis.com/gmail/v1/users/me' + pfad, {
+  const antwort = await holen(GMAIL_BASIS + '/gmail/v1/users/me' + pfad, {
     headers: { Authorization: 'Bearer ' + token }
   });
   if (!antwort.ok) {

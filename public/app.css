@@ -1679,3 +1679,75 @@
   #app .planblock .num { width: auto; }
   #app .planblock .grow { flex-basis: 100%; order: 3; }
 }
+
+  /* --- Kaufen: Angebote durchgerechnet, beste zuerst --- */
+  #app .kauf-info { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  #app .kauf-info b { color: var(--ink); font-weight: 600; margin-right: 4px; }
+  #app .kauf-filter { margin: 12px 0 0; }
+  #app .kauf-schritte div { margin-bottom: 8px; font-size: 14px; }
+  #app .kauf-link {
+    display: inline-block; padding: 5px 12px; border-radius: 7px; font-size: 13px; text-decoration: none;
+    border: 1px solid var(--messing); color: var(--messing); background: var(--glas);
+  }
+  #app .kauf-karte, #app .kauf-urteilbox { --k: var(--frei); }
+  #app .kauf-karte {
+    display: flex; align-items: center; gap: 13px; padding: 11px 0;
+    border-bottom: 1px solid var(--line-soft); cursor: pointer;
+  }
+  #app .kauf-karte:last-child { border-bottom: none; }
+  #app .kauf-karte:hover .kauf-titel { color: var(--messing); }
+  #app .kauf-punkte {
+    flex: none; width: 52px; height: 52px; border-radius: 50%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    border: 2.5px solid var(--k); color: var(--k); font-weight: 750; font-size: 18px; line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  #app .kauf-punkte small { font-size: 8.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; margin-top: 3px; }
+  #app .k-gut { --k: #4f9d69; }
+  #app .k-mittel { --k: var(--messing); }
+  #app .k-schwach { --k: var(--sperr); }
+  #app .k-unvollstaendig { --k: var(--frei); }
+  #app .kauf-titel { font-weight: 600; font-size: 14.5px; line-height: 1.35; }
+  #app .kauf-zahlen { display: flex; flex-wrap: wrap; gap: 3px 14px; font-size: 12.5px; color: var(--muted); margin-top: 3px; }
+  #app .kauf-zahlen b { color: var(--ink); font-weight: 650; font-variant-numeric: tabular-nums; }
+  #app .kauf-zahlen .neg b, #app .kauf-zahlen.neg { color: var(--sperr); }
+  #app .kauf-zahlen .pos b { color: #4f9d69; }
+  #app .kauf-auto { font-size: 11.5px; color: var(--muted); margin-top: 2px; font-style: italic; }
+  #app .kauf-auto-box {
+    font-size: 12.5px; line-height: 1.45; padding: 10px 13px; margin-bottom: 12px;
+    border: 1px dashed var(--line); border-radius: 8px; color: var(--muted);
+  }
+  #app .kauf-auto-box b { color: var(--ink); }
+  #app .kauf-auto-box ul { margin: 6px 0 0; padding-left: 18px; }
+  #app .kauf-auto-box li { margin-bottom: 2px; }
+  #app .kauf-urteil { flex: none; font-size: 12px; font-weight: 650; color: var(--k); white-space: nowrap; }
+  #app .kauf-felder { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 0 10px; }
+  #app .kauf-urteilbox {
+    display: flex; align-items: center; gap: 13px; padding: 12px 14px; margin: 4px 0 12px;
+    border-radius: 8px; background: var(--putz); border-left: 3px solid var(--k);
+  }
+  #app .kauf-urteilbox b { font-size: 16px; color: var(--k); }
+  #app .kauf-tabelle { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 22px; }
+  #app .kauf-spalte strong {
+    display: block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--muted); margin: 12px 0 3px;
+  }
+  #app .kauf-spalte strong:first-child { margin-top: 0; }
+  #app .kz { display: flex; justify-content: space-between; gap: 10px; padding: 4px 0; font-size: 13.5px; border-bottom: 1px solid var(--line-soft); }
+  #app .kz small { display: block; font-size: 11px; color: var(--muted); }
+  #app .kz .betrag { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #app .kz .betrag small { display: inline; margin-left: 4px; }
+  #app .kz.summe { font-weight: 700; border-bottom: none; border-top: 1px solid var(--line); }
+  #app .kz.neg .betrag { color: var(--sperr); }
+  #app .kz.pos .betrag { color: #4f9d69; }
+  #app .kauf-gruppe > strong {
+    display: block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--messing); margin: 14px 0 6px;
+  }
+  #app .kauf-gruppe label small { text-transform: none; letter-spacing: 0; font-weight: 500; }
+  #app .kauf-erkl { font-size: 11.5px; color: var(--muted); margin-top: 3px; line-height: 1.35; }
+  @media (max-width: 620px) {
+    #app .kauf-tabelle { grid-template-columns: 1fr; }
+    #app .kauf-urteil { display: none; }
+    #app .kauf-punkte { width: 46px; height: 46px; font-size: 16px; }
+  }

@@ -41,7 +41,7 @@ test('Oberfläche: alle Ansichten ohne Programmfehler', { skip: pw ? false : 'Pl
       await seite.reload();
       await seite.waitForSelector('[data-act="zu-objekte"]', { state: 'attached' });
 
-      for (const ziel of ['zu-heute', 'zu-aufgaben', 'zu-objekte', 'zu-mieten', 'zu-interessenten', 'zu-post', 'zu-rechnungen']) {
+      for (const ziel of ['zu-heute', 'zu-aufgaben', 'zu-objekte', 'zu-mieten', 'zu-interessenten', 'zu-post', 'zu-rechnungen', 'zu-kaufen']) {
         await seite.evaluate(function (z) {
           const el = document.querySelector('[data-act="' + z + '"]');
           if (el) el.click();
@@ -58,6 +58,54 @@ test('Oberfläche: alle Ansichten ohne Programmfehler', { skip: pw ? false : 'Pl
       assert.deepEqual(fehler, [], breite + 'px: ' + fehler.join(' | '));
       await seite.context().close();
     }
+  } finally {
+    await browser.close();
+    await server.stoppen();
+  }
+});
+
+test('Oberfläche: Kaufen — Angebot eintragen, durchrechnen, Miete ändern', { skip: pw ? false : 'Playwright nicht installiert' }, async function () {
+  const server = await serverStarten();
+  const browser = await pw.chromium.launch();
+  try {
+    const s = sitzung(server);
+    await s.post('/api/setup', { name: 'louis', passwort: 'geheim123' });
+    await s.post('/api/kaufen/angebote', { titel: 'Testwohnung', ort: 'Waiblingen', preis: '200000', flaeche: '70' });
+
+    const seite = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
+    const fehler = [];
+    seite.on('pageerror', function (e) { fehler.push(e.message); });
+    await seite.goto(server.basis + '/');
+    await seite.evaluate(async function () {
+      await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'louis', passwort: 'geheim123' }) });
+    });
+    await seite.goto(server.basis + '/?kaufen=1');
+    await seite.waitForSelector('.kauf-karte');
+    assert.match(await seite.textContent('.kauf-karte'), /Testwohnung/);
+
+    await seite.click('.kauf-karte');
+    await seite.waitForSelector('#kauf-rechnung .kauf-punkte');
+    const vorher = await seite.textContent('#kauf-rechnung .kauf-punkte');
+    await seite.fill('[data-kf="miete"]', '1200');
+    const nachher = await seite.textContent('#kauf-rechnung .kauf-punkte');
+    assert.notEqual(vorher, nachher, 'Die Rechnung läuft beim Tippen mit');
+    assert.match(await seite.textContent('#kauf-rechnung'), /Kaltmiete\s*eingetragen/);
+
+    // Selbst Eingetragenes ist schon gemerkt — dann heißt der Knopf Speichern
+    await seite.click('[data-act="kauf-speichern"]');
+    await seite.waitForSelector('#kauf-rechnung', { state: 'detached' });
+    await seite.waitForSelector('.kauf-karte .anzahl:text("gemerkt")');
+    const gespeichert = (await s.get('/api/kaufen')).json.angebote[0];
+    assert.equal(gespeichert.miete, 1200);
+
+    await seite.click('[data-act="kauf-annahmen"]');
+    await seite.waitForSelector('[data-kf="zins"]');
+    await seite.fill('[data-kf="zins"]', '4,5');
+    await seite.click('[data-act="kauf-annahmen-speichern"]');
+    await seite.waitForSelector('.kauf-info:text("4,5 % Zins")');
+
+    assert.deepEqual(fehler, []);
   } finally {
     await browser.close();
     await server.stoppen();
