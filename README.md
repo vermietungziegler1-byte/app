@@ -1,7 +1,8 @@
 # Vermietung
 
 Hausverwaltungs-App: Objekte, Mieter, Mieten, Interessenten, Post (Gmail),
-Aufgaben (Todoist), Kalender, Rechnungen, Mitteilungen und Sprachassistent.
+Aufgaben (Todoist), Kalender, Rechnungen, Mitteilungen, Sprachassistent und
+Kaufen (Angebote aus ImmoScout-Suchaufträgen, durchgerechnet).
 
 ## Aufbau
 
@@ -9,12 +10,14 @@ Aufgaben (Todoist), Kalender, Rechnungen, Mitteilungen und Sprachassistent.
 public/            Oberfläche (wird vom Server ausgeliefert)
   index.html       Gerüst, verweist auf die Dateien unten
   app.js           Programmlogik der Oberfläche
+  kaufrechner.js   liest Suchauftrags-Mails und rechnet Kaufangebote durch
+                   (läuft im Browser und auf dem Server)
   app.css          Aussehen
   schriften.css    eingebettete Schriften (kein Google Fonts, DSGVO)
 server/
   server.js        startet die Anwendung und bindet die Bausteine ein
   lib/             Bausteine: kern, anmeldung, daten, todoist, google, push,
-                   stimme, assistent, kalender, rechnungen, sicherung
+                   stimme, assistent, kalender, rechnungen, sicherung, kaufen
   test/            automatische Tests
 werkzeuge/
   einspielen.sh    Update auf dem Server einspielen (mit Sicherung und Rücknahme)

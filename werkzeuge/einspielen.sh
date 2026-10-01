@@ -338,7 +338,7 @@ if [ ! -d "$Q" ]; then
 fi
 warn "GitHub ist noch nicht eingerichtet — nehme die Dateien aus $Q (einrichten mit: einspielen einrichten)"
 
-OEFFENTLICH="index.html app.js app.css schriften.css sw.js manifest.webmanifest"
+OEFFENTLICH="index.html app.js app.css apple.css kaufrechner.js schriften.css sw.js manifest.webmanifest"
 NEUE=()
 for f in $OEFFENTLICH server.js; do [ -f "$Q/$f" ] && NEUE+=("$f"); done
 for f in "$Q"/*; do
