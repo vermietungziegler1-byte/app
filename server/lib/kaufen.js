@@ -190,7 +190,7 @@ app.get('/api/kaufen', nurAngemeldet, mitFehler(async function (req, res) {
     try { await abgleichen(); } catch (e) { /* steht in letzterFehler */ }
   }
   const miete = alleLesen('miete').map(function (m) {
-    return { ort: m.ort, preis: m.preis, flaeche: m.flaeche, gefunden: m.gefunden };
+    return { ort: m.ort, preis: m.preis, flaeche: m.flaeche, zimmer: m.zimmer, gefunden: m.gefunden };
   });
   res.json({
     annahmen: annahmen(),

@@ -28,6 +28,7 @@
     gebaeudeanteil: 75,     // Anteil des Gebäudes am Kaufpreis (nur das wird abgeschrieben)
     afa: 2,                 // Abschreibung % pro Jahr
     steuersatz: 42,         // persönlicher Grenzsteuersatz
+    renovierungProQm: 400,  // €/m², wenn die Anzeige „renovierungsbedürftig“ o. ä. sagt (Kernsanierung: das 2,5-Fache)
     meldenAb: 70            // ab so vielen Punkten kommt eine Mitteilung aufs Handy
   };
 
@@ -218,23 +219,25 @@
     const rate = (zinsJahr + tilgungJahr) / 12;
 
     const cashflow = (jahresmiete - bewirtschaftung - zinsJahr - tilgungJahr) / 12;
-    const afaJahr = (preis + nebenkosten) * p.gebaeudeanteil / 100 * p.afa / 100;
+    const afaJahr = (preis + nebenkosten) * p.gebaeudeanteil / 100 * (positiv(a.afa) || p.afa) / 100;
     const ergebnisSteuer = jahresmiete - bewirtschaftung - zinsJahr - afaJahr;
     const steuerJahr = ergebnisSteuer * p.steuersatz / 100;   // negativ = Erstattung
     const cashflowNachSteuer = cashflow - steuerJahr / 12;
 
-    const brutto = jahresmiete / preis * 100;
+    // Eine nötige Renovierung gehört zum Preis: Rendite und Vergleich rechnen mit beidem
+    const einstand = preis + renovierung;
+    const brutto = jahresmiete / einstand * 100;
     const netto = (jahresmiete - bewirtschaftung) / gesamt * 100;
-    const faktor = preis / jahresmiete;
+    const faktor = einstand / jahresmiete;
     const preisQm = flaeche ? preis / flaeche : null;
     const ekRendite = eigenkapital > 0 ? (cashflowNachSteuer * 12 + tilgungJahr) / eigenkapital * 100 : null;
 
     // Punkte 0–100: Rendite zählt am meisten, dann was monatlich übrig bleibt, dann der Preis im Vergleich
     const pRendite = grenzen((brutto - 3) / 3, 0, 1) * 45;
-    const proHundertTausend = cashflowNachSteuer / preis * 100000;
+    const proHundertTausend = cashflowNachSteuer / einstand * 100000;
     const pCashflow = grenzen((proHundertTausend + 250) / 350, 0, 1) * 35;
     const marktPreisQm = positiv(umfeld.marktPreisQm);
-    const pPreis = marktPreisQm && preisQm ? grenzen((1.25 - preisQm / marktPreisQm) / 0.45, 0, 1) * 20 : 10;
+    const pPreis = marktPreisQm && preisQm ? grenzen((1.25 - einstand / flaeche / marktPreisQm) / 0.45, 0, 1) * 20 : 10;
     const punkte = Math.round(pRendite + pCashflow + pPreis);
 
     return {
@@ -267,17 +270,96 @@
     return unten > 0 ? Math.floor(unten / 1000) * 1000 : null;
   }
 
+  function leer(v) { return v === undefined || v === null || v === ''; }
+
+  // Wie viele m² ein Zimmer im Ort typischerweise hat — aus allen Angeboten mit beiden Angaben
+  function qmProZimmer(angebote, ort) {
+    const werte = function (liste) {
+      return liste.filter(function (x) { return positiv(x.flaeche) && positiv(x.zimmer); })
+        .map(function (x) { return x.flaeche / x.zimmer; }).filter(function (w) { return w >= 12 && w <= 60; });
+    };
+    const hier = werte((angebote || []).filter(function (x) { return gleicherOrt(x.ort, ort); }));
+    if (hier.length >= 5) return median(hier);
+    const alle = werte(angebote || []);
+    return alle.length >= 5 ? median(alle) : null;
+  }
+
+  const RENOVIERUNG = [
+    [/kernsanier|entkernt|rohbau|abrissreif|sanierungsobjekt/i, 2.5, 'Kernsanierung laut Anzeige'],
+    [/renovierungsbed(?:ü|ue)rftig|sanierungsbed(?:ü|ue)rftig|modernisierungsbed(?:ü|ue)rftig|renovierungsstau|sanierungsstau|handwerker|liebhaber|bastler|zum herrichten|renovierung n(?:ö|oe)tig/i, 1, 'renovierungsbedürftig laut Anzeige']
+  ];
+
+  // Was in der Mail fehlt, ergänzt die App selbst — und sagt dazu, woher der Wert kommt.
+  // Was selbst eingetragen ist, bleibt immer unangetastet.
+  function ergaenzen(a, annahmen, umfeld) {
+    const p = annahmenMitStandard(annahmen);
+    umfeld = umfeld || {};
+    const text = [a.titel, a.merkmale].filter(Boolean).join(' ');
+    const werte = {}, warum = {};
+
+    if (!positiv(a.flaeche)) {
+      const m = /(\d{2,3}(?:,\d+)?)\s*(?:m²|m2|qm)(?![a-z])/i.exec(text);
+      if (m) { werte.flaeche = zahl(m[1]); warum.flaeche = 'aus dem Titel'; }
+      else if (positiv(a.zimmer)) {
+        const proZimmer = positiv(umfeld.qmProZimmer) || (a.typ === 'haus' ? 30 : 27);
+        werte.flaeche = Math.round(a.zimmer * proZimmer);
+        warum.flaeche = 'geschätzt: ' + String(a.zimmer).replace('.', ',') + ' Zimmer × ' + Math.round(proZimmer) + ' m²';
+      }
+    }
+    const flaeche = positiv(a.flaeche) || werte.flaeche || 0;
+
+    if (!positiv(a.miete)) {
+      const m = /(?:mieteinnahmen?|ist-?miete|nettokaltmiete|kaltmiete|miete)\D{0,20}?(\d{1,3}(?:\.\d{3})*(?:,\d+)?)\s*(?:€|eur)\s*(p\.?\s?a\.?|j(?:ä|ae)hrlich|pro jahr|im jahr|\/\s*jahr)?/i.exec(text);
+      const r = /(\d{1,2}(?:,\d+)?)\s*%\s*(?:brutto|ist-?)?rendite|rendite\D{0,12}(\d{1,2}(?:,\d+)?)\s*%/i.exec(text);
+      if (m) {
+        const betrag = zahl(m[1]) / (m[2] ? 12 : 1);
+        if (betrag >= 100 && betrag <= 30000 && (!positiv(a.preis) || betrag < a.preis / 40)) {
+          werte.miete = Math.round(betrag); warum.miete = 'Miete laut Anzeige';
+        }
+      } else if (r && positiv(a.preis)) {
+        const prozent = zahl(r[1] || r[2]);
+        if (prozent >= 1 && prozent <= 15) { werte.miete = Math.round(a.preis * prozent / 100 / 12); warum.miete = 'aus ' + String(prozent).replace('.', ',') + ' % Rendite laut Anzeige'; }
+      }
+    }
+
+    if (leer(a.makler) && /provisionsfrei|ohne makler|keine (?:k(?:ä|ae)ufer)?provision|von privat|privatverkauf/i.test(text)) {
+      werte.makler = 0; warum.makler = 'provisionsfrei laut Anzeige';
+    }
+
+    if (leer(a.renovierung) && flaeche) {
+      const treffer = RENOVIERUNG.find(function (t) { return t[0].test(text); });
+      if (treffer) {
+        werte.renovierung = Math.round(flaeche * p.renovierungProQm * treffer[1] / 1000) * 1000;
+        warum.renovierung = treffer[2] + ' (' + Math.round(p.renovierungProQm * treffer[1]) + ' €/m²)';
+      }
+    }
+
+    if (leer(a.afa) && /neubau|erstbezug(?!\s*nach)|baujahr\s*20(?:2[3-9]|3\d)/i.test(text)) {
+      werte.afa = 3; warum.afa = 'Neubau: 3 % Abschreibung';
+    }
+
+    if (/\bvermietet\b|kapitalanlage/i.test(text) && !/unvermietet|nicht vermietet|bezugsfrei|leerstehend/i.test(text) && !positiv(a.miete) && !werte.miete) {
+      warum.vermietet = 'laut Anzeige vermietet — gerechnet mit der Marktmiete, die echte Miete steht im Exposé';
+    }
+    return { werte: werte, warum: warum };
+  }
+
   // Alles zusammen: Angebot + Marktumfeld → Kennzahlen
   function bewerten(a, annahmen, mietangebote, kaufangebote) {
     const mm = marktmiete(mietangebote, a.ort);
     const mp = marktpreis((kaufangebote || []).filter(function (k) { return k.id !== a.id; }), a.ort, a.typ);
     const umfeld = { mieteProQm: mm ? mm.proQm : null, marktPreisQm: mp ? mp.proQm : null };
-    const r = rechnen(a, annahmen, umfeld);
+    const erg = ergaenzen(a, annahmen, { qmProZimmer: qmProZimmer((mietangebote || []).concat(kaufangebote || []), a.ort) });
+    const voll = Object.assign({}, a, erg.werte);
+    const r = rechnen(voll, annahmen, umfeld);
     r.marktmiete = mm;
     r.marktpreis = mp;
-    r.zielpreis = r.vollstaendig && r.punkte < 70 ? zielpreis(a, annahmen, umfeld) : null;
+    r.ergaenzt = erg.werte;
+    r.warum = erg.warum;
+    r.flaeche = positiv(voll.flaeche) || null;
+    r.zielpreis = r.vollstaendig && r.punkte < 70 ? zielpreis(voll, annahmen, umfeld) : null;
     return r;
   }
 
-  return { STANDARD, annahmenMitStandard, zahl, ortAusAdresse, mailLesen, freiLesen, marktmiete, marktpreis, rechnen, zielpreis, bewerten, median };
+  return { STANDARD, annahmenMitStandard, zahl, ortAusAdresse, mailLesen, freiLesen, marktmiete, marktpreis, qmProZimmer, ergaenzen, rechnen, zielpreis, bewerten, median };
 });

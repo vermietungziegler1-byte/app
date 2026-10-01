@@ -4556,6 +4556,8 @@
       ['instandhaltung', 'Instandhaltung', '€ pro m² und Jahr', 'Gilt nur, solange kein Hausgeld eingetragen ist'],
       ['verwaltung', 'Hausverwaltung', '€ im Monat je Wohnung'],
       ['mietausfall', 'Mietausfall', '% der Jahresmiete']]],
+    ['Renovierung', [
+      ['renovierungProQm', 'Wenn die Anzeige es sagt', '€ pro m²', '„renovierungsbedürftig“, „für Handwerker“ & Co. — bei Kernsanierung das 2,5-Fache']]],
     ['Miete', [
       ['abschlag', 'Abschlag auf die Angebotsmiete', '%', 'Angebote liegen meist über dem, was nach Mietspiegel und Mietpreisbremse erlaubt ist'],
       ['mieteProQm', 'Miete, wenn nichts bekannt ist', '€ pro m²', 'Nur falls die Suchaufträge zu wenig Mietangebote liefern']]],
@@ -4602,6 +4604,11 @@
       return t.u.status === 'vermietet' && t.u.type === 'Wohnung' && n(t.u.area) > 10 && n(t.u.rent) > 0;
     }).map(function (t) { return n(t.u.rent) / n(t.u.area); });
     return werte.length ? { proQm: window.Kaufrechner.median(werte), anzahl: werte.length } : null;
+  }
+
+  const KAUF_AUTO = { flaeche: 'Fläche', miete: 'Miete aus der Anzeige', makler: 'provisionsfrei', renovierung: 'Renovierung', afa: 'Neubau', vermietet: 'vermietet' };
+  function kaufAutoKurz(r) {
+    return Object.keys(r.warum || {}).map(function (k) { return KAUF_AUTO[k]; }).filter(Boolean).join(', ');
   }
 
   function kaufenAbschnitt() {
@@ -4691,7 +4698,7 @@
       const a = x.a, r = x.r;
       const meta = [a.ort, a.typ === 'haus' ? 'Haus' : 'Wohnung',
         a.zimmer ? kZahl(a.zimmer, a.zimmer % 1 ? 1 : 0) + ' Zi.' : '',
-        a.flaeche ? kZahl(a.flaeche, 0) + ' m²' : '',
+        r.flaeche ? (r.ergaenzt && r.ergaenzt.flaeche ? '≈ ' : '') + kZahl(r.flaeche, 0) + ' m²' : '',
         a.preis ? kEuro(a.preis) + (r.preisQm ? ' (' + kEuro(r.preisQm) + '/m²)' : '') : ''].filter(Boolean).join(' · ');
       html += '<div class="kauf-karte klickbar k-' + r.urteil + '" data-act="kauf-oeffnen" data-id="' + esc(a.id) + '">'
         + '<div class="kauf-punkte">' + (r.punkte == null ? '?' : r.punkte) + '<small>Punkte</small></div>'
@@ -4705,9 +4712,12 @@
               + '<span><b>' + kProz(r.brutto) + '</b> Rendite</span>'
               + '<span><b>' + kZahl(r.faktor, 1) + '</b> Faktor</span>'
               + '<span class="' + (r.cashflowNachSteuer < 0 ? 'neg' : 'pos') + '"><b>' + kVz(r.cashflowNachSteuer) + '</b> im Monat</span>'
+              + (r.renovierung ? '<span>Renovierung <b>' + kEuro(r.renovierung) + '</b></span>' : '')
               + (r.zielpreis ? '<span>gut bis <b>' + kEuro(r.zielpreis) + '</b></span>' : '')
               + '</div>'
-            : '<div class="kauf-zahlen neg">Es fehlt: ' + esc(r.fehlt.join(', ')) + ' — antippen und ergänzen</div>')
+              + (kaufAutoKurz(r) ? '<div class="kauf-auto">automatisch ergänzt: ' + kaufAutoKurz(r) + '</div>' : '')
+            : '<div class="kauf-zahlen neg">Die Mail nennt weder ' + (r.fehlt.indexOf('Kaufpreis') !== -1 ? 'Kaufpreis' : 'Fläche noch Zimmer')
+              + ' — antippen und eintragen</div>')
         + '</div>'
         + '<div class="kauf-urteil">' + KAUF_URTEIL[r.urteil] + '</div>'
         + '</div>';
@@ -4742,13 +4752,33 @@
     };
     const mm = r.marktmiete;
     const mieteHer = r.mieteGeschaetzt
-      ? 'geschätzt: ' + kZahl(a.flaeche, 0) + ' m² × ' + kZahl(r.mieteProQm, 2) + ' €/m²'
-      : 'eingetragen';
+      ? 'geschätzt: ' + kZahl(r.flaeche, 0) + ' m² × ' + kZahl(r.mieteProQm, 2) + ' €/m²'
+      : (r.warum && r.warum.miete ? r.warum.miete : 'eingetragen');
+    const e = modal && modal.entwurf ? modal.entwurf : {};
+    const auto = [];
+    const w = r.warum || {};
+    if (w.flaeche) auto.push('Wohnfläche ≈ ' + kZahl(r.flaeche, 0) + ' m² — ' + w.flaeche);
+    if (r.mieteGeschaetzt) {
+      auto.push('Miete ' + kEuro(r.miete) + ' — ' + (mm ? 'Marktmiete aus ' + mm.anzahl + ' Mietangeboten' + (mm.ort ? ' in ' + esc(mm.ort) : '')
+        + ' (Mitte ' + kZahl(mm.proQm, 2) + ' €/m²) minus ' + kZahl(p.abschlag, 0) + ' %' : 'Standardwert ' + kZahl(p.mieteProQm, 2) + ' €/m² aus den Annahmen'));
+    } else if (w.miete) auto.push('Miete ' + kEuro(r.miete) + ' — ' + w.miete);
+    if (w.vermietet) auto.push(w.vermietet);
+    if (!r.hausgeldBekannt) {
+      auto.push('Laufende Kosten ≈ ' + kEuro(r.laufend / 12) + ' im Monat — Instandhaltung ' + kZahl(p.instandhaltung, 0) + ' €/m² im Jahr'
+        + (a.typ === 'haus' ? '' : ' plus Verwaltung ' + kEuro(p.verwaltung)));
+    }
+    if (w.renovierung && (e.renovierung === '' || e.renovierung == null)) auto.push('Renovierung ' + kEuro(r.renovierung) + ' — ' + w.renovierung);
+    if (w.makler) auto.push('Kein Makler — ' + w.makler);
+    if (w.afa) auto.push(w.afa);
     let html = '<div class="kauf-urteilbox k-' + r.urteil + '">'
       + '<div class="kauf-punkte">' + r.punkte + '<small>Punkte</small></div>'
       + '<div><b>' + KAUF_URTEIL[r.urteil] + '</b>'
       + '<div class="fobj">Rendite ' + r.teile.rendite + ' von 45 · Überschuss ' + r.teile.cashflow + ' von 35 · Preis '
       + r.teile.preis + ' von 20</div></div></div>';
+    if (auto.length) {
+      html += '<div class="kauf-auto-box"><b>Automatisch ergänzt</b> — stimmt etwas nicht, oben einfach überschreiben'
+        + '<ul>' + auto.map(function (t) { return '<li>' + t + '</li>'; }).join('') + '</ul></div>';
+    }
     if (r.zielpreis && a.preis) {
       html += '<div class="hintbox">Ein gutes Angebot (ab 70 Punkten) wäre es bis etwa <b>' + kEuro(r.zielpreis) + '</b> — '
         + kEuro(a.preis - r.zielpreis) + ' (' + kZahl((a.preis - r.zielpreis) / a.preis * 100, 0) + ' %) unter dem Preis. '
@@ -4783,12 +4813,6 @@
       + zeile('Überschuss nach Steuer', kVz(r.cashflowNachSteuer), 'summe ' + (r.cashflowNachSteuer < 0 ? 'neg' : 'pos'))
       + '</div></div>'
       + '<div class="rg-hinweis">'
-      + (r.mieteGeschaetzt
-          ? (mm ? 'Die Miete kommt aus ' + mm.anzahl + ' Mietangeboten' + (mm.ort ? ' in ' + esc(mm.ort) : ' aller Orte')
-              + ' (Mitte ' + kZahl(mm.proQm, 2) + ' €/m²), davon ' + kZahl(p.abschlag, 0) + ' % abgezogen. '
-            : 'Für die Miete gibt es noch keine Mietangebote — gerechnet mit ' + kZahl(p.mieteProQm, 2) + ' €/m² aus den Annahmen. ')
-            + 'Ist die Wohnung vermietet, die echte Miete eintragen. '
-          : '')
       + 'Die Tilgung zahlt den Kredit ab und bleibt dein Vermögen. Alles ohne Gewähr — vor dem Kauf Unterlagen, Rücklage und Teilungserklärung prüfen.'
       + '</div>';
     return html;
@@ -4813,11 +4837,11 @@
         + (o.merkmale ? '<br>' + esc(o.merkmale) : '') + '</div>'
         + '<div class="kauf-felder">'
         + f('Kaufpreis €', eingabe('preis', o.preis ? kFeld(o.preis) : 'fehlt'))
-        + f('Wohnfläche m²', eingabe('flaeche', o.flaeche ? kFeld(o.flaeche) : 'fehlt'))
-        + f('Miete kalt / Monat', eingabe('miete', r.vollstaendig && r.mieteGeschaetzt ? 'geschätzt ' + Math.round(r.miete) : 'falls vermietet'))
-        + f('Hausgeld nicht umlagefähig', eingabe('hausgeld', 'aus dem Exposé'))
-        + f('Renovierung €', eingabe('renovierung', '0'))
-        + f('Makler %', eingabe('makler', kFeld(kauf.daten.annahmen.makler) + ' · 0 = provisionsfrei'))
+        + f('Wohnfläche m²', eingabe('flaeche', o.flaeche ? kFeld(o.flaeche) : (r.ergaenzt && r.ergaenzt.flaeche ? 'automatisch ≈ ' + r.ergaenzt.flaeche : 'fehlt')))
+        + f('Miete kalt / Monat', eingabe('miete', r.vollstaendig ? 'automatisch ' + Math.round(r.miete) : 'automatisch'))
+        + f('Hausgeld nicht umlagefähig', eingabe('hausgeld', r.vollstaendig ? 'automatisch ≈ ' + Math.round(r.laufend / 12) : 'automatisch'))
+        + f('Renovierung €', eingabe('renovierung', r.ergaenzt && r.ergaenzt.renovierung ? 'automatisch ' + r.ergaenzt.renovierung : '0'))
+        + f('Makler %', eingabe('makler', r.ergaenzt && r.ergaenzt.makler === 0 ? '0 · provisionsfrei' : kFeld(kauf.daten.annahmen.makler) + ' · 0 = provisionsfrei'))
         + f('Art', '<select data-kf="typ">' + [['', a.typ === 'haus' ? 'Haus' : 'Wohnung'], ['wohnung', 'Wohnung'], ['haus', 'Haus']]
             .map(function (t) { return '<option value="' + t[0] + '"' + ((e.typ || '') === t[0] ? ' selected' : '') + '>' + t[1] + '</option>'; }).join('')
           + '</select>')

@@ -134,3 +134,42 @@ test('Annahmen: eigene Werte gelten, Unsinn fällt auf den Standard zurück', fu
   assert.equal(p.tilgung, K.STANDARD.tilgung);
   assert.equal(p.ekProzent, K.STANDARD.ekProzent);
 });
+
+test('Automatisch ergänzen: Fläche, Renovierung, provisionsfrei, Miete und Neubau aus der Anzeige', function () {
+  const b = function (titel, x) { return K.bewerten(Object.assign({ titel: titel, preis: 250000, zimmer: 3, ort: 'Waiblingen' }, x || {}), {}, [], []); };
+
+  let r = b('Renovierungsbedürftige 3-Zimmer-Wohnung, provisionsfrei');
+  assert.equal(r.vollstaendig, true, 'ohne Fläche in der Mail trotzdem durchgerechnet');
+  assert.equal(r.flaeche, 81);                         // 3 Zimmer × 27 m²
+  assert.equal(r.ergaenzt.renovierung, 32000);         // 81 m² × 400 €
+  assert.equal(r.renovierung, 32000);
+  assert.equal(r.ergaenzt.makler, 0);
+  assert.equal(r.nebenkostenProzent, 7);
+
+  assert.equal(b('Neubau-Erstbezug 85 m² mit Balkon').flaeche, 85);
+  assert.equal(b('Neubau-Erstbezug 85 m² mit Balkon').ergaenzt.afa, 3);
+  assert.equal(b('Erstbezug nach Sanierung').ergaenzt.afa, undefined);
+  assert.equal(b('Kapitalanlage: Mieteinnahmen 780 € mtl.').miete, 780);
+  assert.equal(b('Kapitalanlage: Jahresmiete 9.600 € p.a.').miete, 800);
+  assert.equal(b('Kapitalanlage mit 4,2 % Rendite').miete, 875);
+  assert.ok(b('Kapitalanlage, vermietet').warum.vermietet);
+
+  // Selbst Eingetragenes schlägt jede Schätzung
+  r = b('Renovierungsbedürftig, provisionsfrei', { flaeche: 60, renovierung: 0, makler: 3.57 });
+  assert.deepEqual(r.ergaenzt, {});
+  assert.equal(r.renovierung, 0);
+});
+
+test('Automatisch ergänzen: m² pro Zimmer aus den Angeboten im Ort', function () {
+  const umfeld = [1, 2, 3, 4, 5].map(function () { return { ort: 'Korb', flaeche: 100, zimmer: 4 }; });
+  assert.equal(K.qmProZimmer(umfeld, 'Korb'), 25);
+  const r = K.bewerten({ titel: 'Wohnung', preis: 200000, zimmer: 2, ort: 'Korb' }, {}, umfeld, []);
+  assert.equal(r.flaeche, 50);
+});
+
+test('Renovierung drückt Rendite und Punkte', function () {
+  const ohne = K.rechnen({ preis: 200000, flaeche: 80 }, {}, { mieteProQm: 14 });
+  const mit = K.rechnen({ preis: 200000, flaeche: 80, renovierung: 40000 }, {}, { mieteProQm: 14 });
+  assert.equal(mit.brutto.toFixed(2), (ohne.brutto * 200000 / 240000).toFixed(2));
+  assert.ok(mit.punkte < ohne.punkte);
+});
