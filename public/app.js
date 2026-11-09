@@ -583,6 +583,7 @@
       else {
         nutzerName = st.nutzer;
         nutzerRolle = st.rolle || 'nutzer';
+        zweiterFaktor.aktiv = !!st.zweiterFaktor;
         await datenHolen();
         await todoistLaden();
         await stimmeLaden();
@@ -699,15 +700,36 @@
     } catch (e) { toast(e.message); }
   }
 
+  // Zweiter Faktor: aktiv = für den eigenen Zugang eingeschaltet; start = laufende Einrichtung (Schlüssel, Link);
+  // ersatz = frisch erzeugte Ersatzcodes, die genau einmal angezeigt werden
+  let zweiterFaktor = { aktiv: false, start: null, ersatz: null };
+  let anmeldeTicket = null;   // Passwort stimmt schon, der Code aus der Authenticator-App steht noch aus
+
   async function anmelden(name, passwort) {
     try {
       const res = await api('login', { method: 'POST', body: { name: name, passwort: passwort } });
-      nutzerName = res.nutzer;
-      nutzerRolle = res.rolle || 'nutzer';
-      await datenHolen();
-      phase = 'app';
-      render();
+      if (res.zweiterFaktor && res.ticket) { anmeldeTicket = res.ticket; phase = 'code'; render(); return; }
+      await angemeldetMit(res);
     } catch (e) { toast(e.message); }
+  }
+  async function angemeldetMit(res) {
+    nutzerName = res.nutzer;
+    nutzerRolle = res.rolle || 'nutzer';
+    zweiterFaktor = { aktiv: !!res.zweiterFaktor, start: null, ersatz: null };
+    await datenHolen();
+    phase = 'app';
+    render();
+  }
+  async function codeAnmelden(code) {
+    try {
+      const res = await api('login/code', { method: 'POST', body: { ticket: anmeldeTicket, code: code } });
+      anmeldeTicket = null;
+      await angemeldetMit(res);
+    } catch (e) {
+      toast(e.message);
+      // Ticket abgelaufen oder verbraucht: zurück zum Passwort
+      if (e.status === 401 && /Passwort/.test(e.message)) { anmeldeTicket = null; phase = 'anmelden'; render(); }
+    }
   }
 
   async function datenHolen() {
@@ -1988,6 +2010,40 @@
   let nutzerListe = [];
   async function nutzerListeHolen() {
     try { nutzerListe = await api('users'); } catch (e) { nutzerListe = []; }
+  }
+
+  // Abschnitt „Zweiter Faktor“ im Fenster Zugänge — für den eigenen Zugang, je nach Stand
+  function zweiterFaktorAbschnitt() {
+    const z = zweiterFaktor;
+    let html = '<div class="field"><label>Zweiter Faktor beim Anmelden</label>';
+    if (z.ersatz) {
+      html += '<div class="hint">Eingeschaltet. Das sind deine Ersatzcodes für den Fall, dass das Handy einmal weg ist — '
+        + 'jeder gilt genau einmal. Jetzt aufschreiben oder kopieren, sie werden nicht noch einmal angezeigt.</div>'
+        + '<textarea id="zf-ersatz" rows="4" readonly>' + esc(z.ersatz.join('\n')) + '</textarea>'
+        + '<div class="anf-knoepfe"><button class="tiny" data-act="zf-kopieren">Codes kopieren</button>'
+        + '<button class="tiny ghost" data-act="zf-fertig">Gesichert, ausblenden</button></div>';
+    } else if (z.aktiv) {
+      html += '<div class="hint">Eingeschaltet: Beim Anmelden wird zusätzlich zum Passwort ein Code aus deiner '
+        + 'Authenticator-App verlangt. Zum Ausschalten dein Passwort eingeben.</div>'
+        + '<div class="two"><div class="field"><label>Passwort</label>'
+        + '<input type="password" id="zf-pw" autocomplete="current-password"></div></div>'
+        + '<button data-act="zf-aus">Zweiten Faktor ausschalten</button>';
+    } else if (z.start) {
+      html += '<div class="hint">1. Authenticator-App auf dem Handy öffnen (Google Authenticator, Microsoft Authenticator, '
+        + '1Password …). Am Handy genügt ein Tipp auf den Knopf, am PC den Schlüssel in der App von Hand eingeben. '
+        + '2. Den Code, den die App anzeigt, hier eintragen.</div>'
+        + '<div class="anf-knoepfe"><a class="kauf-link" href="' + esc(z.start.uri) + '">In der Authenticator-App öffnen</a></div>'
+        + '<div class="field"><label>Schlüssel zum Abtippen</label><input type="text" id="zf-schluessel" readonly value="' + esc(z.start.geheimnis) + '"></div>'
+        + '<div class="two"><div class="field"><label>Code aus der App</label>'
+        + '<input type="text" id="zf-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456"></div></div>'
+        + '<div class="anf-knoepfe"><button class="primary" data-act="zf-ein">Einschalten</button>'
+        + '<button class="tiny ghost" data-act="zf-abbrechen">Abbrechen</button></div>';
+    } else {
+      html += '<div class="hint">Ausgeschaltet. Mit dem zweiten Faktor reicht ein erratenes Passwort nicht mehr: Beim Anmelden '
+        + 'wird zusätzlich ein Code aus einer Authenticator-App auf deinem Handy verlangt.</div>'
+        + '<button data-act="zf-start">Einrichten</button>';
+    }
+    return html + '</div>';
   }
 
   async function verlaufHolen() {
@@ -3633,6 +3689,7 @@
   function render() {
     if (phase === 'einrichten') { renderEinrichten(); return; }
     if (phase === 'anmelden') { renderAnmelden(); return; }
+    if (phase === 'code') { renderCode(); return; }
     tdEditorMerken();
     modalEntwurfMerken();
     const units = allUnits();
@@ -6396,6 +6453,28 @@
     if (!mobil) root.querySelector('#e-name').focus();
   }
 
+  // Zweiter Schritt der Anmeldung: der Einmalcode aus der Authenticator-App (oder ein Ersatzcode)
+  function renderCode() {
+    root.setAttribute('data-theme', theme);
+    root.innerHTML = '<div class="sperrschirm"><div class="sperrkasten">'
+      + '<h1>Code eingeben</h1>'
+      + '<div class="hint">Passwort stimmt. Jetzt noch den sechsstelligen Code aus deiner Authenticator-App — '
+      + 'oder einen deiner Ersatzcodes.</div>'
+      + '<div class="field"><label>Code</label><input type="text" id="a-code" inputmode="numeric" autocomplete="one-time-code" placeholder="123 456"></div>'
+      + '<button class="primary" data-act="code">Öffnen</button>'
+      + '<div class="legal"><a href="#" data-act="zurueck">Zurück zur Anmeldung</a></div>'
+      + '</div></div>';
+    const rein = function () { codeAnmelden(root.querySelector('#a-code').value); };
+    root.querySelector('[data-act="code"]').addEventListener('click', rein);
+    root.querySelector('[data-act="zurueck"]').addEventListener('click', function (ev) {
+      ev.preventDefault(); anmeldeTicket = null; phase = 'anmelden'; render();
+    });
+    root.querySelector('#a-code').addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') { ev.preventDefault(); rein(); }
+    });
+    root.querySelector('#a-code').focus();
+  }
+
   function renderAnmelden() {
     root.setAttribute('data-theme', theme);
     root.innerHTML = '<div class="sperrschirm"><div class="sperrkasten">'
@@ -7398,9 +7477,11 @@
             return '<div class="docrow"><div class="grow"><strong>' + esc(nu.name) + '</strong>'
               + '<div class="unit-type">' + (nu.name === nutzerName ? 'das bist du · ' : '')
               + (nu.rolle === 'verwalter' ? 'Verwalter · ' : '')
+              + (nu.zweiterFaktor ? 'zweiter Faktor an · ' : '')
               + 'seit ' + new Date(nu.angelegt).toLocaleDateString('de-DE') + '</div></div>'
               + (nu.name === nutzerName || nutzerRolle !== 'verwalter' ? ''
                   : '<button class="tiny ghost" data-act="nutzer-pw" data-name="' + esc(nu.name) + '">Passwort neu</button>'
+                    + (nu.zweiterFaktor ? '<button class="tiny ghost" data-act="nutzer-zf-weg" data-name="' + esc(nu.name) + '">2. Faktor zurücksetzen</button>' : '')
                     + '<button class="tiny ghost" data-act="nutzer-weg" data-name="' + esc(nu.name) + '">Entfernen</button>')
               + '</div>';
           }).join('') : '<div class="docempty">Wird geladen …</div>') + '</div>'
@@ -7412,6 +7493,8 @@
         + '<button class="primary" data-act="nutzer-neu">Zugang anlegen</button>'
         + '<div class="legal">Gib die Zugangsdaten persönlich weiter. Ein entfernter Zugang wird sofort '
         + 'abgemeldet und kommt nicht mehr rein.</div>')
+        + '<div class="divider"></div>'
+        + zweiterFaktorAbschnitt()
         + '<div class="divider"></div>'
         + '<div class="two">'
         + f('Bisheriges Passwort', '<input type="password" id="pw-alt" autocomplete="current-password">')
@@ -8592,6 +8675,51 @@
       if (neu.length < 8) { toast('Mindestens acht Zeichen'); return; }
       api('passwort', { method: 'POST', body: { alt: alt, neu: neu } })
         .then(function () { toast('Passwort geändert'); modal = null; render(); })
+        .catch(function (e) { toast(e.message); });
+    }
+    // Zweiter Faktor für den eigenen Zugang
+    else if (act === 'zf-start') {
+      api('zweiter-faktor/start', { method: 'POST', body: {} })
+        .then(function (r) { zweiterFaktor.start = r; render(); })
+        .catch(function (e) { toast(e.message); });
+    }
+    else if (act === 'zf-abbrechen') { zweiterFaktor.start = null; render(); }
+    else if (act === 'zf-ein') {
+      const feld = root.querySelector('#zf-code');
+      api('zweiter-faktor/einschalten', { method: 'POST', body: { code: feld ? feld.value : '' } })
+        .then(function (r) {
+          zweiterFaktor = { aktiv: true, start: null, ersatz: r.ersatzcodes || [] };
+          toast('Zweiter Faktor eingeschaltet');
+          return nutzerListeHolen();
+        })
+        .then(function () { render(); })
+        .catch(function (e) { toast(e.message); });
+    }
+    else if (act === 'zf-kopieren') {
+      const feld = root.querySelector('#zf-ersatz');
+      const text = feld ? feld.value : '';
+      navigator.clipboard.writeText(text).then(function () { toast('Kopiert'); }, function () {
+        if (feld) feld.select();
+        toast('Bitte markieren und kopieren');
+      });
+    }
+    else if (act === 'zf-fertig') { zweiterFaktor.ersatz = null; render(); }
+    else if (act === 'zf-aus') {
+      const feld = root.querySelector('#zf-pw');
+      api('zweiter-faktor/ausschalten', { method: 'POST', body: { passwort: feld ? feld.value : '' } })
+        .then(function () {
+          zweiterFaktor = { aktiv: false, start: null, ersatz: null };
+          toast('Zweiter Faktor ausgeschaltet');
+          return nutzerListeHolen();
+        })
+        .then(function () { render(); })
+        .catch(function (e) { toast(e.message); });
+    }
+    else if (act === 'nutzer-zf-weg') {
+      const name = el.getAttribute('data-name');
+      api('users/' + encodeURIComponent(name) + '/zweiter-faktor', { method: 'DELETE' })
+        .then(function () { toast('Zweiter Faktor für ' + name + ' zurückgesetzt'); return nutzerListeHolen(); })
+        .then(function () { render(); })
         .catch(function (e) { toast(e.message); });
     }
 

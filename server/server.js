@@ -35,7 +35,11 @@ app.use(function (req, res, next) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'same-origin');
   res.setHeader('X-Frame-Options', 'DENY');
-  res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+  // Im Browser läuft nur, was von diesem Server kommt: kein fremdes Skript, keine fremden Ziele. Inline-Stile
+  // bleiben erlaubt (die Oberfläche setzt style-Attribute), Ton und Bilder auch aus blob:/data: (Sprachausgabe, Icons)
+  res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    + "img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; "
+    + "manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'");
   res.setHeader('Strict-Transport-Security', 'max-age=15552000');
   next();
 });
