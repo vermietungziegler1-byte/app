@@ -6955,20 +6955,14 @@
         return '<button type="button" class="' + farbe + '" data-act="t-datum" data-datum="' + (d ? tdIso(d) : '') + '">' + zeichen + name + '</button>';
       };
 
-      body = '<h2>Aufgabe</h2>'
-        + '<div class="td-fenster">'
-        + '<div class="td-f-links">'
-        + '<div class="td-f-titel td-zeile p' + prio + '" id="t-kopf">'
-        + '<button type="button" class="td-kreis" data-act="t-fertig" title="Abhaken">' + TDI.check + '</button>'
-        + '<input type="text" id="t-inhalt" value="' + esc(inhalt) + '" placeholder="Aufgabenname"></div>'
-        + '<div class="td-f-besch"><textarea id="t-besch" rows="' + Math.max(3, Math.min(14, String(besch).split('\n').length + 1)) + '" placeholder="Beschreibung">' + esc(besch) + '</textarea></div>'
-        + '<div class="td-verlauf"><input type="text" id="t-verlauf" placeholder="+ Verlauf, z. B. „Aldo angerufen, kommt Dienstag“" value="' + esc(modal.verlaufText || '') + '">'
-        + ((window.SpeechRecognition || window.webkitSpeechRecognition) ? '<button type="button" class="tiny" data-act="t-verlauf-diktat" title="Diktieren">🎤</button>' : '')
-        + '<button type="button" class="tiny primary" data-act="t-verlauf">Eintragen</button></div>'
-        + '<div class="td-f-ueber">Unteraufgaben' + (kinder.length ? '<span class="td-zahl">' + kinder.length + '</span>' : '') + '</div>'
+      // Das Fenster ist einspaltig: erst das Wesentliche (Name, Fälligkeit, Projekt), dann Beschreibung und Verlauf.
+      // Priorität, Warten, Unteraufgaben, Kommentare und Löschen stehen hinter „Mehr“ — außer sie sind gerade belegt
+      const mehr = !!modal.mehr;
+      const wartet = tdWartet(t);
+      const unterHtml = '<div class="td-f-ueber">Unteraufgaben' + (kinder.length ? '<span class="td-zahl">' + kinder.length + '</span>' : '') + '</div>'
         + kinder.map(function (k) { return tdZeile(k, { mitProjekt: false }); }).join('')
-        + tdNeuHtml('unter:' + t.id, { eltern: t.id, projektId: t.projektId, text: 'Unteraufgabe hinzufügen' })
-        + '<div class="td-f-ueber">Kommentare' + (modal.kommentare && modal.kommentare.length ? '<span class="td-zahl">' + modal.kommentare.length + '</span>' : '') + '</div>'
+        + tdNeuHtml('unter:' + t.id, { eltern: t.id, projektId: t.projektId, text: 'Unteraufgabe hinzufügen' });
+      const kommentareHtml = '<div class="td-f-ueber">Kommentare' + (modal.kommentare && modal.kommentare.length ? '<span class="td-zahl">' + modal.kommentare.length + '</span>' : '') + '</div>'
         + (!modal.kommentare
             ? '<div class="docempty">werden geladen …</div>'
             : (modal.kommentare.length
@@ -6980,26 +6974,10 @@
                 : '<div class="docempty">Noch keine Kommentare.</div>'))
         + '<div class="aufgabe-neu" style="margin-top:10px">'
         + '<input type="text" id="t-kommentar" placeholder="Kommentar schreiben">'
-        + '<button type="button" class="tiny" data-act="t-kommentar">Senden</button></div>'
-        + '</div>'
-        + '<div class="td-f-rechts">'
-        + '<div class="td-f-feld"><label>Projekt</label><select id="t-projekt">' + tdProjektListe().map(function (p) {
-            return '<option value="' + esc(p.id) + '"' + (p.id === projektId ? ' selected' : '') + '>' + esc(p.eingang ? 'Eingang' : p.name) + '</option>';
-          }).join('') + '</select></div>'
-        + '<div class="td-f-feld"><label>Fällig</label><input type="date" id="t-faellig" value="' + esc(faellig) + '">'
-        + '<div class="td-f-schnell">'
-        + schnell('Heute', heute0, 'gruen', tdHeuteZeichen(heute0.getDate()))
-        + schnell('Morgen', tdPlus(1), 'orange', TDI.sonne)
-        + schnell('Nächste Woche', tdNaechsteWoche(), 'lila', TDI.weiter)
-        + schnell('Kein Datum', null, '', TDI.kreisX)
-        + '</div>'
-        + (t.faelligText ? '<div class="td-f-klein">' + (t.wiederkehrend ? 'Wiederholt sich: ' : 'In Todoist: ') + esc(t.faelligText) + '</div>' : '')
-        + '</div>'
-        + '<div class="td-f-feld"><label>Priorität</label>' + tdFlaggen(prio, 't-prio', t.id)
-        + '<input type="hidden" id="t-prio" value="' + prio + '"></div>'
-        // Nachhaken direkt im Fenster: warten lassen oder nachgehakt / Antwort da
-        + '<div class="td-f-feld td-f-warten"><label>⏳ Wartet auf Antwort</label>'
-        + (tdWartet(t)
+        + '<button type="button" class="tiny" data-act="t-kommentar">Senden</button></div>';
+      // Nachhaken direkt im Fenster: warten lassen oder nachgehakt / Antwort da
+      const wartenHtml = '<div class="td-f-feld td-f-warten"><label>⏳ Wartet auf Antwort</label>'
+        + (wartet
             ? '<div class="td-f-klein' + (!t.faellig || t.faellig <= heuteISO() ? ' rot' : '') + '">'
               + (!t.faellig || t.faellig <= heuteISO() ? 'Nachhaken ist fällig' : 'Nachhaken am ' + esc(planTag(t.faellig))) + '</div>'
               + '<div class="td-f-wknoepfe">'
@@ -7009,18 +6987,58 @@
               + [[1, 'Morgen'], [3, '3 Tagen'], [7, '1 Woche']].map(function (x) {
                   return '<button type="button" class="nh-knopf" data-act="td-warten" data-tid="' + t.id + '" data-tage="' + x[0] + '">' + x[1] + '</button>';
                 }).join('') + '</div>')
-        + '</div>'
+        + '</div>';
+      const mehrText = mehr ? 'Weniger anzeigen'
+        : 'Mehr anzeigen: Priorität' + (wartet ? '' : ', Warten') + (kinder.length ? '' : ', Unteraufgaben') + ', Kommentare, Löschen';
+
+      body = '<h2>Aufgabe</h2>'
+        + '<div class="td-fenster td-fenster-neu">'
+        + '<div class="td-f-titel td-zeile p' + prio + '" id="t-kopf">'
+        + '<button type="button" class="td-kreis" data-act="t-fertig" title="Abhaken">' + TDI.check + '</button>'
+        + '<input type="text" id="t-inhalt" value="' + esc(inhalt) + '" placeholder="Aufgabenname"></div>'
         + ((t.labels || []).length
-            ? '<div class="td-f-feld"><label>Labels</label><div class="td-f-labels">'
-              + t.labels.map(function (l) { return '<span>' + esc(l) + '</span>'; }).join('') + '</div></div>'
+            ? '<div class="td-f-labels td-f-labels-oben">' + t.labels.map(function (l) { return '<span>' + esc(l) + '</span>'; }).join('') + '</div>'
             : '')
-        + (t.angelegt ? '<div class="td-f-klein">Angelegt am ' + new Date(t.angelegt).toLocaleDateString('de-DE') + '</div>' : '')
-        + '</div></div>'
+        + '<div class="td-f-kern">'
+        + '<div class="td-f-feld"><label>Fällig</label><input type="date" id="t-faellig" value="' + esc(faellig) + '">'
+        + '<div class="td-f-schnell">'
+        + schnell('Heute', heute0, 'gruen', tdHeuteZeichen(heute0.getDate()))
+        + schnell('Morgen', tdPlus(1), 'orange', TDI.sonne)
+        + schnell('Nächste Woche', tdNaechsteWoche(), 'lila', TDI.weiter)
+        + schnell('Kein Datum', null, '', TDI.kreisX)
+        + '</div>'
+        + (t.faelligText ? '<div class="td-f-klein">' + (t.wiederkehrend ? 'Wiederholt sich: ' : 'In Todoist: ') + esc(t.faelligText) + '</div>' : '')
+        + '</div>'
+        + '<div class="td-f-feld"><label>Projekt</label><select id="t-projekt">' + tdProjektListe().map(function (p) {
+            return '<option value="' + esc(p.id) + '"' + (p.id === projektId ? ' selected' : '') + '>' + esc(p.eingang ? 'Eingang' : p.name) + '</option>';
+          }).join('') + '</select></div>'
+        + '</div>'
+        + (wartet ? wartenHtml : '')
+        + '<div class="td-f-besch"><textarea id="t-besch" rows="' + Math.max(3, Math.min(14, String(besch).split('\n').length + 1)) + '" placeholder="Beschreibung">' + esc(besch) + '</textarea></div>'
+        + '<div class="td-verlauf"><input type="text" id="t-verlauf" placeholder="+ Verlauf, z. B. „Aldo angerufen, kommt Dienstag“" value="' + esc(modal.verlaufText || '') + '">'
+        + ((window.SpeechRecognition || window.webkitSpeechRecognition) ? '<button type="button" class="tiny" data-act="t-verlauf-diktat" title="Diktieren">🎤</button>' : '')
+        + '<button type="button" class="tiny primary" data-act="t-verlauf">Eintragen</button></div>'
+        + (kinder.length ? unterHtml : '')
+        // Die Priorität muss immer im Fenster stehen, auch eingeklappt — Speichern liest sie aus
+        + '<input type="hidden" id="t-prio" value="' + prio + '">'
+        + '<button type="button" class="td-f-mehrknopf' + (mehr ? ' offen' : '') + '" data-act="t-mehr">' + mehrText + '</button>'
+        + (mehr
+            ? '<div class="td-f-mehr">'
+              + '<div class="td-f-feld"><label>Priorität</label>' + tdFlaggen(prio, 't-prio', t.id) + '</div>'
+              + (wartet ? '' : wartenHtml)
+              + (kinder.length ? '' : unterHtml)
+              + kommentareHtml
+              + '<div class="td-f-fuss">'
+              + (t.angelegt ? '<span class="td-f-klein">Angelegt am ' + new Date(t.angelegt).toLocaleDateString('de-DE') + '</span>' : '')
+              + '<a href="' + esc(t.url) + '" target="_blank" rel="noopener" class="tdlink">In Todoist öffnen</a>'
+              + '<button type="button" class="danger tiny" data-act="t-loeschen">Löschen</button>'
+              + '</div></div>'
+            : '')
+        + '</div>'
         + '<div class="modal-actions">'
-        + '<button type="button" class="danger" data-act="t-loeschen">Löschen</button>'
-        + '<a href="' + esc(t.url) + '" target="_blank" rel="noopener" class="tdlink">In Todoist öffnen</a>'
-        + '<div class="spacer"></div>'
         + '<button type="button" data-act="close">Abbrechen</button>'
+        + '<div class="spacer"></div>'
+        + '<button type="button" data-act="t-fertig">✓ Erledigt</button>'
         + '<button type="button" class="primary" data-act="t-speichern">Speichern</button></div>';
 
     } else if (modal.kind === 'schnell') {
@@ -8664,6 +8682,7 @@
     }
     else if (act === 'aufgabe-oeffnen') { tdOeffnen(el.getAttribute('data-tid')); }
     else if (act === 't-speichern') { aufgabeSpeichern(); }
+    else if (act === 't-mehr') { modalEntwurfMerken(); modal.mehr = !modal.mehr; render(); }
     else if (act === 't-fertig') { tdFertig(modal.aufgabe.id, el); }
     else if (act === 't-loeschen') { aufgabeLoeschen(); }
     else if (act === 't-kommentar') { kommentarSenden(); }
