@@ -573,7 +573,7 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
   #app .td-seite .td-gruppe { font-size: 13px; }
 
   /* Liste mittig mit Luft, wie Todoists Hauptspalte */
-  #app .td-inhalt { max-width: 840px; width: 100%; justify-self: center; margin: 0 auto; padding: 44px 48px 90px; }
+  #app .td-inhalt { max-width: 1040px; width: 100%; justify-self: center; margin: 0 auto; padding: 44px 48px 90px; }
   #app .td-kopf { margin-bottom: 4px; }
   #app .td-kopf h2 { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
   #app .td-datum-unter { font-size: 13px; }
