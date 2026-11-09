@@ -556,13 +556,15 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 @media (min-width: 901px) {
   #app .td {
     --td-rot: #dc4c3e; --td-rot-hell: rgba(220, 76, 62, .12); --td-rot-knopf: #dc4c3e; --td-hover: rgba(0, 0, 0, .05);
-    background: #ffffff; border: none; border-radius: 14px; box-shadow: none; min-height: calc(100vh - 150px);
+    background: #ffffff; border: none; border-radius: 0; box-shadow: none;
+    /* Aufbau wie Todoist: randlos bis an die Fensterränder und bis unten, Seitenleiste in voller Höhe */
+    margin: -4px -22px 0; min-height: calc(100vh - 128px); grid-template-columns: 244px minmax(0, 1fr);
   }
   #app[data-theme="dark"] .td {
     --td-rot: #ff7066; --td-rot-hell: rgba(255, 112, 102, .16); --td-rot-knopf: #de4c4a; --td-hover: rgba(255, 255, 255, .06);
     background: #1f1f1f;
   }
-  #app .td-seite { background: #fcfaf8; border-right: none; border-radius: 14px 0 0 14px; padding: 16px 10px 20px; }
+  #app .td-seite { background: #fcfaf8; border-right: none; border-radius: 0; padding: 18px 12px 24px; }
   #app[data-theme="dark"] .td-seite { background: #282828; }
   #app .td-seite button { font-size: 14px; padding: 7px 10px; border-radius: 6px; }
   #app .td-seite button.aktiv { background: var(--td-rot-hell); color: var(--td-rot); }
@@ -571,7 +573,7 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
   #app .td-seite .td-gruppe { font-size: 13px; }
 
   /* Liste mittig mit Luft, wie Todoists Hauptspalte */
-  #app .td-inhalt { max-width: 840px; width: 100%; justify-self: center; padding: 36px 40px 60px; }
+  #app .td-inhalt { max-width: 760px; width: 100%; justify-self: center; margin: 0 auto; padding: 44px 48px 90px; }
   #app .td-kopf { margin-bottom: 4px; }
   #app .td-kopf h2 { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
   #app .td-datum-unter { font-size: 13px; }
