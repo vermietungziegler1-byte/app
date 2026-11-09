@@ -549,6 +549,24 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
   line-height: 17px; text-align: center; box-sizing: border-box; font-style: normal;
 }
 
+/* Aufgaben am PC näher an Todoist: die Projekte stehen links, also keine doppelten Projekt-Chips über der Liste;
+   Label-Filter als stiller Text, Nachhaken als kleine Links statt einer Reihe großer Knöpfe */
+@media (min-width: 901px) {
+  #app .td-filter .td-fchip[data-act="td-filter-projekt"], #app .td-filter .td-ftrenner { display: none; }
+  #app .td-filter { margin: 0 0 8px; gap: 2px; }
+  #app .td-fchip { background: transparent; color: var(--muted); padding: 3px 8px; font-weight: 500; }
+  #app .td-fchip:hover { background: var(--fuellung); color: var(--ink); }
+  #app .td-fchip.an { background: var(--fuellung); color: var(--ink); }
+  #app .td-fchip.an span { color: var(--muted); }
+  #app .td-nachhaken { margin: 0 0 6px 32px; font-size: 12px; gap: 4px 6px; }
+  #app .td-nachhaken .nh-knopf { background: transparent; color: var(--messing); padding: 1px 5px; font-size: 12px; }
+  #app .td-nachhaken .nh-knopf.primaer { background: transparent; color: var(--messing); font-weight: 700; }
+  #app .td-nachhaken .nh-knopf:hover { background: var(--fuellung); }
+  #app .td-besch { font-size: 12.5px; }
+  #app .td-label { color: var(--muted); }
+}
+#app .td-dauer { color: var(--muted); }
+
 /* Fenster: Aktionen als gleich breite Knöpfe, der Hauptknopf voll in Blau */
 #app .modal .modal-actions button { border-radius: 11px; padding: 11px 14px; font-size: 15px; }
 #app .modal .anf-knoepfe .kauf-link { border-radius: 10px; padding: 7px 12px; background: var(--fuellung); color: var(--messing); font-weight: 600; text-decoration: none; }

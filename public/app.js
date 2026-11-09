@@ -1666,6 +1666,7 @@
       + (besch ? '<div class="td-besch">' + esc(besch) + '</div>' : '')
       + '<div class="td-meta">'
       + (w ? '<span class="td-datum ' + w.klasse + '">' + TDI.kalender + esc(w.text) + (t.wiederkehrend ? TDI.wieder : '') + '</span>' : '')
+      + (t.dauer ? '<span class="td-dauer" title="Geplante Dauer">' + t.dauer + ' Min</span>' : '')
       + (kinder.length ? '<span class="td-unter" title="Unteraufgaben">' + TDI.unter + kinder.length + '</span>' : '')
       + (t.kommentare ? '<span class="td-komm" title="Kommentare">' + TDI.kommentar + t.kommentare + '</span>' : '')
       + (t.labels || []).map(function (l) { return '<span class="td-label">' + TDI.label + esc(l) + '</span>'; }).join('')
@@ -6990,17 +6991,14 @@
         + '</div>';
       const mehrText = mehr ? 'Weniger anzeigen'
         : 'Mehr anzeigen: Priorität' + (wartet ? '' : ', Warten') + (kinder.length ? '' : ', Unteraufgaben') + ', Kommentare, Löschen';
-
-      body = '<h2>Aufgabe</h2>'
-        + '<div class="td-fenster td-fenster-neu">'
-        + '<div class="td-f-titel td-zeile p' + prio + '" id="t-kopf">'
+      // Bausteine, die beide Fassungen (Handy und PC) benutzen
+      const titelHtml = '<div class="td-f-titel td-zeile p' + prio + '" id="t-kopf">'
         + '<button type="button" class="td-kreis" data-act="t-fertig" title="Abhaken">' + TDI.check + '</button>'
-        + '<input type="text" id="t-inhalt" value="' + esc(inhalt) + '" placeholder="Aufgabenname"></div>'
-        + ((t.labels || []).length
-            ? '<div class="td-f-labels td-f-labels-oben">' + t.labels.map(function (l) { return '<span>' + esc(l) + '</span>'; }).join('') + '</div>'
-            : '')
-        + '<div class="td-f-kern">'
-        + '<div class="td-f-feld"><label>Fällig</label><input type="date" id="t-faellig" value="' + esc(faellig) + '">'
+        + '<input type="text" id="t-inhalt" value="' + esc(inhalt) + '" placeholder="Aufgabenname"></div>';
+      const labelsHtml = (t.labels || []).length
+        ? '<div class="td-f-labels">' + t.labels.map(function (l) { return '<span>' + esc(l) + '</span>'; }).join('') + '</div>'
+        : '';
+      const datumHtml = '<div class="td-f-feld"><label>Fällig</label><input type="date" id="t-faellig" value="' + esc(faellig) + '">'
         + '<div class="td-f-schnell">'
         + schnell('Heute', heute0, 'gruen', tdHeuteZeichen(heute0.getDate()))
         + schnell('Morgen', tdPlus(1), 'orange', TDI.sonne)
@@ -7008,38 +7006,54 @@
         + schnell('Kein Datum', null, '', TDI.kreisX)
         + '</div>'
         + (t.faelligText ? '<div class="td-f-klein">' + (t.wiederkehrend ? 'Wiederholt sich: ' : 'In Todoist: ') + esc(t.faelligText) + '</div>' : '')
-        + '</div>'
-        + '<div class="td-f-feld"><label>Projekt</label><select id="t-projekt">' + tdProjektListe().map(function (p) {
-            return '<option value="' + esc(p.id) + '"' + (p.id === projektId ? ' selected' : '') + '>' + esc(p.eingang ? 'Eingang' : p.name) + '</option>';
-          }).join('') + '</select></div>'
-        + '</div>'
-        + (wartet ? wartenHtml : '')
-        + '<div class="td-f-besch"><textarea id="t-besch" rows="' + Math.max(3, Math.min(14, String(besch).split('\n').length + 1)) + '" placeholder="Beschreibung">' + esc(besch) + '</textarea></div>'
+        + '</div>';
+      const projektHtml = '<div class="td-f-feld"><label>Projekt</label><select id="t-projekt">' + tdProjektListe().map(function (p) {
+          return '<option value="' + esc(p.id) + '"' + (p.id === projektId ? ' selected' : '') + '>' + esc(p.eingang ? 'Eingang' : p.name) + '</option>';
+        }).join('') + '</select></div>';
+      const beschHtml = '<div class="td-f-besch"><textarea id="t-besch" rows="' + Math.max(3, Math.min(14, String(besch).split('\n').length + 1)) + '" placeholder="Beschreibung">' + esc(besch) + '</textarea></div>'
         + '<div class="td-verlauf"><input type="text" id="t-verlauf" placeholder="+ Verlauf, z. B. „Aldo angerufen, kommt Dienstag“" value="' + esc(modal.verlaufText || '') + '">'
         + ((window.SpeechRecognition || window.webkitSpeechRecognition) ? '<button type="button" class="tiny" data-act="t-verlauf-diktat" title="Diktieren">🎤</button>' : '')
-        + '<button type="button" class="tiny primary" data-act="t-verlauf">Eintragen</button></div>'
-        + (kinder.length ? unterHtml : '')
-        // Die Priorität muss immer im Fenster stehen, auch eingeklappt — Speichern liest sie aus
-        + '<input type="hidden" id="t-prio" value="' + prio + '">'
-        + '<button type="button" class="td-f-mehrknopf' + (mehr ? ' offen' : '') + '" data-act="t-mehr">' + mehrText + '</button>'
-        + (mehr
-            ? '<div class="td-f-mehr">'
-              + '<div class="td-f-feld"><label>Priorität</label>' + tdFlaggen(prio, 't-prio', t.id) + '</div>'
-              + (wartet ? '' : wartenHtml)
-              + (kinder.length ? '' : unterHtml)
-              + kommentareHtml
-              + '<div class="td-f-fuss">'
-              + (t.angelegt ? '<span class="td-f-klein">Angelegt am ' + new Date(t.angelegt).toLocaleDateString('de-DE') + '</span>' : '')
-              + '<a href="' + esc(t.url) + '" target="_blank" rel="noopener" class="tdlink">In Todoist öffnen</a>'
-              + '<button type="button" class="danger tiny" data-act="t-loeschen">Löschen</button>'
-              + '</div></div>'
-            : '')
-        + '</div>'
-        + '<div class="modal-actions">'
+        + '<button type="button" class="tiny primary" data-act="t-verlauf">Eintragen</button></div>';
+      // Die Priorität steht immer im Fenster, auch eingeklappt — Speichern liest das versteckte Feld aus
+      const prioHtml = '<div class="td-f-feld"><label>Priorität</label>' + tdFlaggen(prio, 't-prio', t.id) + '</div>';
+      const prioFeld = '<input type="hidden" id="t-prio" value="' + prio + '">';
+      const fussHtml = '<div class="td-f-fuss">'
+        + (t.angelegt ? '<span class="td-f-klein">Angelegt am ' + new Date(t.angelegt).toLocaleDateString('de-DE') + '</span>' : '')
+        + '<a href="' + esc(t.url) + '" target="_blank" rel="noopener" class="tdlink">In Todoist öffnen</a>'
+        + '<button type="button" class="danger tiny" data-act="t-loeschen">Löschen</button>'
+        + '</div>';
+      const aktionenHtml = '<div class="modal-actions">'
         + '<button type="button" data-act="close">Abbrechen</button>'
         + '<div class="spacer"></div>'
         + '<button type="button" data-act="t-fertig">✓ Erledigt</button>'
         + '<button type="button" class="primary" data-act="t-speichern">Speichern</button></div>';
+
+      if (window.innerWidth < 900) {
+        // Handy: eine Spalte, das Wesentliche oben, der Rest hinter „Mehr“
+        body = '<h2>Aufgabe</h2>'
+          + '<div class="td-fenster td-fenster-neu">'
+          + titelHtml
+          + (labelsHtml ? '<div class="td-f-labels-oben">' + labelsHtml + '</div>' : '')
+          + '<div class="td-f-kern">' + datumHtml + projektHtml + '</div>'
+          + (wartet ? wartenHtml : '')
+          + beschHtml
+          + (kinder.length ? unterHtml : '')
+          + prioFeld
+          + '<button type="button" class="td-f-mehrknopf' + (mehr ? ' offen' : '') + '" data-act="t-mehr">' + mehrText + '</button>'
+          + (mehr
+              ? '<div class="td-f-mehr">' + prioHtml + (wartet ? '' : wartenHtml) + (kinder.length ? '' : unterHtml) + kommentareHtml + fussHtml + '</div>'
+              : '')
+          + '</div>' + aktionenHtml;
+      } else {
+        // PC: breites Fenster wie in Todoist — links Inhalt, Verlauf, Unteraufgaben und Kommentare, rechts die Angaben
+        body = '<h2>Aufgabe</h2>'
+          + '<div class="td-fenster">'
+          + '<div class="td-f-links">' + titelHtml + beschHtml + unterHtml + kommentareHtml + '</div>'
+          + '<div class="td-f-rechts">' + datumHtml + projektHtml + prioHtml + prioFeld + wartenHtml
+          + (labelsHtml ? '<div class="td-f-feld"><label>Labels</label>' + labelsHtml + '</div>' : '')
+          + fussHtml + '</div>'
+          + '</div>' + aktionenHtml;
+      }
 
     } else if (modal.kind === 'schnell') {
       body = '<h2>Aufgabe hinzufügen</h2>' + (tdEditor ? tdEditorHtml() : '')
