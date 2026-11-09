@@ -467,6 +467,86 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 }
 #app .mpunkt:hover .td-warteknopf.mini, #app .td-warteknopf.mini:focus { opacity: 1; }
 @media (max-width: 620px) { #app .td-warteknopf.mini { opacity: .7; } }
+
+/* ==================================================================
+   Richtung „Klar“ (November 2026): der Apple-Stil, aufgeräumt.
+   Größere Titel, gruppierte Listen mit Pfeilen, Blau nur für Aktionen,
+   Urteilsfarben für die Anfragen, Segmentleiste in voller Breite,
+   untere Leiste mit Strichsymbolen und Zähler.
+   ================================================================== */
+
+/* Titel: Kartenüberschriften größer, die Seitenüberschrift der Anfragen wie ein iOS Large Title */
+#app .tafel h3 { font-size: 20px; font-weight: 700; letter-spacing: -0.02em; }
+#app .tafel.anf-kopf h3 { font-size: 28px; }
+#app .modal h2 { font-size: 24px; }
+
+/* Nummern im Tagesmemo: neutrales Quadrat statt blauer Kreis — Blau bleibt den Aktionen vorbehalten */
+#app .mnr { background: var(--fuellung); color: var(--ink); border-radius: 9px; }
+#app .mnr.rot { background: var(--sperr-soft); color: var(--sperr); }
+
+/* Urteilsfarben wie die Systemfarben: grün passt, orange vielleicht, rot eher nicht, grau unklar */
+#app .anf-karte.a-passt, #app .anf-urteilbox.a-passt { --k: #34c759; }
+#app .anf-karte.a-vielleicht, #app .anf-urteilbox.a-vielleicht { --k: #ff9500; }
+#app .anf-karte.a-nicht, #app .anf-urteilbox.a-nicht { --k: #ff3b30; }
+#app .anf-karte.a-unklar, #app .anf-urteilbox.a-unklar { --k: #8e8e93; }
+#app .anf-karte.a-fehler, #app .anf-urteilbox.a-fehler { --k: #ff3b30; }
+#app[data-theme="dark"] .anf-karte.a-passt, #app[data-theme="dark"] .anf-urteilbox.a-passt { --k: #30d158; }
+#app[data-theme="dark"] .anf-karte.a-vielleicht, #app[data-theme="dark"] .anf-urteilbox.a-vielleicht { --k: #ff9f0a; }
+#app[data-theme="dark"] .anf-karte.a-nicht, #app[data-theme="dark"] .anf-urteilbox.a-nicht { --k: #ff453a; }
+#app[data-theme="dark"] .anf-karte.a-fehler, #app[data-theme="dark"] .anf-urteilbox.a-fehler { --k: #ff453a; }
+
+/* Punkte als getöntes Quadrat statt Ring mit Beschriftung */
+#app .anf-punkte {
+  width: 44px; height: 44px; border: none; border-radius: 12px; flex: none;
+  background: color-mix(in srgb, var(--k) 18%, transparent); color: var(--k);
+  font-size: 17px; font-weight: 700; display: flex; align-items: center; justify-content: center;
+}
+#app .anf-punkte small { display: none; }
+@media (max-width: 620px) { #app .anf-punkte { width: 44px; height: 44px; font-size: 17px; } }
+
+/* Anfragen als gruppierte Liste: Zeilen mit eingerücktem Trenner und Pfeil rechts */
+#app .anf-liste { padding: 4px 0; }
+#app .anf-karte { padding: 12px 36px 12px 14px; border-radius: 0; border-color: var(--line-soft); }
+#app .anf-karte.klickbar { position: relative; }
+#app .anf-karte.klickbar::after {
+  content: ''; position: absolute; right: 16px; top: 50%; width: 9px; height: 9px; margin-top: -6px;
+  border-right: 2.2px solid var(--muted); border-bottom: 2.2px solid var(--muted); transform: rotate(-45deg); opacity: .55;
+}
+#app .anf-karte:hover { background: rgba(118, 118, 128, .07); }
+#app .anf-karte:hover .anf-titel { color: var(--ink); }
+#app .anf-titel { font-size: 15.5px; }
+#app .anf-karte .anzahl {
+  display: inline-block; vertical-align: 2px; margin-left: 4px; padding: 1px 7px; border-radius: 999px;
+  background: var(--fuellung); color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: 0;
+}
+#app .anf-urteil { font-weight: 600; }
+#app .anf-urteilbox { border-radius: 14px; }
+
+/* Filter als Segmentleiste in voller Breite */
+#app .anf-filter { display: flex; width: 100%; margin: 12px 0 0; }
+#app .anf-filter button { flex: 1 1 0; text-align: center; padding: 6px 4px; font-size: 13px; white-space: nowrap; }
+#app .anf-filter button .anzahl { color: var(--muted); font-weight: 500; margin-left: 2px; }
+#app .anf-filter button.aktiv .anzahl { color: var(--ink); }
+#app .anf-info { font-size: 13px; }
+#app .anf-kopf .anzahl { background: var(--td-rot); color: #fff; border-radius: 999px; padding: 2px 9px; font-size: 12.5px; font-weight: 700; }
+
+/* Zähler: rot wie die Zahlen auf den iOS-Symbolen */
+#app .seitennav .zahl { background: var(--td-rot); color: #fff; }
+#app .sl-zusatz { background: var(--td-rot); color: #fff; border-radius: 999px; padding: 1px 7px; font-size: 11.5px; font-weight: 700; }
+
+/* Untere Leiste: Strichsymbole statt Schriftzeichen, Zähler am Symbol */
+#app .untenleiste button { position: relative; gap: 3px; }
+#app .untenleiste button > span { font-size: 0; line-height: 0; display: block; height: 24px; }
+#app .untenleiste button > span svg { width: 24px; height: 24px; display: block; }
+#app .untenleiste .zaehler {
+  position: absolute; top: 2px; left: 50%; margin-left: 4px; min-width: 17px; height: 17px; padding: 0 5px;
+  border-radius: 9px; background: var(--td-rot); color: #fff; font-size: 10.5px; font-weight: 700;
+  line-height: 17px; text-align: center; box-sizing: border-box; font-style: normal;
+}
+
+/* Fenster: Aktionen als gleich breite Knöpfe, der Hauptknopf voll in Blau */
+#app .modal .modal-actions button { border-radius: 11px; padding: 11px 14px; font-size: 15px; }
+#app .modal .anf-knoepfe .kauf-link { border-radius: 10px; padding: 7px 12px; background: var(--fuellung); color: var(--messing); font-weight: 600; text-decoration: none; }
 #app .td-f-warten .td-f-klein { margin: 0 0 6px; }
 #app .td-f-warten .td-f-klein.rot { color: var(--sperr); font-weight: 600; }
 #app .td-f-wknoepfe { display: flex; flex-wrap: wrap; gap: 6px; }

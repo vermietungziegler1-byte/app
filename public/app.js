@@ -4455,13 +4455,26 @@
         + '<button class="fab" data-act="fab">' + (fabOffen ? '✕' : '+') + '</button>'
         + '</div>'
 
+        // Untere Leiste mit Strichsymbolen; Anfragen mit Zähler statt Post (Post steht im Menü)
         + '<div class="untenleiste">'
-        + '<button data-act="zu-heute" class="' + (ansicht === 'heute' ? 'aktiv' : '') + '"><span>◵</span>Heute</button>'
-        + '<button data-act="zu-aufgaben" class="' + (ansicht === 'aufgaben' ? 'aktiv' : '') + '"><span>✓</span>Aufgaben</button>'
-        + '<button data-act="zu-objekte" class="' + (ansicht === 'objekte' ? 'aktiv' : '') + '"><span>▤</span>Objekte</button>'
-        + '<button data-act="zu-mieten" class="' + (ansicht === 'mieten' ? 'aktiv' : '') + '"><span>€</span>Mieten</button>'
-        + '<button data-act="zu-post" class="' + (ansicht === 'post' ? 'aktiv' : '') + '"><span>✉</span>Post</button>'
-        + '<button data-act="seite"><span>≡</span>Menü</button>'
+        + '<button data-act="zu-heute" class="' + (ansicht === 'heute' ? 'aktiv' : '') + '"><span>'
+          + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h14V10"/></svg>'
+          + '</span>Heute</button>'
+        + '<button data-act="zu-aufgaben" class="' + (ansicht === 'aufgaben' ? 'aktiv' : '') + '"><span>'
+          + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="m8 12 3 3 5-6"/></svg>'
+          + '</span>Aufgaben</button>'
+        + '<button data-act="zu-objekte" class="' + (ansicht === 'objekte' ? 'aktiv' : '') + '"><span>'
+          + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21V5l8-3 8 3v16"/><path d="M9 9h2M13 9h2M9 13h2M13 13h2M10 21v-4h4v4"/></svg>'
+          + '</span>Objekte</button>'
+        + '<button data-act="zu-mieten" class="' + (ansicht === 'mieten' ? 'aktiv' : '') + '"><span>'
+          + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18"/></svg>'
+          + '</span>Mieten</button>'
+        + '<button data-act="zu-anfragen" class="' + (ansicht === 'anfragen' ? 'aktiv' : '') + '"><span>'
+          + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16v12H4z"/><path d="m4 8 8 6 8-6"/></svg>'
+          + '</span>Anfragen' + (anfNeuZahl() ? '<i class="zaehler">' + anfNeuZahl() + '</i>' : '') + '</button>'
+        + '<button data-act="seite"><span>'
+          + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>'
+          + '</span>Menü</button>'
         + '</div>';
     }
 
