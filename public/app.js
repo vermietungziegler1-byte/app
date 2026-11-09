@@ -2833,7 +2833,9 @@
       anfragen.laedt = true;
       anfLaden(false, true).then(function () { anfragen.laedt = false; if (ansicht === 'heute' && !modal) render(); });
     }
-    const anfNeu = anfragen.daten ? anfragen.daten.anfragen.filter(function (a) { return a.status === 'neu'; }) : [];
+    const anfNeu = anfragen.daten
+      ? anfGruppen(anfragen.daten.anfragen).filter(function (g) { return g.haupt.status === 'neu'; }).map(function (g) { return g.haupt; })
+      : [];
     if (anfNeu.length) {
       const passend = anfNeu.filter(function (a) { return a.bewertung && a.bewertung.urteil === 'passt'; }).length;
       punkte.push({
@@ -5098,8 +5100,40 @@
   function anfVon(id) {
     return anfragen.daten ? anfragen.daten.anfragen.find(function (a) { return a.id === id; }) : null;
   }
+  // Eine Karte je Person: alle Mails derselben Person zusammen, die am besten bewertete steht vorn
+  function anfGruppen(liste) {
+    const nach = {};
+    const reihen = [];
+    const punkte = function (x) { return x.bewertung ? x.bewertung.punkte : -1; };
+    (liste || []).forEach(function (a) {
+      const k = a.person || a.id;
+      if (!nach[k]) { nach[k] = { haupt: a, alle: [] }; reihen.push(nach[k]); }
+      nach[k].alle.push(a);
+      const h = nach[k].haupt;
+      if (punkte(a) > punkte(h) || (punkte(a) === punkte(h) && a.wann > h.wann)) nach[k].haupt = a;
+    });
+    return reihen;
+  }
+  function anfGruppeVon(id) {
+    const a = anfVon(id);
+    if (!a) return [];
+    return anfragen.daten.anfragen.filter(function (x) { return (x.person || x.id) === (a.person || a.id); });
+  }
+  function anfInteressant(a) {
+    return !!(a.bewertung && (a.bewertung.urteil === 'passt' || a.bewertung.urteil === 'vielleicht'));
+  }
+  // Neue Anfragen, die passen oder vielleicht passen — eine je Person; Nachfragen und Unklares zählen nicht
   function anfNeuZahl() {
-    return anfragen.daten ? anfragen.daten.anfragen.filter(function (a) { return a.status === 'neu'; }).length : 0;
+    if (!anfragen.daten) return 0;
+    return anfGruppen(anfragen.daten.anfragen).filter(function (g) { return g.haupt.status === 'neu' && anfInteressant(g.haupt); }).length;
+  }
+  // Absender ohne die Weiterleitungsadresse des Portals: nur der Name, sonst der Teil vor dem @
+  function anfAbsender(von) {
+    const roh = String(von || '');
+    const name = roh.replace(/<[^>]*>/g, '').replace(/"/g, '').trim();
+    if (name && name.indexOf('@') === -1) return name;
+    const m = roh.match(/([^<\s@]+)@/);
+    return m ? m[1] : roh;
   }
   // „Per Mail antworten“ ist ein echter Link (mailto:) — nach dem Klick fragt das Fenster, ob die Anfrage erledigt ist
   function anfBinden() {
@@ -5162,16 +5196,20 @@
       return [i.name, i.objekt, i.beruf, i.nachricht, a.betreff, a.von, einheitKurz(a.einheitId)]
         .join(' ').toLowerCase().indexOf(query.toLowerCase()) !== -1;
     };
-    // Offene nach Punkten, die besten zuerst (Unbewertete ans Ende) — Erledigtes nach Eingang
+    // Eine Karte je Person. Offene nach Punkten, die besten zuerst (Unbewertete ans Ende) — Erledigtes nach Eingang
+    const gruppen = anfGruppen(alle);
     const nachPunkten = anfragen.filter === 'offen' || anfragen.filter === 'passt';
-    const sichtbar = alle.filter(function (a) { return anfImFilter(a, anfragen.filter) && passtZurSuche(a); }).sort(function (x, y) {
+    const sichtbar = gruppen.filter(function (g) { return anfImFilter(g.haupt, anfragen.filter) && g.alle.some(passtZurSuche); }).sort(function (gx, gy) {
+      const x = gx.haupt, y = gy.haupt;
       if (nachPunkten) {
         const px = x.bewertung ? x.bewertung.punkte : -1, py = y.bewertung ? y.bewertung.punkte : -1;
         if (py !== px) return py - px;
       }
       return y.wann - x.wann;
     });
-    const neue = alle.filter(function (a) { return a.status === 'neu'; }).length;
+    const neue = gruppen.filter(function (g) { return g.haupt.status === 'neu'; }).length;
+    const tagesanfang = new Date(); tagesanfang.setHours(0, 0, 0, 0);
+    const aeltere = alle.filter(function (a) { return a.status === 'neu' && a.wann < tagesanfang.getTime(); }).length;
     const kriterien = String(e.kriterien || '').replace(/\s+/g, ' ').trim();
     const kriterienKurz = kriterien.length > 160 ? kriterien.slice(0, 160).replace(/\s+\S*$/, '') + ' …' : kriterien;
 
@@ -5181,11 +5219,14 @@
       + (d.postfach && d.assistent ? '<button class="tiny ghost" data-act="anf-abrufen">Abrufen</button>' : '')
       + (nutzerRolle === 'verwalter' ? '<button class="tiny ghost" data-act="anf-kriterien">Kriterien</button>' : '')
       + '</span></h3>'
-      + '<div class="anf-info"><b>Bewertet nach</b> ' + esc(kriterienKurz) + '</div>'
-      + '<div class="anf-info">'
+      + '<div class="anf-info anf-lang"><b>Bewertet nach</b> ' + esc(kriterienKurz) + '</div>'
+      + '<div class="anf-info anf-lang">'
       + (e.melden
           ? '<b>Morgens um ' + esc(e.zeit || '07:00') + '</b> aufs Handy, was neu hereingekommen ist'
           : '<b>Morgenmeldung aus</b> — neue Anfragen melden sich nicht von selbst') + '</div>'
+      // Am Handy nur eine Zeile — der volle Text steht im Kriterien-Fenster
+      + '<div class="anf-info anf-kurz">Nach deinen Kriterien bewertet · '
+      + (e.melden ? 'morgens um ' + esc(e.zeit || '07:00') + ' aufs Handy' : 'Morgenmeldung aus') + '</div>'
       + '<div class="poststand">'
       + (!d.postfach
           ? 'Das Postfach ist nicht verbunden — Anfragen kommen erst, wenn es unter Menü → Postfach verbunden ist. '
@@ -5199,9 +5240,13 @@
       // Eine Sammel-Neubewertung, die nach ihrer Antwort noch scheiterte, meldet der Server hier
       + (d.neuFehler ? '<div class="anf-gruende neg">Die letzte Neubewertung aller offenen Anfragen ist abgebrochen: ' + esc(d.neuFehler) + '</div>' : '')
       + '</div>'
+      // Nach dem ersten Lauf stehen zwei Wochen alte Anfragen als „neu“ da — die sind in Outlook längst beantwortet
+      + (aeltere >= 10 && nutzerRolle === 'verwalter' && anfragen.filter === 'offen'
+          ? '<div class="anf-info anf-aufraeumen">' + aeltere + ' offene Anfragen sind von vor heute. '
+            + '<button class="tiny ghost" data-act="anf-aeltere-ablegen">Ältere als erledigt ablegen</button></div>' : '')
       + '<div class="rg-tabs anf-filter">'
       + ANF_FILTER.map(function (t) {
-          const anzahl = alle.filter(function (a) { return anfImFilter(a, t[0]); }).length;
+          const anzahl = gruppen.filter(function (g) { return anfImFilter(g.haupt, t[0]); }).length;
           return '<button data-act="anf-filter" data-f="' + t[0] + '" class="' + (anfragen.filter === t[0] ? 'aktiv' : '') + '">'
             + t[1] + (anzahl ? ' <span class="anzahl">' + anzahl + '</span>' : '') + '</button>';
         }).join('')
@@ -5228,12 +5273,14 @@
           : anfragen.filter === 'gemerkt' ? 'Noch nichts gemerkt.'
             : anfragen.filter === 'erledigt' ? 'Noch nichts erledigt oder abgesagt.' : 'Keine offenen Anfragen.') + '</div>';
     }
-    sichtbar.forEach(function (a) {
+    sichtbar.forEach(function (g) {
+      const a = g.haupt;
       const i = a.inhalt || {};
       const b = a.bewertung;
       const wann = new Date(a.wann);
       const meta = [einheitKurz(a.einheitId) || i.objekt || '',
-        wann.toLocaleDateString('de-DE', { day: 'numeric', month: 'numeric' }) + ' ' + anfUhrzeit(a.wann)].filter(Boolean).join(' · ');
+        wann.toLocaleDateString('de-DE', { day: 'numeric', month: 'numeric' }) + ' ' + anfUhrzeit(a.wann),
+        g.alle.length > 1 ? g.alle.length + ' Mails' : ''].filter(Boolean).join(' · ');
       const profil = anfProfil(i);
       const gruende = b ? (b.gruende || []).slice(0, 2).join(' · ') : '';
       html += '<div class="anf-karte klickbar ' + anfKlasse(a) + '" data-act="anf-oeffnen" data-id="' + esc(a.id) + '">'
@@ -5327,11 +5374,21 @@
         + '<div class="anf-fehlt">' + esc(a.fehler || 'Die Bewertung hat nicht geklappt') + ' — unten „Neu bewerten“ antippen.</div></div>';
     }
 
+    // Weitere Mails derselben Person, zum Umschalten
+    const andere = anfGruppeVon(a.id).filter(function (x) { return x.id !== a.id; }).sort(function (x, y) { return y.wann - x.wann; });
+    const weitere = andere.length
+      ? '<div class="anf-weitere"><b>Weitere Mails dieser Person:</b> ' + andere.map(function (x) {
+          return '<button class="tiny ghost" data-act="anf-oeffnen" data-id="' + esc(x.id) + '">'
+            + new Date(x.wann).toLocaleDateString('de-DE', { day: 'numeric', month: 'numeric' })
+            + (x.bewertung ? ' · ' + x.bewertung.punkte + ' Punkte' : '') + '</button>';
+        }).join('') + '</div>'
+      : '';
     return '<h2>' + esc(i.name || 'Anfrage') + '</h2>'
-      + '<div class="hint">' + esc([a.betreff, a.von,
+      + '<div class="hint">' + esc([a.betreff, anfAbsender(a.von),
           new Date(a.wann).toLocaleString('de-DE', { day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })]
           .filter(Boolean).join(' · '))
       + (a.url ? ' · <a href="' + esc(a.url) + '" target="_blank" rel="noopener">Mail öffnen</a>' : '') + '</div>'
+      + weitere
       + urteilbox
       + '<div class="anf-angaben">'
       + feld('Name', wert(i.name))
@@ -5397,8 +5454,13 @@
       }
       else if (act === 'anf-status') {
         const st = el.getAttribute('data-st');
-        const r = await api('anfragen/' + encodeURIComponent(modal.id), { method: 'PUT', body: { status: st } });
-        anfErsetzen(r.anfrage);
+        // Der Stand gilt für alle Mails dieser Person
+        const ids = anfGruppeVon(modal.id).map(function (x) { return x.id; });
+        if (!ids.length) ids.push(modal.id);
+        for (let k = 0; k < ids.length; k++) {
+          const r = await api('anfragen/' + encodeURIComponent(ids[k]), { method: 'PUT', body: { status: st } });
+          anfErsetzen(r.anfrage);
+        }
         modal = null;
         toast({ gemerkt: 'Gemerkt', abgelehnt: 'Abgesagt', erledigt: 'Erledigt', neu: 'Wieder offen' }[st] || 'Gespeichert');
         render();
@@ -5418,6 +5480,13 @@
           } else toast(a.fehler ? 'Neu bewerten fehlgeschlagen: ' + a.fehler : 'Neu bewertet');   // bei Fehler bleibt das alte Urteil stehen
           render();
         } finally { el.disabled = false; }
+      }
+      else if (act === 'anf-aeltere-ablegen') {
+        const tagesanfang = new Date(); tagesanfang.setHours(0, 0, 0, 0);
+        const r = await api('anfragen/ablegen', { method: 'POST', body: { vor: tagesanfang.getTime() } });
+        if (anfragen.daten) anfragen.daten.anfragen = r.anfragen;
+        toast(r.anzahl + (r.anzahl === 1 ? ' Anfrage' : ' Anfragen') + ' als erledigt abgelegt');
+        render();
       }
       else if (act === 'anf-nachfrage-weg') { if (modal) modal.nachMail = false; render(); }
       else if (act === 'anf-zuordnen') {

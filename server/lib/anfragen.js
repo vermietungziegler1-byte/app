@@ -40,7 +40,12 @@ db.exec(`
     id    TEXT PRIMARY KEY,                  -- geprüfte Mails, auch die, die keine Anfrage waren
     wann  INTEGER
   );
+  CREATE TABLE IF NOT EXISTS anfragen_anzeigen (
+    anzeige  TEXT PRIMARY KEY,               -- Nummer der Anzeige (z. B. Scout-ID), wie sie in den Mails steht
+    einheit  TEXT NOT NULL                   -- die Wohnung, die dieser Anzeige einmal von Hand zugeordnet wurde
+  );
 `);
+try { db.exec('ALTER TABLE anfragen ADD COLUMN person TEXT'); } catch (e) { /* gibt es schon */ }   // Schlüssel: Mails derselben Person
 
 const STATUS = ['neu', 'gemerkt', 'abgelehnt', 'erledigt'];
 const URTEILE = ['passt', 'vielleicht', 'passt nicht', 'unklar'];
@@ -138,21 +143,19 @@ const SUCHE = 'newer_than:' + TAGE_ZURUECK + 'd -in:trash -in:sent -in:drafts ('
   + ')';
 
 // ---------------- Bewerten ----------------
+// Alle Wohnungen, freie wie vermietete — eine Anzeige kann auch zu einer noch bewohnten Wohnung gehören (Nachmieter)
 function wohnungsliste() {
   const d = standInhalt() || { objects: [] };
   const zeilen = [];
   (d.objects || []).forEach(function (o) {
     (o.units || []).forEach(function (x) {
-      if (x.status !== 'frei') return;
       const miete = Number(x.rent) || 0, nk = Number(x.nk) || 0;
       zeilen.push(x.id + ': ' + o.name + ' · ' + x.name
         + (x.type ? ' (' + x.type + (x.area ? ', ' + x.area + ' m²' : '') + ')' : '')
-        + (miete ? ' · ' + miete + ' € kalt' + (nk ? ' + ' + nk + ' € Nebenkosten' : '') : ''));
+        + (miete ? ' · ' + miete + ' € kalt' + (nk ? ' + ' + nk + ' € Nebenkosten' : '') : '')
+        + (x.status === 'frei' ? ' · frei' : ' · derzeit vermietet'));
     });
   });
-  if (!zeilen.length) {
-    (d.objects || []).forEach(function (o) { zeilen.push('(keine freie Einheit) ' + o.name); });
-  }
   return zeilen.length ? zeilen.join('\n') : '(noch keine Objekte eingetragen)';
 }
 
@@ -182,6 +185,9 @@ function anweisung(kriterien) {
     + '- istAnfrage ist false bei allem, was keine Anfrage einer Person zu einer Mietwohnung ist (Angebote aus '
     + 'Suchaufträgen, Werbung, Rechnungen, Statistiken, Systemmeldungen). Dann bleiben die übrigen Felder leer '
     + 'und das Urteil ist "unklar".\n'
+    + '- Stehen unter der Mail frühere Mails derselben Person, bewerte alle zusammen: Angaben aus früheren Mails gelten '
+    + 'weiter, und eine kurze Nachfrage ohne neue Angaben ist keine „unklare“ Anfrage, sondern führt die frühere Bewertung '
+    + 'fort (istAnfrage bleibt true).\n'
     + '- Lässt die Mail erkennen, um welche Wohnung es geht, und steht eine passende Einheit in der Liste unten, '
     + 'trage deren id in einheitId ein, sonst einen leeren Text.\n'
     + '- urteil: "passt" erfüllt die Kriterien klar; "vielleicht" weitgehend, mit einem offenen Punkt; '
@@ -237,7 +243,7 @@ async function bewerten(mail, zeitlimit) {
   // Kopfzeilen zuerst, dann der Text der Mail — die Anweisung erklärt diesen Aufbau und dass alles davon Material ist
   const text = 'Betreff: ' + (ohneMarken(mail.betreff) || '(ohne Betreff)') + '\nVon: ' + ohneMarken(mail.von)
     + '\nEingang: ' + new Date(mail.wann).toLocaleString('de-DE', { timeZone: 'Europe/Berlin' })
-    + '\n\n===MAIL ANFANG===\n' + ohneMarken(mail.text).slice(0, 12000) + '\n===MAIL ENDE===';
+    + '\n\n===MAIL ANFANG===\n' + ohneMarken(mail.text).slice(0, 12000) + '\n===MAIL ENDE===' + fruehereText(mail.fruehere);
   const koerper = function (modell) {
     return {
       model: modell,
@@ -308,10 +314,60 @@ function ergebnisBereinigen(e) {
   };
 }
 
+// ---------------- Person und Anzeige ----------------
+// Mehrere Mails derselben Person gehören zusammen. Schlüssel: die Absenderadresse, wenn sie eine persönliche ist —
+// ImmoScout gibt jedem Interessenten eine eigene Weiterleitungsadresse —, sonst die in der Mail genannte Adresse,
+// sonst der Name. Allgemeine Absender (noreply, info@ …) taugen nicht, dahinter stecken viele verschiedene Leute
+const ALLGEMEINE_ADRESSE = /no-?reply|^(info|kontakt|service|mail|post|office|hallo|hello|newsletter|support)@/i;
+function adresseAus(text) {
+  const m = String(text || '').match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
+  return m ? m[0].toLowerCase() : '';
+}
+function personVon(von, inhalt) {
+  const absender = adresseAus(von);
+  if (absender && !ALLGEMEINE_ADRESSE.test(absender)) return absender;
+  const email = adresseAus(inhalt && inhalt.email);
+  if (email) return email;
+  const name = String((inhalt && inhalt.name) || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  return name ? 'name:' + name : '';
+}
+// Nummer der Anzeige (Scout-ID o. ä.), wie sie in Objektangabe, Betreff oder Mailtext steht
+function anzeigeVon(z) {
+  let i = z.inhalt || {};
+  if (typeof i === 'string') { try { i = JSON.parse(i); } catch (e) { i = {}; } }
+  const m = [i.objekt, z.betreff, i.original].filter(Boolean).join(' ').match(/\b(\d{8,10})\b/);
+  return m ? m[1] : '';
+}
+// Frühere, schon bewertete Mails derselben Person — als Zusammenhang für die Bewertung einer Nachfrage
+function fruehereVon(von, ausser) {
+  const p = personVon(von, null);
+  if (!p) return [];
+  return db.prepare('SELECT * FROM anfragen WHERE person = ? AND id != ? ORDER BY wann DESC LIMIT 3').all(p, ausser).map(zeileLesen);
+}
+function fruehereText(liste) {
+  if (!liste || !liste.length) return '';
+  return '\n\nFrühere Mails derselben Person, schon bewertet (neueste zuerst):\n' + liste.map(function (a) {
+    const i = a.inhalt || {}, b = a.bewertung || {};
+    return '- ' + new Date(a.wann).toLocaleString('de-DE', { timeZone: 'Europe/Berlin' }) + ': '
+      + ohneMarken(i.nachricht || a.betreff || '').slice(0, 600)
+      + (b.urteil ? ' — damals: ' + b.urteil + ' (' + b.punkte + ' Punkte)' : '')
+      + [i.personen ? 'Haushalt: ' + i.personen : '', i.beruf ? 'Beruf: ' + i.beruf : '',
+        i.einkommen ? 'Einkommen: ' + i.einkommen : '', i.haustiere ? 'Haustiere: ' + i.haustiere : '']
+        .filter(Boolean).map(function (t) { return ' · ' + ohneMarken(t); }).join('');
+  }).join('\n');
+}
+// Zeilen von vor der Spalte person nachtragen
+db.prepare('SELECT id, von, inhalt FROM anfragen WHERE person IS NULL').all().forEach(function (z) {
+  let i; try { i = JSON.parse(z.inhalt || '{}'); } catch (e) { i = {}; }
+  const p = personVon(z.von, i);
+  if (p) db.prepare('UPDATE anfragen SET person = ? WHERE id = ?').run(p, z.id);
+});
+
 function zeileLesen(z) {
   const lesen = function (t) { try { return JSON.parse(t || 'null'); } catch (e) { return null; } };
   return {
     id: z.id, wann: z.wann, von: z.von, betreff: z.betreff, status: z.status, fehler: z.fehler || null,
+    person: z.person || null,
     einheitId: z.einheit || '', inhalt: lesen(z.inhalt) || {}, bewertung: lesen(z.bewertung) || null,
     url: 'https://mail.google.com/mail/u/0/#inbox/' + z.id
   };
@@ -340,17 +396,25 @@ function ablegen(id, mail, ergebnis, fehler) {
     // Bei einer vorhandenen Zeile bleibt inhalt leer — dann behält COALESCE unten das schon Gelesene
     inhalt = { original: wortlaut };
   }
-  db.prepare(`INSERT INTO anfragen (id, wann, von, betreff, inhalt, bewertung, einheit, fehler)
-              VALUES (?,?,?,?,?,?,?,?)
+  let einheit = ergebnis ? ergebnis.einheitId : '';
+  if (ergebnis && !einheit) {
+    // Wurde die Anzeige schon einmal von Hand einer Wohnung zugeordnet, gilt dieselbe Wohnung
+    const anzeige = anzeigeVon({ inhalt: inhalt, betreff: mail.betreff });
+    const bekannt = anzeige ? db.prepare('SELECT einheit FROM anfragen_anzeigen WHERE anzeige = ?').get(anzeige) : null;
+    if (bekannt) einheit = bekannt.einheit;
+  }
+  db.prepare(`INSERT INTO anfragen (id, wann, von, betreff, inhalt, bewertung, einheit, fehler, person)
+              VALUES (?,?,?,?,?,?,?,?,?)
               ON CONFLICT(id) DO UPDATE SET
                 inhalt = COALESCE(excluded.inhalt, anfragen.inhalt),
                 bewertung = COALESCE(excluded.bewertung, anfragen.bewertung),
                 einheit = CASE WHEN excluded.einheit <> '' THEN excluded.einheit ELSE anfragen.einheit END,
-                fehler = excluded.fehler`)
+                fehler = excluded.fehler,
+                person = COALESCE(excluded.person, anfragen.person)`)
     .run(id, mail.wann, mail.von, mail.betreff,
       inhalt ? JSON.stringify(inhalt) : null,
       ergebnis ? JSON.stringify(ergebnis.bewertung) : null,
-      ergebnis ? ergebnis.einheitId : '', fehler || null);
+      einheit, fehler || null, personVon(mail.von, inhalt) || null);
 }
 
 // ---------------- Postfach abgleichen ----------------
@@ -432,6 +496,7 @@ async function abgleichen() {
 
       bewertet++;
       let ergebnis = null, fehler = null;
+      m.fruehere = fruehereVon(m.von, id);   // Nachfragen im Zusammenhang mit früheren Mails der Person bewerten
       try { ergebnis = await bewerten(m, BEWERTUNG_ZEITLIMIT_MS); }
       catch (e) {
         const zeitlimit = e.name === 'TimeoutError' || e.name === 'AbortError';
@@ -497,6 +562,7 @@ async function neuBewerten(id) {
   try { m.text = mailText(mail.payload); }
   catch (e) { nurFehler.run('Die Mail ließ sich nicht lesen: ' + e.message, id); return zeile(); }
   let ergebnis = null, fehler = null;
+  m.fruehere = fruehereVon(m.von, id);
   try { ergebnis = await bewerten(m); }
   catch (e) {
     const grund = voruebergehend(e);
@@ -675,6 +741,14 @@ app.put('/api/anfragen/einstellungen', nurAngemeldet, nurVerwalter, function (re
   res.json({ einstellungen: einstellungen() });
 });
 
+// Ältere offene Anfragen auf einen Schlag ablegen — etwa nach dem ersten Lauf, der zwei Wochen zurückliest
+app.post('/api/anfragen/ablegen', nurAngemeldet, nurVerwalter, function (req, res) {
+  const vor = Number((req.body || {}).vor);
+  if (!isFinite(vor) || vor <= 0) return res.status(400).json({ fehler: 'Zeitpunkt fehlt' });
+  const anzahl = db.prepare("UPDATE anfragen SET status = 'erledigt', gemeldet = 1 WHERE status = 'neu' AND wann < ?").run(vor).changes;
+  res.json({ ok: true, anzahl: anzahl, anfragen: alleLesen() });
+});
+
 app.put('/api/anfragen/:id', nurAngemeldet, function (req, res) {
   const z = db.prepare('SELECT * FROM anfragen WHERE id = ?').get(req.params.id);
   if (!z) return res.status(404).json({ fehler: 'Anfrage nicht gefunden' });
@@ -683,7 +757,21 @@ app.put('/api/anfragen/:id', nurAngemeldet, function (req, res) {
     if (STATUS.indexOf(status) === -1) return res.status(400).json({ fehler: 'Unbekannter Stand' });
     db.prepare('UPDATE anfragen SET status = ?, gemeldet = 1 WHERE id = ?').run(status, z.id);
   }
-  if (einheitId !== undefined) db.prepare('UPDATE anfragen SET einheit = ? WHERE id = ?').run(String(einheitId || '').slice(0, 60), z.id);
+  if (einheitId !== undefined) {
+    const einheit = String(einheitId || '').slice(0, 60);
+    db.prepare('UPDATE anfragen SET einheit = ? WHERE id = ?').run(einheit, z.id);
+    // Die Anzeige merken: alle Anfragen zu derselben Anzeige bekommen dieselbe Wohnung, auch die schon vorhandenen
+    const anzeige = anzeigeVon(z);
+    if (anzeige && einheit) {
+      db.prepare('INSERT INTO anfragen_anzeigen (anzeige, einheit) VALUES (?,?) ON CONFLICT(anzeige) DO UPDATE SET einheit = excluded.einheit')
+        .run(anzeige, einheit);
+      db.prepare("SELECT * FROM anfragen WHERE id != ? AND (einheit IS NULL OR einheit = '')").all(z.id).forEach(function (w) {
+        if (anzeigeVon(w) === anzeige) db.prepare('UPDATE anfragen SET einheit = ? WHERE id = ?').run(einheit, w.id);
+      });
+    } else if (anzeige) {
+      db.prepare('DELETE FROM anfragen_anzeigen WHERE anzeige = ?').run(anzeige);
+    }
+  }
   res.json({ anfrage: zeileLesen(db.prepare('SELECT * FROM anfragen WHERE id = ?').get(z.id)) });
 });
 
