@@ -575,7 +575,13 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
   #app .td-kopf { margin-bottom: 4px; }
   #app .td-kopf h2 { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
   #app .td-datum-unter { font-size: 13px; }
-  #app .td-filter { display: none; }
+  /* Projekte stehen links — über der Liste bleiben nur die Label-Filter, als stiller Text */
+  #app .td-filter .td-fchip[data-act="td-filter-projekt"], #app .td-filter .td-ftrenner { display: none; }
+  #app .td-filter { margin: 6px 0 4px; gap: 2px; }
+  #app .td-fchip { background: transparent; color: var(--muted); padding: 3px 8px; font-weight: 500; font-size: 12.5px; }
+  #app .td-fchip:hover { background: var(--td-hover); color: var(--ink); }
+  #app .td-fchip.an { background: var(--td-rot-hell); color: var(--td-rot); }
+  #app .td-fchip.an span { color: var(--td-rot); opacity: .8; }
   #app .td-ab-kopf { font-size: 14px; font-weight: 700; padding: 6px 0; margin-top: 18px; border-bottom: 1px solid var(--line-soft); }
   #app .td-ab-kopf .td-zahl { color: var(--muted); font-weight: 400; font-size: 12px; }
 
