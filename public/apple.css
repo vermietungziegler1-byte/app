@@ -573,7 +573,7 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
   #app .td-seite .td-gruppe { font-size: 13px; }
 
   /* Liste mittig mit Luft, wie Todoists Hauptspalte */
-  #app .td-inhalt { max-width: 760px; width: 100%; justify-self: center; margin: 0 auto; padding: 44px 48px 90px; }
+  #app .td-inhalt { max-width: 840px; width: 100%; justify-self: center; margin: 0 auto; padding: 44px 48px 90px; }
   #app .td-kopf { margin-bottom: 4px; }
   #app .td-kopf h2 { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; }
   #app .td-datum-unter { font-size: 13px; }
@@ -617,15 +617,12 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 
 /* ===== Großer Bildschirm: den Platz nutzen ===== */
 @media (min-width: 1100px) {
-  /* Aufgabenliste über die ganze Karte statt nach 820 px Schluss */
-  #app .td-inhalt { max-width: none; padding: 24px 36px 44px; }
-  #app .td { grid-template-columns: 250px minmax(0, 1fr); }
-  /* Aufgabenfenster wächst mit dem Bildschirm */
+  /* Die Aufgabenliste bleibt eine mittige Spalte (Todoist-Aufbau, Regel weiter oben) — hier nur noch das Fenster.
+     Aufgabenfenster wächst mit dem Bildschirm */
   #app .modal.mittel { max-width: min(1320px, 90vw); width: min(1320px, 90vw); height: auto; max-height: 90vh; }
   #app .modal.mittel .td-fenster { grid-template-columns: minmax(0, 1fr) 320px; }
   #app .modal.mittel #t-besch { min-height: 180px; }
 }
 @media (min-width: 1600px) {
-  #app .td-inhalt { padding: 26px 48px 48px; }
   #app .modal.mittel .td-fenster { grid-template-columns: minmax(0, 1fr) 360px; }
 }
