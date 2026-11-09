@@ -592,6 +592,9 @@
         await googleLaden();
         await gkalStatusLaden();
         await postLaden();
+        // Anfragen leise im Hintergrund holen — für die Zahl am Reiter und den Memo-Punkt, ohne den Start zu bremsen
+        anfragen.laedt = true;
+        anfLaden(false, true).then(function () { anfragen.laedt = false; if (phase === 'app' && !modal) render(); });
         phase = 'app';
       }
     } catch (e) {
@@ -3713,7 +3716,9 @@
     html += '<div class="seitennav">'
       + [['heute', 'Heute'], ['aufgaben', 'Aufgaben'], ['objekte', 'Objekte'], ['mieten', 'Mieten'],
          ['interessenten', 'Interessenten'], ['anfragen', 'Anfragen'], ['post', 'Post'], ['rechnungen', 'Abrechnungen'], ['kaufen', 'Kaufen']].map(function (t) {
-          return '<button class="' + (ansicht === t[0] ? 'aktiv' : '') + '" data-act="zu-' + t[0] + '">' + t[1] + '</button>';
+          const zahl = t[0] === 'anfragen' ? anfNeuZahl() : 0;   // wie viele Anfragen noch niemand angesehen hat
+          return '<button class="' + (ansicht === t[0] ? 'aktiv' : '') + '" data-act="zu-' + t[0] + '">' + t[1]
+            + (zahl ? '<span class="zahl">' + zahl + '</span>' : '') + '</button>';
         }).join('')
       + '</div>';
 
@@ -3734,7 +3739,7 @@
         + (mobil
             ? '<div class="sl-gruppe"><span>Weitere Bereiche</span>'
               + eintrag('zu-interessenten', 'Interessenten')
-              + eintrag('zu-anfragen', 'Anfragen')
+              + eintrag('zu-anfragen', 'Anfragen', anfNeuZahl() ? String(anfNeuZahl()) : '')
               + eintrag('zu-rechnungen', 'Abrechnungen')
               + eintrag('zu-kaufen', 'Kaufen')
               + '</div>'
@@ -5093,6 +5098,28 @@
   function anfVon(id) {
     return anfragen.daten ? anfragen.daten.anfragen.find(function (a) { return a.id === id; }) : null;
   }
+  function anfNeuZahl() {
+    return anfragen.daten ? anfragen.daten.anfragen.filter(function (a) { return a.status === 'neu'; }).length : 0;
+  }
+  // „Per Mail antworten“ ist ein echter Link (mailto:) — nach dem Klick fragt das Fenster, ob die Anfrage erledigt ist
+  function anfBinden() {
+    root.querySelectorAll('[data-anf-mail]').forEach(function (a) {
+      a.addEventListener('click', function () {
+        if (modal && modal.kind === 'anfrage') { modal.nachMail = true; setTimeout(render, 600); }
+      });
+    });
+  }
+  // Auswahl aller Wohnungen für die Zuordnung von Hand
+  function anfEinheitOptionen(aktuell) {
+    const zeilen = ['<option value=""' + (aktuell ? '' : ' selected') + '>— keine —</option>'];
+    (data.objects || []).forEach(function (o) {
+      (o.units || []).forEach(function (x) {
+        zeilen.push('<option value="' + esc(x.id) + '"' + (x.id === aktuell ? ' selected' : '') + '>'
+          + esc(String(o.name || '').split(',')[0] + ' · ' + (x.name || x.id)) + '</option>');
+      });
+    });
+    return zeilen.join('');
+  }
   function anfErsetzen(neu) {
     if (!anfragen.daten || !neu) return;
     const liste = anfragen.daten.anfragen;
@@ -5168,7 +5195,7 @@
               + '<button class="tiny ghost" data-act="assistent">Einrichten</button>'
             : d.fehler ? 'Letzter Abgleich: ' + esc(d.fehler) + (d.laeuft ? ' · ein neuer Versuch läuft gerade' : '')
               : d.laeuft ? 'Das Postfach wird gerade abgeglichen — neue Anfragen erscheinen gleich von selbst'
-                : d.abgleich ? 'Postfach abgeglichen um ' + anfUhrzeit(d.abgleich) + ' · danach alle 30 Minuten von selbst' : '')
+                : d.abgleich ? 'Postfach abgeglichen um ' + anfUhrzeit(d.abgleich) + ' · danach alle 10 Minuten von selbst' : '')
       // Eine Sammel-Neubewertung, die nach ihrer Antwort noch scheiterte, meldet der Server hier
       + (d.neuFehler ? '<div class="anf-gruende neg">Die letzte Neubewertung aller offenen Anfragen ist abgebrochen: ' + esc(d.neuFehler) + '</div>' : '')
       + '</div>'
@@ -5322,15 +5349,25 @@
       + f('Antwortvorschlag', '<textarea id="anf-antwort" rows="7" readonly placeholder="Noch kein Vorschlag — erst bewerten">' + esc(antwort) + '</textarea>')
       + '<div class="anf-knoepfe">'
       + '<button class="tiny" data-act="anf-kopieren">Antwort kopieren</button>'
-      + (adresse ? '<a class="kauf-link" href="' + esc(mailto) + '">Per Mail antworten</a>' : '')
+      + (adresse ? '<a class="kauf-link" href="' + esc(mailto) + '" data-anf-mail="1">Per Mail antworten</a>' : '')
       + '<button class="tiny ghost" data-act="anf-interessent">Interessent vormerken</button>'
       + '<button class="tiny ghost" data-act="anf-bewerten">Neu bewerten</button>'
       + '</div>'
+      // Nach dem Klick auf „Per Mail antworten“: gleich ablegen, statt es später zu vergessen
+      + (modal.nachMail ? '<div class="anf-nachfrage">Mailprogramm geöffnet — Anfrage als erledigt ablegen?'
+          + ' <button class="tiny primary" data-act="anf-status" data-st="erledigt">Ja, erledigt</button>'
+          + ' <button class="tiny ghost" data-act="anf-nachfrage-weg">Noch nicht</button></div>' : '')
+      // Wohnung von Hand zuordnen oder korrigieren
+      + '<div class="anf-zuordnen"><label>Wohnung</label><select id="anf-einheit">' + anfEinheitOptionen(a.einheitId) + '</select>'
+      + '<button class="tiny ghost" data-act="anf-zuordnen">Zuordnen</button></div>'
       + '<div class="modal-actions">'
       + (a.status === 'abgelehnt' || a.status === 'erledigt'
           ? '<button data-act="anf-status" data-st="neu">Wieder öffnen</button>'
           : '<button data-act="anf-status" data-st="abgelehnt">Absagen</button>'
             + '<button data-act="anf-status" data-st="erledigt">Erledigt</button>')
+      // Löschen (Datenschutz) nur für den Verwalter, und erst beim zweiten Klick
+      + (nutzerRolle === 'verwalter'
+          ? '<button class="anf-loeschen" data-act="anf-loeschen">' + (modal.loeschen ? 'Wirklich löschen?' : 'Löschen') + '</button>' : '')
       + '<div class="spacer"></div><button data-act="close">Schließen</button>'
       + (a.status === 'gemerkt' ? '' : '<button class="primary" data-act="anf-status" data-st="gemerkt">Merken</button>')
       + '</div>';
@@ -5381,6 +5418,23 @@
           } else toast(a.fehler ? 'Neu bewerten fehlgeschlagen: ' + a.fehler : 'Neu bewertet');   // bei Fehler bleibt das alte Urteil stehen
           render();
         } finally { el.disabled = false; }
+      }
+      else if (act === 'anf-nachfrage-weg') { if (modal) modal.nachMail = false; render(); }
+      else if (act === 'anf-zuordnen') {
+        const feld = root.querySelector('#anf-einheit');
+        const r = await api('anfragen/' + encodeURIComponent(modal.id), { method: 'PUT', body: { einheitId: feld ? feld.value : '' } });
+        anfErsetzen(r.anfrage);
+        toast(feld && feld.value ? 'Wohnung zugeordnet' : 'Zuordnung entfernt');
+        render();
+      }
+      else if (act === 'anf-loeschen') {
+        if (!modal.loeschen) { modal.loeschen = true; render(); return; }   // erst der zweite Klick löscht wirklich
+        const id = modal.id;
+        await api('anfragen/' + encodeURIComponent(id), { method: 'DELETE' });
+        if (anfragen.daten) anfragen.daten.anfragen = anfragen.daten.anfragen.filter(function (x) { return x.id !== id; });
+        modal = null;
+        toast('Anfrage gelöscht');
+        render();
       }
       else if (act === 'anf-kopieren') {
         const feld = document.getElementById('anf-antwort');
@@ -6759,7 +6813,7 @@
         + f('Uhrzeit', '<input type="time" id="p-zeit" value="' + esc((pushEinst && pushEinst.zeit) || '07:00') + '">')
         + '</div><div class="two">'
         + f('Vor Besichtigungen', sel('p-termine', [['an', 'Eingeschaltet'], ['aus', 'Ausgeschaltet']], (pushEinst && pushEinst.termine === false) ? 'aus' : 'an'))
-        + f('Neue Anfrage sofort (ohne Bewertung)', sel('p-anfragen', [['an', 'Eingeschaltet'], ['aus', 'Ausgeschaltet']], (pushEinst && pushEinst.anfragen === false) ? 'aus' : 'an'))
+        + f('Neue Anfrage sofort melden', sel('p-anfragen', [['an', 'Eingeschaltet'], ['aus', 'Ausgeschaltet']], (pushEinst && pushEinst.anfragen === false) ? 'aus' : 'an'))
         + '</div><div class="two">'
         + f('„Jetzt dran“ zu jedem Block', sel('p-bloecke', [['an', 'Eingeschaltet'], ['aus', 'Ausgeschaltet']], (pushEinst && pushEinst.bloecke === false) ? 'aus' : 'an'))
         + f('Abends: Liegengebliebenes', '<div style="display:flex;gap:8px">'
@@ -7748,6 +7802,7 @@
     });
     rgBinden();
     kaufBinden();
+    anfBinden();
     nkBinden();
     stammBinden();
     sucheBinden();

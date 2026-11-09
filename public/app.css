@@ -1799,6 +1799,15 @@
   #app .anf-nachricht { grid-column: 1 / -1; }
   #app .anf-knoepfe { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0 4px; }
   #app #anf-antwort { width: 100%; font-family: inherit; font-size: 13.5px; line-height: 1.45; }
+  #app .seitennav .zahl {
+    display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 10px; line-height: 17px;
+    font-size: 11px; font-weight: 700; background: var(--messing); color: #fff;
+  }
+  #app .anf-nachfrage { margin: 6px 0 2px; padding: 8px 10px; border-radius: 8px; background: var(--glas); font-size: 13px; line-height: 1.5; }
+  #app .anf-zuordnen { display: flex; align-items: center; gap: 8px; margin: 8px 0 4px; font-size: 13px; }
+  #app .anf-zuordnen label { color: var(--muted); white-space: nowrap; }
+  #app .anf-zuordnen select { flex: 1; min-width: 0; }
+  #app button.anf-loeschen { color: var(--sperr); border-color: var(--sperr-soft); }
   #app .anf-original summary { cursor: pointer; font-size: 12.5px; color: var(--muted); }
   #app .anf-original pre {
     margin: 6px 0 0; padding: 8px 10px; max-height: 240px; overflow: auto;

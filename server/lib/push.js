@@ -308,6 +308,8 @@ if (webpush) {
   // --- Meldung, wenn eine neue Anfrage im Postfach liegt ---
   async function anfrageTick(e) {
     if (e.anfragen === false) return;
+    // Ist der Assistent eingerichtet, meldet der Anfragen-Baustein jede neue Anfrage selbst — gleich mit Urteil
+    if (einstellung('anthropic_token')) return;
     if (Date.now() - anfragenZuletzt < 5 * 60 * 1000) return;   // alle fünf Minuten reicht
     anfragenZuletzt = Date.now();
     if (!googleEinstellungen().refresh) return;                 // Postfach nicht verbunden

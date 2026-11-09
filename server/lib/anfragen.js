@@ -462,6 +462,7 @@ async function abgleichen() {
       erledigt.run(id, Date.now());
       if (ergebnis) neu.push(id);
     }
+    if (neu.length) { try { await sofortMelden(neu); } catch (e) { /* die Morgenmeldung fängt es auf */ } }
     letzterAbgleich = Date.now();   // auch bei Vertagung — sonst stieße jeder Seitenaufruf sofort den nächsten Lauf an
     letzterFehler = vertagt;
     return neu;
@@ -511,6 +512,34 @@ async function neuBewerten(id) {
   }
   ablegen(id, m, ergebnis, fehler);
   return zeile();
+}
+
+// ---------------- Sofortmeldung ----------------
+// Jede neu bewertete Anfrage gleich aufs Handy, mit Urteil — über denselben Schalter wie die frühere Postfach-Meldung
+// (Mitteilungen → „Neue Anfrage sofort melden“). Die Morgenmeldung fasst danach noch einmal zusammen.
+const URTEIL_KURZ = { passt: 'passt gut', vielleicht: 'vielleicht', 'passt nicht': 'eher nicht', unklar: 'unklar' };
+async function sofortMelden(ids) {
+  let e;
+  try { e = JSON.parse(einstellung('push_morgen') || '{}'); } catch (x) { e = {}; }
+  if (e.anfragen === false || !webpush) return;
+  const abos = db.prepare('SELECT * FROM push_abos').all();
+  if (!abos.length) return;
+  for (const id of ids.slice(0, 5)) {
+    const z = db.prepare('SELECT * FROM anfragen WHERE id = ?').get(id);
+    if (!z) continue;
+    const a = zeileLesen(z);
+    const b = a.bewertung || {};
+    const wo = einheitKurz(a.einheitId) || a.inhalt.objekt || '';
+    await mitteilungSenden(abos, {
+      titel: 'Neue Anfrage: ' + (a.inhalt.name || 'ohne Namen'),
+      text: ((URTEIL_KURZ[b.urteil] || 'unklar') + (typeof b.punkte === 'number' ? ' · ' + b.punkte + ' Punkte' : '')
+        + (wo ? ' · ' + wo : '') + ((b.gruende || [])[0] ? ' — ' + b.gruende[0] : '')).slice(0, 300),
+      url: '/?anfragen=1', tag: 'anfrage-' + id
+    });
+  }
+  if (ids.length > 5) {
+    await mitteilungSenden(abos, { titel: 'Anfragen', text: 'und ' + (ids.length - 5) + ' weitere neue Anfragen', url: '/?anfragen=1', tag: 'anfragen-mehr' });
+  }
 }
 
 // ---------------- Morgenmeldung ----------------
@@ -592,7 +621,7 @@ async function imHintergrund() {
   try { await abgleichen(); } catch (e) { /* beim nächsten Mal */ }
 }
 setTimeout(imHintergrund, 90 * 1000).unref();
-setInterval(imHintergrund, 30 * 60 * 1000).unref();
+setInterval(imHintergrund, 10 * 60 * 1000).unref();   // alle 10 Minuten, damit die Sofortmeldung ihren Namen verdient
 setInterval(function () {
   melden(berlinJetzt()).catch(function (e) { console.log('Anfragen-Meldung fehlgeschlagen:', e.message); });
 }, Number(process.env.PUSH_TAKT_MS) || 60000).unref();
