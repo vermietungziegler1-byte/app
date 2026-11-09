@@ -1751,3 +1751,67 @@
     #app .kauf-urteil { display: none; }
     #app .kauf-punkte { width: 46px; height: 46px; font-size: 16px; }
   }
+
+  /* --- Anfragen: Mietanfragen aus dem Postfach, bewertet nach Kriterien --- */
+  #app .anf-info { font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  #app .anf-info b { color: var(--ink); font-weight: 600; margin-right: 4px; }
+  #app .anf-filter { margin: 12px 0 0; }
+  #app .anf-schritte div { margin-bottom: 8px; font-size: 14px; }
+  #app .anf-karte, #app .anf-urteilbox { --k: var(--frei); }
+  #app .a-passt { --k: #4f9d69; }
+  #app .a-vielleicht { --k: var(--messing); }
+  #app .a-nicht { --k: var(--sperr); }
+  #app .a-unklar { --k: var(--frei); }
+  #app .a-fehler { --k: var(--sperr); }
+  #app .anf-karte {
+    display: flex; align-items: center; gap: 13px; padding: 11px 0;
+    border-bottom: 1px solid var(--line-soft); cursor: pointer;
+  }
+  #app .anf-karte:last-child { border-bottom: none; }
+  #app .anf-karte:hover .anf-titel { color: var(--messing); }
+  #app .anf-punkte {
+    flex: none; width: 52px; height: 52px; border-radius: 50%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    border: 2.5px solid var(--k); color: var(--k); font-weight: 750; font-size: 18px; line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  #app .anf-punkte small { font-size: 8.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; margin-top: 3px; }
+  #app .anf-titel { font-weight: 600; font-size: 14.5px; line-height: 1.35; }
+  #app .anf-meta { font-size: 12px; color: var(--muted); margin-top: 1px; }
+  #app .anf-profil { font-size: 12.5px; margin-top: 3px; line-height: 1.4; }
+  #app .anf-gruende { font-size: 12px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
+  #app .anf-gruende.neg { color: var(--sperr); }
+  #app .anf-urteil { flex: none; font-size: 12px; font-weight: 650; color: var(--k); white-space: nowrap; }
+  #app .anf-urteilbox {
+    padding: 12px 14px; margin: 4px 0 12px; font-size: 13.5px; line-height: 1.45;
+    border-radius: 8px; background: var(--putz); border-left: 3px solid var(--k);
+  }
+  #app .anf-urteilbox b { font-size: 16px; color: var(--k); }
+  #app .anf-urteilbox ul { margin: 6px 0 0; padding-left: 18px; }
+  #app .anf-urteilbox li { margin-bottom: 2px; }
+  #app .anf-fehlt { margin-top: 6px; font-size: 12.5px; color: var(--muted); }
+  #app .anf-angaben { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 22px; margin-bottom: 14px; }
+  #app .anf-feld strong {
+    display: block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--muted); margin-bottom: 3px;
+  }
+  #app .anf-feld div { font-size: 13.5px; line-height: 1.45; overflow-wrap: anywhere; }
+  #app .anf-nachricht { grid-column: 1 / -1; }
+  #app .anf-knoepfe { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0 4px; }
+  #app #anf-antwort { width: 100%; font-family: inherit; font-size: 13.5px; line-height: 1.45; }
+  #app .anf-original summary { cursor: pointer; font-size: 12.5px; color: var(--muted); }
+  #app .anf-original pre {
+    margin: 6px 0 0; padding: 8px 10px; max-height: 240px; overflow: auto;
+    white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 12.5px; line-height: 1.45;
+    background: var(--glas); border-radius: 8px;
+  }
+  #app .field label.anf-schalter {
+    display: flex; align-items: center; gap: 8px; min-height: 38px; margin: 0; cursor: pointer;
+    font-size: 14px; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--ink);
+  }
+  #app .anf-schalter input { width: auto; margin: 0; }
+  @media (max-width: 620px) {
+    #app .anf-angaben { grid-template-columns: 1fr; }
+    #app .anf-urteil { display: none; }
+    #app .anf-punkte { width: 46px; height: 46px; font-size: 16px; }
+  }

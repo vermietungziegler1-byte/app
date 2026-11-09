@@ -1,8 +1,10 @@
 # Vermietung
 
 Hausverwaltungs-App: Objekte, Mieter, Mieten, Interessenten, Post (Gmail),
-Aufgaben (Todoist), Kalender, Rechnungen, Mitteilungen, Sprachassistent und
-Kaufen (Angebote aus ImmoScout-Suchaufträgen, durchgerechnet).
+Aufgaben (Todoist), Kalender, Rechnungen, Mitteilungen, Sprachassistent,
+Kaufen (Angebote aus ImmoScout-Suchaufträgen, durchgerechnet) und Anfragen
+(Mietanfragen aus dem Postfach, von Claude nach eigenen Kriterien bewertet,
+morgens als Mitteilung aufs Handy).
 
 ## Aufbau
 
@@ -17,7 +19,8 @@ public/            Oberfläche (wird vom Server ausgeliefert)
 server/
   server.js        startet die Anwendung und bindet die Bausteine ein
   lib/             Bausteine: kern, anmeldung, daten, todoist, google, push,
-                   stimme, assistent, kalender, rechnungen, sicherung, kaufen
+                   stimme, assistent, kalender, rechnungen, sicherung, kaufen,
+                   anfragen
   test/            automatische Tests
 werkzeuge/
   einspielen.sh    Update auf dem Server einspielen (mit Sicherung und Rücknahme)

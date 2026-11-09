@@ -202,25 +202,31 @@ async function assistentWerkzeug(name, eingabe, lage) {
   return 'Unbekannter Auftrag.';
 }
 
-async function claude(koerper) {
+// Eine Anfrage an Claude. Benutzen der Sprachassistent und die Bewertung der Mietanfragen.
+// zusatzKopf: weitere Kopfzeilen, z. B. ein anthropic-beta-Schalter.
+// zeitlimit: Millisekunden bis zum Abbruch; ohne Angabe 90 s (die Bewertung im Hintergrund setzt mehr an).
+const ANTHROPIC_BASIS = process.env.ANTHROPIC_BASIS || 'https://api.anthropic.com';
+async function claude(koerper, zusatzKopf, zeitlimit) {
   const token = einstellung('anthropic_token');
   if (!token) { const e = new Error('Es ist noch kein Assistent eingerichtet'); e.status = 400; throw e; }
-  const antwort = await holen('https://api.anthropic.com/v1/messages', {
-    signal: AbortSignal.timeout(90000),
+  const antwort = await holen(ANTHROPIC_BASIS + '/v1/messages', {
+    signal: AbortSignal.timeout(zeitlimit || 90000),
     method: 'POST',
-    headers: {
+    headers: Object.assign({
       'x-api-key': token,
       'anthropic-version': '2023-06-01',
       'Content-Type': 'application/json'
-    },
+    }, zusatzKopf || {}),
     body: JSON.stringify(koerper)
   });
   if (!antwort.ok) {
     const grund = await antwort.text().catch(function () { return ''; });
+    // 429 ist das Ratenlimit (gleich noch einmal geht meist); fehlendes Guthaben meldet der Dienst als 400 mit Text
     const e = new Error(antwort.status === 401
       ? 'Der Schlüssel des Assistenten wird nicht angenommen'
-      : (antwort.status === 429 ? 'Das Guthaben des Assistenten ist aufgebraucht'
-        : 'Der Assistent antwortet nicht: ' + grund.slice(0, 160)));
+      : antwort.status === 429 ? 'Der Assistent ist gerade ausgelastet — gleich noch einmal versuchen'
+        : /credit balance|billing|insufficient/i.test(grund) ? 'Das Guthaben des Assistenten ist aufgebraucht'
+          : 'Der Assistent antwortet nicht: ' + grund.slice(0, 160));
     e.status = antwort.status;
     e.grund = grund;
     try { e.typ = ((JSON.parse(grund) || {}).error || {}).type || null; } catch (x) { e.typ = null; }
@@ -301,4 +307,4 @@ app.post('/api/assistent/sagen', nurAngemeldet, async function (req, res) {
   }
 });
 
-module.exports = { router: app };
+module.exports = { router: app, claude };

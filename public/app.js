@@ -536,8 +536,9 @@
   let swReg = null, pushAbo = null, pushGeraete = null, pushEinst = null, pushFehler = null;
   let absagenOffen = false;
   let mietVersatz = 0;   // 0 = laufender Monat, -1 = Vormonat …
-  let ansicht = 'heute';   // heute | objekte | mieten | interessenten | post | kaufen
+  let ansicht = 'heute';   // heute | objekte | mieten | interessenten | anfragen | post | kaufen
   let kauf = { daten: null, fehler: null, geholt: 0, filter: 'aktiv' };   // Kaufangebote vom Server
+  let anfragen = { daten: null, fehler: null, geholt: 0, filter: 'offen', laedt: false, nachladeUhr: null, nachladeZaehler: 0 };   // Mietanfragen aus dem Postfach, vom Server bewertet
   let verstecktOffen = false;
   let rg = null;             // Rechnungen: Absender, gespeicherte Liste, nächste Nummer (vom Server)
   let rgForm = null;         // Entwurf der Rechnung, die gerade bearbeitet wird
@@ -2767,6 +2768,22 @@
         warum: 'wer schnell antwortet, hat die Auswahl', act: 'zu-interessenten'
       });
     }
+    // 4b — bewertete Mietanfragen aus dem Postfach, die noch niemand angesehen hat. Die Liste wird leise nachgeladen,
+    // die Seite baut sich danach einmal neu auf
+    if (!anfragen.daten && !anfragen.laedt && !anfragen.fehler) {
+      anfragen.laedt = true;
+      anfLaden(false, true).then(function () { anfragen.laedt = false; if (ansicht === 'heute' && !modal) render(); });
+    }
+    const anfNeu = anfragen.daten ? anfragen.daten.anfragen.filter(function (a) { return a.status === 'neu'; }) : [];
+    if (anfNeu.length) {
+      const passend = anfNeu.filter(function (a) { return a.bewertung && a.bewertung.urteil === 'passt'; }).length;
+      punkte.push({
+        rang: 4, sort: 'b', zeit: '',
+        was: anfNeu.length + (anfNeu.length === 1 ? ' neue Mietanfrage' : ' neue Mietanfragen')
+          + (passend ? ', ' + (passend === 1 ? 'eine passt' : passend + ' passen') : ''),
+        wo: 'Anfragen', warum: 'nach deinen Kriterien bewertet — wer schnell antwortet, hat die Auswahl', act: 'zu-anfragen'
+      });
+    }
 
     // 5 — der Rest von heute, nach Priorität
     alle.filter(function (t) { return t.faellig === heuteIso && !memoZeit(t.faelligZeit); })
@@ -3638,7 +3655,7 @@
 
     html += '<div class="seitennav">'
       + [['heute', 'Heute'], ['aufgaben', 'Aufgaben'], ['objekte', 'Objekte'], ['mieten', 'Mieten'],
-         ['interessenten', 'Interessenten'], ['post', 'Post'], ['rechnungen', 'Abrechnungen'], ['kaufen', 'Kaufen']].map(function (t) {
+         ['interessenten', 'Interessenten'], ['anfragen', 'Anfragen'], ['post', 'Post'], ['rechnungen', 'Abrechnungen'], ['kaufen', 'Kaufen']].map(function (t) {
           return '<button class="' + (ansicht === t[0] ? 'aktiv' : '') + '" data-act="zu-' + t[0] + '">' + t[1] + '</button>';
         }).join('')
       + '</div>';
@@ -3660,6 +3677,7 @@
         + (mobil
             ? '<div class="sl-gruppe"><span>Weitere Bereiche</span>'
               + eintrag('zu-interessenten', 'Interessenten')
+              + eintrag('zu-anfragen', 'Anfragen')
               + eintrag('zu-rechnungen', 'Abrechnungen')
               + eintrag('zu-kaufen', 'Kaufen')
               + '</div>'
@@ -3746,6 +3764,11 @@
     // ---- Eigene Seite: Kaufen ----
     if (ansicht === 'kaufen') {
       html += kaufenAbschnitt();
+    }
+
+    // ---- Eigene Seite: Anfragen ----
+    if (ansicht === 'anfragen') {
+      html += anfragenAbschnitt();
     }
 
     // ---- Eigene Seite: Rechnungen ----
@@ -4970,6 +4993,401 @@
         modal = null;
         toast('Neu gerechnet');
         render();
+      }
+    } catch (fehler) { toast(fehler.message); }
+  }
+
+  // ---------------------------------------------------------------
+  //  Anfragen — Mietanfragen aus dem Postfach (ImmoScout & Co.), vom Server
+  //  gelesen, von Claude ausgewertet und nach Louis' Kriterien bewertet
+  // ---------------------------------------------------------------
+  const ANF_URTEIL = { passt: 'Passt', vielleicht: 'Vielleicht', 'passt nicht': 'Eher nicht', unklar: 'Unklar' };
+  const ANF_KLASSE = { passt: 'a-passt', vielleicht: 'a-vielleicht', 'passt nicht': 'a-nicht', unklar: 'a-unklar' };
+  const ANF_FILTER = [['offen', 'Offen'], ['passt', 'Passt'], ['gemerkt', 'Gemerkt'], ['erledigt', 'Erledigt']];
+
+  // leise = im Hintergrund nachladen, ohne Ladebalken
+  async function anfLaden(neu, leise) {
+    try {
+      anfragen.daten = await (leise ? apiRoh : api)('anfragen' + (neu ? '?neu=1' : ''));
+      anfragen.fehler = null;
+      anfragen.geholt = Date.now();
+      anfNachladen();
+    } catch (e) { anfragen.fehler = e.message; }
+  }
+  // Arbeitet der Abgleich oder die Sammel-Neubewertung am Server noch (laeuft), holt die Seite den Stand von selbst
+  // nach: erst alle 10 s, nach einer Minute alle 30 s, höchstens rund eine halbe Stunde. Ein gescheiterter Lauf meldet
+  // laeuft false und beendet die Schleife; der Server stößt nach einem Fehlschlag frühestens nach 10 Minuten neu an.
+  function anfNachladen() {
+    const d = anfragen.daten;
+    if (!d || !d.laeuft) { anfragen.nachladeZaehler = 0; return; }
+    if (anfragen.nachladeUhr || anfragen.nachladeZaehler >= 60) return;
+    const takt = anfragen.nachladeZaehler < 6 ? 10000 : 30000;
+    anfragen.nachladeZaehler++;
+    anfragen.nachladeUhr = setTimeout(function () {
+      anfragen.nachladeUhr = null;
+      if (ansicht !== 'anfragen') return;
+      anfLaden(false, true).then(function () {
+        // Kein Neuaufbau über ein offenes Fenster oder beim Tippen — wie in auffrischen()
+        const tipptGerade = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].indexOf(document.activeElement.tagName) !== -1;
+        if (ansicht === 'anfragen' && !modal && !tipptGerade && !document.getElementById('dialog')) render();
+      });
+    }, takt);
+  }
+  function anfVon(id) {
+    return anfragen.daten ? anfragen.daten.anfragen.find(function (a) { return a.id === id; }) : null;
+  }
+  function anfErsetzen(neu) {
+    if (!anfragen.daten || !neu) return;
+    const liste = anfragen.daten.anfragen;
+    const i = liste.findIndex(function (a) { return a.id === neu.id; });
+    if (i === -1) liste.unshift(neu); else liste[i] = neu;
+  }
+  // Farbe nach Urteil — ohne Bewertung ist etwas schiefgegangen
+  function anfKlasse(a) { return a.bewertung ? (ANF_KLASSE[a.bewertung.urteil] || 'a-unklar') : 'a-fehler'; }
+  function anfUrteil(a) { return a.bewertung ? (ANF_URTEIL[a.bewertung.urteil] || 'Unklar') : 'Nicht bewertet'; }
+  function anfOffen(a) { return a.status === 'neu' || a.status === 'gemerkt'; }
+  function anfImFilter(a, f) {
+    if (f === 'offen') return anfOffen(a);
+    if (f === 'passt') return anfOffen(a) && !!a.bewertung && a.bewertung.urteil === 'passt';
+    if (f === 'gemerkt') return a.status === 'gemerkt';
+    return a.status === 'abgelehnt' || a.status === 'erledigt';
+  }
+  // Was die Person über sich sagt, in einer Zeile
+  function anfProfil(i) {
+    return [i.personen, i.haustiere ? 'Haustiere: ' + i.haustiere : '', i.beruf, i.einkommen, i.einzug ? 'Einzug ' + i.einzug : '']
+      .filter(Boolean).join(' · ');
+  }
+  function anfUhrzeit(ms) { return new Date(ms).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); }
+
+  function anfragenAbschnitt() {
+    const d = anfragen.daten;
+    if (!d) {
+      // Direkt geöffnet (z. B. aus der Morgenmeldung): Daten nachholen
+      if (!anfragen.laedt && !anfragen.fehler) {
+        anfragen.laedt = true;
+        anfLaden().then(function () { anfragen.laedt = false; if (ansicht === 'anfragen') render(); });
+      }
+      return '<div class="tafel"><h3>Anfragen</h3><div class="unit-type">'
+        + (anfragen.fehler ? esc(anfragen.fehler) : 'Anfragen werden geladen …') + '</div></div>';
+    }
+    const e = d.einstellungen || {};
+    const alle = d.anfragen || [];
+    const passtZurSuche = function (a) {
+      if (!query) return true;
+      const i = a.inhalt || {};
+      return [i.name, i.objekt, i.beruf, i.nachricht, a.betreff, a.von, einheitKurz(a.einheitId)]
+        .join(' ').toLowerCase().indexOf(query.toLowerCase()) !== -1;
+    };
+    // Offene nach Punkten, die besten zuerst (Unbewertete ans Ende) — Erledigtes nach Eingang
+    const nachPunkten = anfragen.filter === 'offen' || anfragen.filter === 'passt';
+    const sichtbar = alle.filter(function (a) { return anfImFilter(a, anfragen.filter) && passtZurSuche(a); }).sort(function (x, y) {
+      if (nachPunkten) {
+        const px = x.bewertung ? x.bewertung.punkte : -1, py = y.bewertung ? y.bewertung.punkte : -1;
+        if (py !== px) return py - px;
+      }
+      return y.wann - x.wann;
+    });
+    const neue = alle.filter(function (a) { return a.status === 'neu'; }).length;
+    const kriterien = String(e.kriterien || '').replace(/\s+/g, ' ').trim();
+    const kriterienKurz = kriterien.length > 160 ? kriterien.slice(0, 160).replace(/\s+\S*$/, '') + ' …' : kriterien;
+
+    let html = '<div class="tafel anf-kopf"><h3>Anfragen'
+      + (neue ? '<span class="anzahl">' + neue + ' neu</span>' : '')
+      + '<span class="zeitraum">'
+      + (d.postfach && d.assistent ? '<button class="tiny ghost" data-act="anf-abrufen">Abrufen</button>' : '')
+      + (nutzerRolle === 'verwalter' ? '<button class="tiny ghost" data-act="anf-kriterien">Kriterien</button>' : '')
+      + '</span></h3>'
+      + '<div class="anf-info"><b>Bewertet nach</b> ' + esc(kriterienKurz) + '</div>'
+      + '<div class="anf-info">'
+      + (e.melden
+          ? '<b>Morgens um ' + esc(e.zeit || '07:00') + '</b> aufs Handy, was neu hereingekommen ist'
+          : '<b>Morgenmeldung aus</b> — neue Anfragen melden sich nicht von selbst') + '</div>'
+      + '<div class="poststand">'
+      + (!d.postfach
+          ? 'Das Postfach ist nicht verbunden — Anfragen kommen erst, wenn es unter Menü → Postfach verbunden ist. '
+            + '<button class="tiny ghost" data-act="google">Verbinden</button>'
+          : !d.assistent
+            ? 'Zum Bewerten fehlt der Assistent — unter Menü → Assistent einen Schlüssel hinterlegen. '
+              + '<button class="tiny ghost" data-act="assistent">Einrichten</button>'
+            : d.fehler ? 'Letzter Abgleich: ' + esc(d.fehler) + (d.laeuft ? ' · ein neuer Versuch läuft gerade' : '')
+              : d.laeuft ? 'Das Postfach wird gerade abgeglichen — neue Anfragen erscheinen gleich von selbst'
+                : d.abgleich ? 'Postfach abgeglichen um ' + anfUhrzeit(d.abgleich) + ' · danach alle 30 Minuten von selbst' : '')
+      // Eine Sammel-Neubewertung, die nach ihrer Antwort noch scheiterte, meldet der Server hier
+      + (d.neuFehler ? '<div class="anf-gruende neg">Die letzte Neubewertung aller offenen Anfragen ist abgebrochen: ' + esc(d.neuFehler) + '</div>' : '')
+      + '</div>'
+      + '<div class="rg-tabs anf-filter">'
+      + ANF_FILTER.map(function (t) {
+          const anzahl = alle.filter(function (a) { return anfImFilter(a, t[0]); }).length;
+          return '<button data-act="anf-filter" data-f="' + t[0] + '" class="' + (anfragen.filter === t[0] ? 'aktiv' : '') + '">'
+            + t[1] + (anzahl ? ' <span class="anzahl">' + anzahl + '</span>' : '') + '</button>';
+        }).join('')
+      + '</div></div>';
+
+    if (!alle.length) {
+      html += '<div class="tafel"><h3>So kommen Anfragen hierher</h3>'
+        + '<div class="anf-schritte">'
+        + '<div><b>1.</b> Wer sich bei ImmoScout24 & Co. auf eine Wohnung meldet, landet als Kontaktanfrage per Mail '
+        + 'in ' + esc(google.adresse || 'dem verbundenen Postfach') + '.</div>'
+        + '<div><b>2.</b> Die App liest jede neue Anfrage von selbst, holt heraus, wer da fragt und was die Person über sich sagt, '
+        + 'und bewertet sie nach deinen Kriterien — Haushalt, Einkommen, Haustiere, Beruf und die Sorgfalt der Nachricht.</div>'
+        + '<div><b>3.</b> Morgens um ' + esc(e.zeit || '07:00') + ' kommt eine Mitteilung aufs Handy, was über Nacht hereingekommen ist. '
+        + 'Hier steht dann alles mit Urteil, Gründen und einem Antwortvorschlag.</div>'
+        + '</div></div>';
+      return html;
+    }
+
+    html += '<div class="tafel anf-liste">';
+    if (!sichtbar.length) {
+      html += '<div class="unit-type">' + (query
+        ? 'Keine Treffer für die Suche „' + esc(query) + '“. <button class="tiny ghost" data-act="clear-q">Suche zurücksetzen</button>'
+        : anfragen.filter === 'passt' ? 'Gerade passt keine offene Anfrage.'
+          : anfragen.filter === 'gemerkt' ? 'Noch nichts gemerkt.'
+            : anfragen.filter === 'erledigt' ? 'Noch nichts erledigt oder abgesagt.' : 'Keine offenen Anfragen.') + '</div>';
+    }
+    sichtbar.forEach(function (a) {
+      const i = a.inhalt || {};
+      const b = a.bewertung;
+      const wann = new Date(a.wann);
+      const meta = [einheitKurz(a.einheitId) || i.objekt || '',
+        wann.toLocaleDateString('de-DE', { day: 'numeric', month: 'numeric' }) + ' ' + anfUhrzeit(a.wann)].filter(Boolean).join(' · ');
+      const profil = anfProfil(i);
+      const gruende = b ? (b.gruende || []).slice(0, 2).join(' · ') : '';
+      html += '<div class="anf-karte klickbar ' + anfKlasse(a) + '" data-act="anf-oeffnen" data-id="' + esc(a.id) + '">'
+        + '<div class="anf-punkte">' + (b ? b.punkte : '?') + '<small>Punkte</small></div>'
+        + '<div class="fgrow">'
+        + '<div class="anf-titel">' + esc(i.name || 'Ohne Namen') + ' <span class="anzahl">' + esc(a.status) + '</span></div>'
+        + '<div class="anf-meta">' + esc(meta) + '</div>'
+        + (profil ? '<div class="anf-profil">' + esc(profil) + '</div>' : '')
+        + (gruende ? '<div class="anf-gruende">' + esc(gruende) + '</div>' : '')
+        + (a.fehler ? '<div class="anf-gruende neg">' + (b ? 'Neu bewerten fehlgeschlagen (Urteil von vorher): ' : 'Bewertung fehlgeschlagen: ') + esc(a.fehler) + '</div>' : '')
+        + '</div>'
+        + '<div class="anf-urteil">' + anfUrteil(a) + '</div>'
+        + '</div>';
+    });
+    html += '</div>';
+    return html;
+  }
+
+  function anfFenster() {
+    if (modal.kind === 'anf-kriterien') {
+      const e = (anfragen.daten && anfragen.daten.einstellungen) || { kriterien: '', zeit: '07:00', melden: true };
+      // Steht das Fenster schon, bleibt beim Neuaufbau stehen, was gerade eingetippt ist
+      const alt = root.querySelector('.modal[data-fenster="anf-kriterien"]');
+      const feld = function (id) { return alt ? alt.querySelector('#' + id) : null; };
+      const kriterien = feld('anf-kriterien') ? feld('anf-kriterien').value : e.kriterien;
+      const zeit = feld('anf-zeit') ? feld('anf-zeit').value : e.zeit;
+      const melden = feld('anf-melden') ? feld('anf-melden').checked : e.melden;
+      return '<h2>Kriterien für Anfragen</h2>'
+        + '<div class="hint">Nach diesem Text beurteilt Claude jede Anfrage. Es zählen nur Sachkriterien — Haushaltsgröße, Einkommen, '
+        + 'Haustiere, Beruf, Einzugstermin und die Sorgfalt der Nachricht. Herkunft, Religion und Ähnliches werden nie bewertet '
+        + '(Allgemeines Gleichbehandlungsgesetz).</div>'
+        + f('Kriterien', '<textarea id="anf-kriterien" rows="8">' + esc(kriterien) + '</textarea>')
+        + '<div class="two">'
+        + f('Morgenmeldung um', '<input type="time" id="anf-zeit" value="' + esc(zeit || '07:00') + '">')
+        + '<div class="field"><label>Mitteilung</label>'
+        + '<label class="anf-schalter"><input type="checkbox" id="anf-melden"' + (melden ? ' checked' : '') + '> Morgens aufs Handy melden</label></div>'
+        + '</div>'
+        + '<div class="modal-actions"><button data-act="anf-kriterien-standard">Standard</button>'
+        + '<div class="spacer"></div><button data-act="close">Abbrechen</button>'
+        + '<button data-act="anf-kriterien-neu">Speichern und offene neu bewerten</button>'
+        + '<button class="primary" data-act="anf-kriterien-speichern">Speichern</button></div>';
+    }
+
+    const a = anfVon(modal.id);
+    if (!a) return '<div class="unit-type">Diese Anfrage gibt es nicht mehr.</div>';
+    const i = a.inhalt || {};
+    const b = a.bewertung;
+    const antwort = b ? (b.antwort || '') : '';
+    const wert = function (v) { return v === '' || v == null ? '—' : esc(v); };
+    const feld = function (l, v) { return '<div class="anf-feld"><strong>' + l + '</strong><div>' + v + '</div></div>'; };
+
+    let haushalt = i.personen || '';
+    const zahlen = [];
+    if (typeof i.erwachsene === 'number') zahlen.push(i.erwachsene + (i.erwachsene === 1 ? ' Erwachsener' : ' Erwachsene'));
+    if (typeof i.kinder === 'number') zahlen.push(i.kinder === 0 ? 'ohne Kinder' : i.kinder + (i.kinder === 1 ? ' Kind' : ' Kinder'));
+    // Die Zahlen nur dazu, wenn die Beschreibung sie nicht ohnehin nennt
+    const schonGenannt = [i.erwachsene, i.kinder].every(function (z) {
+      return typeof z !== 'number' || z === 0 || haushalt.indexOf(String(z)) !== -1;
+    });
+    if (zahlen.length && !(haushalt && schonGenannt)) haushalt += haushalt ? ' (' + zahlen.join(', ') + ')' : zahlen.join(', ');
+    let einkommen = i.einkommen || '';
+    if (typeof i.einkommenNetto === 'number' && isFinite(i.einkommenNetto)) {
+      const netto = Math.round(i.einkommenNetto);
+      const nettoText = netto.toLocaleString('de-DE');
+      if (einkommen.indexOf(nettoText) === -1 && einkommen.indexOf(String(netto)) === -1) {
+        einkommen = einkommen ? einkommen + ' (≈ ' + nettoText + ' € netto)' : '≈ ' + nettoText + ' € netto';
+      }
+    }
+    const kontakt = [i.email, i.telefon].filter(Boolean).join(' · ');
+    // Die Adresse kommt aus der fremden Mail: nur eine schlichte Adresse wird zum Link, sonst könnte „?cc=…“ weitere
+    // Empfänger in die Antwort schmuggeln — als Text unter „Kontakt“ bleibt sie trotzdem sichtbar
+    const adresse = /^[^\s@<>,;?&#"'()\/]+@[^\s@<>,;?&#"'()\/]+\.[A-Za-z]{2,}$/.test(i.email || '') ? i.email : '';
+    // Öffnet am PC das Mailprogramm mit Empfänger, Betreff und dem Vorschlag als Text; „@“ und „+“ bleiben wörtlich
+    const mailto = adresse
+      ? 'mailto:' + encodeURIComponent(adresse).replace(/%40/g, '@').replace(/%2B/g, '+')
+        + '?subject=' + encodeURIComponent('Re: ' + (a.betreff || 'Ihre Anfrage'))
+        + '&body=' + encodeURIComponent(antwort.replace(/\r?\n/g, '\r\n'))
+      : '';
+
+    let urteilbox;
+    if (b) {
+      urteilbox = '<div class="anf-urteilbox ' + anfKlasse(a) + '">'
+        + '<div><b>' + anfUrteil(a) + '</b> · ' + b.punkte + ' Punkte</div>'
+        + ((b.gruende || []).length ? '<ul>' + b.gruende.map(function (g) { return '<li>' + esc(g) + '</li>'; }).join('') + '</ul>' : '')
+        + ((b.fehlt || []).length ? '<div class="anf-fehlt">Noch offen: ' + esc(b.fehlt.join(', ')) + '</div>' : '')
+        // Misslungene Neubewertung: der Server behält das alte Urteil und trägt nur den Fehler ein
+        + (a.fehler ? '<div class="anf-gruende neg">Die letzte Neubewertung hat nicht geklappt: ' + esc(a.fehler) + ' — das Urteil oben ist der Stand davor.</div>' : '')
+        + '</div>';
+    } else {
+      urteilbox = '<div class="anf-urteilbox a-fehler"><div><b>Nicht bewertet</b></div>'
+        + '<div class="anf-fehlt">' + esc(a.fehler || 'Die Bewertung hat nicht geklappt') + ' — unten „Neu bewerten“ antippen.</div></div>';
+    }
+
+    return '<h2>' + esc(i.name || 'Anfrage') + '</h2>'
+      + '<div class="hint">' + esc([a.betreff, a.von,
+          new Date(a.wann).toLocaleString('de-DE', { day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })]
+          .filter(Boolean).join(' · '))
+      + (a.url ? ' · <a href="' + esc(a.url) + '" target="_blank" rel="noopener">Mail öffnen</a>' : '') + '</div>'
+      + urteilbox
+      + '<div class="anf-angaben">'
+      + feld('Name', wert(i.name))
+      + feld('Wohnung', wert(einheitKurz(a.einheitId) || i.objekt))
+      + feld('Haushalt', wert(haushalt))
+      + feld('Haustiere', wert(i.haustiere))
+      + feld('Beruf', wert(i.beruf))
+      + feld('Einkommen', wert(einkommen))
+      + feld('Einzug', wert(i.einzug))
+      + feld('Kontakt', wert(kontakt))
+      + '<div class="anf-feld anf-nachricht"><strong>Nachricht</strong><div>' + wert(i.nachricht) + '</div></div>'
+      // Der Wortlaut der Mail (gekürzt), eingeklappt — für Ton und Sorgfalt, ohne das Postfach zu öffnen
+      + (i.original ? '<details class="anf-feld anf-nachricht anf-original"><summary>Wortlaut der Mail</summary><pre>' + esc(i.original) + '</pre></details>' : '')
+      + '</div>'
+      + f('Antwortvorschlag', '<textarea id="anf-antwort" rows="7" readonly placeholder="Noch kein Vorschlag — erst bewerten">' + esc(antwort) + '</textarea>')
+      + '<div class="anf-knoepfe">'
+      + '<button class="tiny" data-act="anf-kopieren">Antwort kopieren</button>'
+      + (adresse ? '<a class="kauf-link" href="' + esc(mailto) + '">Per Mail antworten</a>' : '')
+      + '<button class="tiny ghost" data-act="anf-interessent">Interessent vormerken</button>'
+      + '<button class="tiny ghost" data-act="anf-bewerten">Neu bewerten</button>'
+      + '</div>'
+      + '<div class="modal-actions">'
+      + (a.status === 'abgelehnt' || a.status === 'erledigt'
+          ? '<button data-act="anf-status" data-st="neu">Wieder öffnen</button>'
+          : '<button data-act="anf-status" data-st="abgelehnt">Absagen</button>'
+            + '<button data-act="anf-status" data-st="erledigt">Erledigt</button>')
+      + '<div class="spacer"></div><button data-act="close">Schließen</button>'
+      + (a.status === 'gemerkt' ? '' : '<button class="primary" data-act="anf-status" data-st="gemerkt">Merken</button>')
+      + '</div>';
+  }
+
+  async function anfKlick(act, el) {
+    try {
+      if (act === 'anf-filter') { anfragen.filter = el.getAttribute('data-f') || 'offen'; render(); }
+      else if (act === 'anf-abrufen') {
+        const vorher = anfragen.daten ? anfragen.daten.anfragen.length : 0;
+        await anfLaden(true);
+        const d = anfragen.daten;
+        const neu = d ? d.anfragen.length - vorher : 0;
+        const zahl = neu > 0 ? neu + (neu === 1 ? ' neue Anfrage' : ' neue Anfragen') : '';
+        // Solange der Abgleich noch läuft, ist d.fehler die Meldung des vorigen Laufs — erst danach zählt sie
+        toast(anfragen.fehler
+          || (d && d.laeuft
+              ? (zahl ? zahl + ' — der Abgleich läuft noch, weitere folgen gleich von selbst' : 'Der Abgleich läuft noch — die Liste füllt sich gleich von selbst')
+              : (d && d.fehler) || zahl || 'Nichts Neues'));
+        render();
+      }
+      else if (act === 'anf-oeffnen') {
+        const id = el.getAttribute('data-id');
+        if (!anfVon(id)) return;
+        modal = { kind: 'anfrage', id: id };
+        render();
+      }
+      else if (act === 'anf-status') {
+        const st = el.getAttribute('data-st');
+        const r = await api('anfragen/' + encodeURIComponent(modal.id), { method: 'PUT', body: { status: st } });
+        anfErsetzen(r.anfrage);
+        modal = null;
+        toast({ gemerkt: 'Gemerkt', abgelehnt: 'Abgesagt', erledigt: 'Erledigt', neu: 'Wieder offen' }[st] || 'Gespeichert');
+        render();
+      }
+      else if (act === 'anf-bewerten') {
+        const id = modal.id;   // das Fenster kann zugehen, während die Antwort unterwegs ist
+        el.disabled = true;   // dauert ein paar Sekunden — nicht doppelt anstoßen
+        try {
+          const r = await api('anfragen/bewerten', { method: 'POST', body: { id: id } });
+          (r.anfragen || []).forEach(function (a) { anfErsetzen(a); });
+          const a = r.anfragen && r.anfragen[0];
+          if (!a) {
+            // Die Anfrage gibt es auf dem Server nicht mehr (gelöscht oder aufgeräumt): veralteten Eintrag weg, Fenster zu
+            if (anfragen.daten) anfragen.daten.anfragen = anfragen.daten.anfragen.filter(function (x) { return x.id !== id; });
+            if (modal && modal.kind === 'anfrage' && modal.id === id) modal = null;
+            toast('Diese Anfrage gibt es nicht mehr');
+          } else toast(a.fehler ? 'Neu bewerten fehlgeschlagen: ' + a.fehler : 'Neu bewertet');   // bei Fehler bleibt das alte Urteil stehen
+          render();
+        } finally { el.disabled = false; }
+      }
+      else if (act === 'anf-kopieren') {
+        const feld = document.getElementById('anf-antwort');
+        const text = feld ? feld.value : '';
+        if (!text) { toast('Noch kein Antwortvorschlag da'); return; }
+        let kopiert = false;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          try { await navigator.clipboard.writeText(text); kopiert = true; } catch (e) { kopiert = false; }
+        }
+        if (!kopiert) {
+          feld.focus(); feld.select();
+          try { kopiert = document.execCommand('copy'); } catch (e) { kopiert = false; }
+        }
+        toast(kopiert ? 'Antwort kopiert' : 'Kopieren hat nicht geklappt — Text markieren und kopieren');
+      }
+      else if (act === 'anf-interessent') {
+        const a = anfVon(modal.id);
+        if (!a) return;
+        const i = a.inhalt || {};
+        const notiz = [anfProfil(i), a.bewertung ? 'Bewertung: ' + anfUrteil(a) + ' (' + a.bewertung.punkte + ' Punkte)' : '']
+          .filter(Boolean).join('\n');
+        modal = {
+          kind: 'interessent', isNew: true,
+          i: interessentNeu({
+            name: i.name || '', kontakt: i.email || i.telefon || '', einheitId: a.einheitId || '',
+            quelle: 'Anfrage per Mail: ' + (a.betreff || ''), notiz: notiz
+          })
+        };
+        render();
+      }
+      else if (act === 'anf-kriterien') {
+        if (!anfragen.daten) await anfLaden();
+        if (!anfragen.daten) { toast(anfragen.fehler || 'Nicht erreichbar'); return; }
+        modal = { kind: 'anf-kriterien' };
+        render();
+      }
+      else if (act === 'anf-kriterien-standard') {
+        const feld = document.getElementById('anf-kriterien');
+        if (feld && anfragen.daten) feld.value = anfragen.daten.einstellungen.standardKriterien;
+      }
+      else if (act === 'anf-kriterien-speichern' || act === 'anf-kriterien-neu') {
+        const schalter = document.getElementById('anf-melden');
+        const koerper = { kriterien: val('anf-kriterien'), zeit: val('anf-zeit'), melden: schalter ? schalter.checked : true };
+        el.disabled = true;
+        try {
+          const r = await api('anfragen/einstellungen', { method: 'PUT', body: koerper });
+          if (anfragen.daten) anfragen.daten.einstellungen = r.einstellungen;
+          if (act === 'anf-kriterien-neu') {
+            toast('Gespeichert — die offenen Anfragen werden neu bewertet, das dauert einen Moment …');
+            const b = await api('anfragen/bewerten', { method: 'POST', body: {} });
+            (b.anfragen || []).forEach(function (a) { anfErsetzen(a); });
+            // Zeilen mit fehler tragen noch das Urteil nach den alten Kriterien — die zählen nicht als neu bewertet
+            const gut = (b.anfragen || []).filter(function (a) { return !a.fehler; }).length;
+            const schlecht = (b.anfragen || []).length - gut;
+            if (b.laeuft) {
+              // Der Server antwortet nach 20 s mit dem bisherigen Stand und arbeitet weiter — die Seite holt den Rest nach
+              if (anfragen.daten) { anfragen.daten.laeuft = true; anfragen.nachladeZaehler = 0; }
+              toast('Gespeichert — ' + gut + ' neu bewertet, die übrigen folgen im Hintergrund und erscheinen gleich von selbst');
+              anfNachladen();
+            } else toast('Gespeichert — ' + gut + ' neu bewertet' + (schlecht ? ', ' + schlecht + ' fehlgeschlagen (mit rotem Hinweis in der Liste)' : ''));
+          } else toast('Gespeichert');
+          modal = null;
+          render();
+        } finally { el.disabled = false; }
       }
     } catch (fehler) { toast(fehler.message); }
   }
@@ -6214,6 +6632,8 @@
         + '<button class="primary" data-act="save-unit">Speichern</button></div>';
     } else if (modal.kind === 'kauf' || modal.kind === 'kauf-neu' || modal.kind === 'kauf-annahmen') {
       body = kaufFenster();
+    } else if (modal.kind === 'anfrage' || modal.kind === 'anf-kriterien') {
+      body = anfFenster();
     } else if (modal.kind === 'interessent') {
       const inter = modal.i;
       const auswahl = [['', '— noch offen —']].concat(
@@ -6260,7 +6680,7 @@
         + f('Uhrzeit', '<input type="time" id="p-zeit" value="' + esc((pushEinst && pushEinst.zeit) || '07:00') + '">')
         + '</div><div class="two">'
         + f('Vor Besichtigungen', sel('p-termine', [['an', 'Eingeschaltet'], ['aus', 'Ausgeschaltet']], (pushEinst && pushEinst.termine === false) ? 'aus' : 'an'))
-        + f('Neue Anfragen', sel('p-anfragen', [['an', 'Eingeschaltet'], ['aus', 'Ausgeschaltet']], (pushEinst && pushEinst.anfragen === false) ? 'aus' : 'an'))
+        + f('Neue Anfrage sofort (ohne Bewertung)', sel('p-anfragen', [['an', 'Eingeschaltet'], ['aus', 'Ausgeschaltet']], (pushEinst && pushEinst.anfragen === false) ? 'aus' : 'an'))
         + '</div><div class="two">'
         + f('„Jetzt dran“ zu jedem Block', sel('p-bloecke', [['an', 'Eingeschaltet'], ['aus', 'Ausgeschaltet']], (pushEinst && pushEinst.bloecke === false) ? 'aus' : 'an'))
         + f('Abends: Liegengebliebenes', '<div style="display:flex;gap:8px">'
@@ -7168,7 +7588,7 @@
         + '<button class="primary" data-act="save-object">Speichern</button></div>';
     }
     const breit = (modal.kind === 'strom' || modal.kind === 'konto' || modal.kind === 'wartung'
-      || modal.kind === 'nk' || modal.kind === 'auszug' || modal.kind === 'kauf') ? ' breit'
+      || modal.kind === 'nk' || modal.kind === 'auszug' || modal.kind === 'kauf' || modal.kind === 'anfrage') ? ' breit'
       : (modal.kind === 'aufgabe' ? ' mittel' : '');
 
     const titel = {
@@ -7177,7 +7597,8 @@
       sicherung: 'Daten sichern', serversicherung: 'Server-Sicherung', plan: 'Tagesplan', planeinst: 'Tagesplan', staende: 'Verlauf', menue: 'Menü', google: 'Postfach',
       schreiben: 'Schreiben', nk: 'Betriebskosten', auszug: 'Kontoauszug', beleg: 'Beleg ablegen',
       schnell: 'Aufgabe hinzufügen', suche: 'Suchen', absender: 'Einstellungen',
-      kauf: 'Durchgerechnet', 'kauf-neu': 'Angebot eintragen', 'kauf-annahmen': 'Annahmen'
+      kauf: 'Durchgerechnet', 'kauf-neu': 'Angebot eintragen', 'kauf-annahmen': 'Annahmen',
+      anfrage: 'Anfrage', 'anf-kriterien': 'Kriterien'
     }[modal.kind] || '';
 
 
@@ -7700,6 +8121,16 @@
       }
     }
     else if (act.indexOf('kauf-') === 0) { kaufKlick(act, el); }
+    else if (act === 'zu-anfragen') {
+      ansicht = 'anfragen';
+      if (!anfragen.daten) anfragen.fehler = null;   // ohne Daten lädt die Seite selbst nach, auch nach einem Fehler
+      render(); window.scrollTo(0, 0);
+      // Auch nachladen, wenn der letzte Stand noch „läuft“ sagt — sonst pollte nach der Rückkehr niemand
+      if (anfragen.daten && (anfragen.daten.laeuft || Date.now() - anfragen.geholt > 5 * 60 * 1000)) {
+        anfLaden().then(function () { if (ansicht === 'anfragen') render(); });
+      }
+    }
+    else if (act.indexOf('anf-') === 0) { anfKlick(act, el); }
     else if (act === 'zu-interessenten') {
       ansicht = 'interessenten'; render(); window.scrollTo(0, 0);
     }
@@ -8558,6 +8989,7 @@
       if (todoist.verbunden) { await alleLaden(); await planLaden(); }
       if (ansicht === 'post' && google.verbunden) await postLaden();
       if (ansicht === 'kaufen') await kaufLaden();
+      if (ansicht === 'anfragen') await anfLaden();
       zuletztAufgefrischt = Date.now();
       const tipptGerade = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].indexOf(document.activeElement.tagName) !== -1;
       if (!tipptGerade && !document.getElementById('dialog')) render();
@@ -8585,6 +9017,12 @@
     if (typeof URLSearchParams === 'function'
         && new URLSearchParams(location.search).get('kaufen') === '1') {
       ansicht = 'kaufen';
+      if (history.replaceState) history.replaceState({}, '', location.pathname);
+    }
+    // Aus der Morgenmeldung zu den Anfragen
+    if (typeof URLSearchParams === 'function'
+        && new URLSearchParams(location.search).get('anfragen') === '1') {
+      ansicht = 'anfragen';
       if (history.replaceState) history.replaceState({}, '', location.pathname);
     }
     if (typeof URLSearchParams === 'function'

@@ -18,6 +18,7 @@
 //    sicherung   tägliche Sicherung auf dem Server und in Google Drive
 //    planer      Tagesplan: Aufgaben als Zeitblöcke, Rest auf die nächsten Tage
 //    kaufen      Kaufangebote aus den ImmoScout-Suchaufträgen, durchgerechnet
+//    anfragen    Mietanfragen aus dem Postfach, von Claude nach eigenen Kriterien bewertet
 // -------------------------------------------------------------
 
 const express = require('express');
@@ -53,6 +54,7 @@ app.use(require('./lib/rechnungen').router);
 app.use(require('./lib/sicherung').router);
 app.use(require('./lib/planer').router);
 app.use(require('./lib/kaufen').router);
+app.use(require('./lib/anfragen').router);
 
 // ---------------- Oberfläche ----------------
 app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'] }));

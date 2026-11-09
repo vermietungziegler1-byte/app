@@ -340,14 +340,14 @@ if (webpush) {
       await mitteilungSenden(zeilen, {
         titel: 'Neue Anfrage' + (von ? ' — ' + von : ''),
         text: h.Subject || 'Im Postfach wartet eine neue Anfrage.',
-        url: '/', tag: 'post-' + id
+        url: '/?anfragen=1', tag: 'post-' + id   // auf die Anfragen-Seite, wo die Bewertung dazukommt
       });
     }
     if (neue.length > 3) {
       await mitteilungSenden(zeilen, {
         titel: 'Postfach',
         text: 'und ' + (neue.length - 3) + ' weitere neue Anfragen',
-        url: '/', tag: 'post-mehr'
+        url: '/?anfragen=1', tag: 'post-mehr'
       });
     }
   }

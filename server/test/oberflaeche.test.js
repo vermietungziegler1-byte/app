@@ -8,6 +8,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { execSync } = require('child_process');
 const path = require('path');
+const Database = require('better-sqlite3');
 const { serverStarten, sitzung, fakeTodoist } = require('./hilfe');
 
 function playwrightLaden() {
@@ -41,7 +42,7 @@ test('Oberfläche: alle Ansichten ohne Programmfehler', { skip: pw ? false : 'Pl
       await seite.reload();
       await seite.waitForSelector('[data-act="zu-objekte"]', { state: 'attached' });
 
-      for (const ziel of ['zu-heute', 'zu-aufgaben', 'zu-objekte', 'zu-mieten', 'zu-interessenten', 'zu-post', 'zu-rechnungen', 'zu-kaufen']) {
+      for (const ziel of ['zu-heute', 'zu-aufgaben', 'zu-objekte', 'zu-mieten', 'zu-interessenten', 'zu-anfragen', 'zu-post', 'zu-rechnungen', 'zu-kaufen']) {
         await seite.evaluate(function (z) {
           const el = document.querySelector('[data-act="' + z + '"]');
           if (el) el.click();
@@ -396,5 +397,65 @@ test('Oberfläche Aufgaben: Filter, Wartet, Verlauf und Ziehen in den Zeitplan',
     await browser.close();
     await server.stoppen();
     todoist.stoppen();
+  }
+});
+
+test('Oberfläche: Anfragen — Liste, Fenster, Kriterien', { skip: pw ? false : 'Playwright nicht installiert' }, async function () {
+  const server = await serverStarten();
+  const browser = await pw.chromium.launch();
+  try {
+    const s = sitzung(server);
+    await s.post('/api/setup', { name: 'louis', passwort: 'geheim123' });
+
+    // Eine bewertete Anfrage direkt in die Tabelle legen — genau so, wie anfragen.js sie ablegt.
+    // Ohne Postfach und Assistent zeigt die Seite Gespeichertes trotzdem.
+    const db = new Database(path.join(server.daten, 'vermietung.db'));
+    db.prepare('INSERT INTO anfragen (id, wann, von, betreff, inhalt, bewertung, einheit, status, fehler, gemeldet) VALUES (?,?,?,?,?,?,?,?,?,?)')
+      .run('m1', Date.now(), 'ImmobilienScout24 <noreply@immobilienscout24.de>', 'Neue Kontaktanfrage zu Ihrer Immobilie',
+        JSON.stringify({ name: 'Anna Muster', email: 'anna.muster@example.org', telefon: '0171 1234567',
+          objekt: 'Helle 3-Zimmer-Wohnung in Waiblingen', personen: '2 Erwachsene', erwachsene: 2, kinder: 0,
+          haustiere: 'keine', beruf: 'Ingenieurin', einkommen: '4.800 € netto', einkommenNetto: 4800, einzug: '1. Januar',
+          nachricht: 'Ein Paar sucht eine ruhige Wohnung in Waiblingen.' }),
+        JSON.stringify({ urteil: 'passt', punkte: 88, gruende: ['Zwei Erwachsene ohne Kinder', 'Sicheres Einkommen'], fehlt: [],
+          antwort: 'Sehr geehrte Frau Muster, gern lade ich Sie zur Besichtigung ein.' }),
+        '', 'neu', null, 0);
+    db.close();
+
+    const seite = await (await browser.newContext({ viewport: { width: 1280, height: 900 } })).newPage();
+    const fehler = [];
+    seite.on('pageerror', function (e) { fehler.push(e.message); });
+    await seite.goto(server.basis + '/');
+    await seite.evaluate(async function () {
+      await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'louis', passwort: 'geheim123' }) });
+    });
+
+    // Der tiefe Link aus der Mitteilung führt direkt auf die Anfragen
+    await seite.goto(server.basis + '/?anfragen=1');
+    await seite.waitForSelector('.anf-karte');
+    const karte = await seite.textContent('.anf-karte');
+    assert.match(karte, /Anna Muster/);
+    assert.match(karte, /88/);
+
+    // Fenster: Antwortvorschlag lesen, Stand auf „gemerkt“ setzen
+    await seite.click('.anf-karte');
+    await seite.waitForSelector('#anf-antwort');
+    assert.match(await seite.inputValue('#anf-antwort'), /Besichtigung/);
+    await seite.click('[data-act="anf-status"][data-st="gemerkt"]');
+    await seite.waitForSelector('#anf-antwort', { state: 'detached' });
+    await seite.waitForSelector('.anf-karte .anzahl:text("gemerkt")');
+    assert.equal((await s.get('/api/anfragen')).json.anfragen[0].status, 'gemerkt');
+
+    // Kriterien: Fenster öffnen, eigenen Text speichern, am Server angekommen
+    await seite.click('[data-act="anf-kriterien"]');
+    await seite.waitForSelector('#anf-kriterien');
+    await seite.fill('#anf-kriterien', 'Nur Nichtraucher.');
+    await seite.click('[data-act="anf-kriterien-speichern"]');
+    await seite.waitForSelector('#anf-kriterien', { state: 'detached' });
+    assert.equal((await s.get('/api/anfragen')).json.einstellungen.kriterien, 'Nur Nichtraucher.');
+    assert.deepEqual(fehler, []);
+  } finally {
+    await browser.close();
+    await server.stoppen();
   }
 });
