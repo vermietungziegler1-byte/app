@@ -12,7 +12,7 @@
 
 const express = require('express');
 const { crypto, path, fs, DATENORDNER, db, einstellung, einstellungSetzen, mitFehler } = require('./kern');
-const { nurVerwalter } = require('./anmeldung');
+const { nurAngemeldet, nurVerwalter } = require('./anmeldung');
 
 let ImapFlow = null, nodemailer = null, MailComposer = null, simpleParser = null;
 try {
@@ -197,7 +197,7 @@ async function mailHolen(c, uid) {
 }
 
 // ---------------- Schnittstellen ----------------
-app.get('/api/postfach', nurVerwalter, function (req, res) {
+app.get('/api/postfach', nurAngemeldet, nurVerwalter, function (req, res) {
   res.json({
     eingerichtet: !!zugang(),
     benutzer: einstellung('postfach_benutzer') || '',
@@ -208,7 +208,7 @@ app.get('/api/postfach', nurVerwalter, function (req, res) {
 });
 
 // Einrichten: erst beim Mailserver anmelden, nur wenn das klappt wird gespeichert
-app.put('/api/postfach', nurVerwalter, mitFehler(async function (req, res) {
+app.put('/api/postfach', nurAngemeldet, nurVerwalter, mitFehler(async function (req, res) {
   const b = req.body || {};
   const benutzer = String(b.benutzer || '').trim();
   const server = String(b.server || STANDARD_SERVER).trim();
@@ -232,18 +232,18 @@ app.put('/api/postfach', nurVerwalter, mitFehler(async function (req, res) {
   res.json({ ok: true, eingerichtet: true });
 }));
 
-app.delete('/api/postfach', nurVerwalter, function (req, res) {
+app.delete('/api/postfach', nurAngemeldet, nurVerwalter, function (req, res) {
   trennen();
   db.prepare("DELETE FROM einstellungen WHERE schluessel IN ('postfach_passwort', 'postfach_benutzer')").run();
   res.json({ ok: true });
 });
 
-app.get('/api/postfach/ordner', nurVerwalter, mitFehler(async function (req, res) {
+app.get('/api/postfach/ordner', nurAngemeldet, nurVerwalter, mitFehler(async function (req, res) {
   res.json(await ordnerListe(true));
 }));
 
 // Die neuesten Mails eines Ordners, 50 auf einmal; „vor“ blättert zu älteren
-app.get('/api/postfach/mails', nurVerwalter, mitFehler(async function (req, res) {
+app.get('/api/postfach/mails', nurAngemeldet, nurVerwalter, mitFehler(async function (req, res) {
   const ordner = String(req.query.ordner || 'INBOX');
   const anzahl = Math.max(10, Math.min(100, Number(req.query.anzahl) || 50));
   const vor = Number(req.query.vor) || 0;
@@ -270,7 +270,7 @@ app.get('/api/postfach/mails', nurVerwalter, mitFehler(async function (req, res)
 }));
 
 // Eine Mail lesen — sie gilt danach als gelesen, wie in Outlook
-app.get('/api/postfach/mail', nurVerwalter, mitFehler(async function (req, res) {
+app.get('/api/postfach/mail', nurAngemeldet, nurVerwalter, mitFehler(async function (req, res) {
   const ordner = String(req.query.ordner || 'INBOX');
   const uid = Number(req.query.uid);
   if (!uid) throw fehler('Welche Mail?', 400);
@@ -293,7 +293,7 @@ app.get('/api/postfach/mail', nurVerwalter, mitFehler(async function (req, res) 
 }));
 
 // Anhang herunterladen — immer als Datei, nie im Browser ausgeführt
-app.get('/api/postfach/anhang', nurVerwalter, mitFehler(async function (req, res) {
+app.get('/api/postfach/anhang', nurAngemeldet, nurVerwalter, mitFehler(async function (req, res) {
   const ordner = String(req.query.ordner || 'INBOX');
   const uid = Number(req.query.uid), nr = Number(req.query.nr);
   const a = await imOrdner(ordner, async function (c) {
@@ -309,7 +309,7 @@ app.get('/api/postfach/anhang', nurVerwalter, mitFehler(async function (req, res
 }));
 
 // Löschen, verschieben, gelesen/ungelesen, markieren
-app.post('/api/postfach/aktion', nurVerwalter, mitFehler(async function (req, res) {
+app.post('/api/postfach/aktion', nurAngemeldet, nurVerwalter, mitFehler(async function (req, res) {
   const b = req.body || {};
   const ordner = String(b.ordner || '');
   const uids = [].concat(b.uids || []).map(Number).filter(function (n) { return n > 0; });
@@ -335,7 +335,7 @@ app.post('/api/postfach/aktion', nurVerwalter, mitFehler(async function (req, re
 }));
 
 // Schreiben, antworten, weiterleiten — als louis.ziegler@mzer.de, Kopie landet in „Gesendet“
-app.post('/api/postfach/senden', nurVerwalter, mitFehler(async function (req, res) {
+app.post('/api/postfach/senden', nurAngemeldet, nurVerwalter, mitFehler(async function (req, res) {
   if (!nodemailer) throw fehler(PAKETE_FEHLEN, 500);
   const z = zugang();
   if (!z) throw fehler('Das Postfach ist noch nicht eingerichtet', 409);
