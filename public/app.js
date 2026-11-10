@@ -4155,7 +4155,8 @@
       if (istHeute && mobil) html += blickHtml;
       if (istHeute) html += planLeisteHtml();
 
-      html += '<div class="tagspalten"><div class="tagliste">';
+      // Am PC stehen die Kacheln über der Liste; rechts bleibt der Zeitplan in voller Höhe
+      html += '<div class="tagspalten"><div class="tagliste">' + (istHeute && !mobil ? blickHtml : '');
 
       if (istHeute) {
         // 1 — was rechts im Zeitplan für heute steht, in der Reihenfolge des Tages
@@ -4255,9 +4256,7 @@
       html += '</div>';
 
       // Rechte Spalte (am Handy darunter): der Zeitplan mit Uhrzeiten
-      html += '<div class="tagzeit' + (istHeute && !mobil ? ' mit-blick' : '') + '">'
-        + (istHeute && !mobil ? '<div class="tagzeit-kopf">Auf einen Blick</div>' + blickHtml : '')
-        + '<div class="tagzeit-kopf">Zeitplan</div>';
+      html += '<div class="tagzeit"><div class="tagzeit-kopf">Zeitplan</div>';
       // Ohne einen einzigen Eintrag mit Uhrzeit reicht eine Zeile statt eines leeren Rasters.
       // Am PC bleibt das Raster auch leer stehen — man kann Aufgaben hineinziehen
       if (!zeitplan.length && mobil) {

@@ -772,9 +772,7 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
   #app .tagkarte .memokopf h3 { display: flex; align-items: baseline; gap: 12px; }
   #app .tagkarte .memokopf .mk-titel { font-size: 32px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.05; }
   #app .tagkarte .memokopf .mk-datum { font-size: 16px; font-weight: 500; color: var(--muted); letter-spacing: -0.01em; }
-  #app .tagzeit.mit-blick .blick { margin: 0 0 6px; }
-  #app .tagzeit.mit-blick .blick-kachel:first-child { grid-column: 1 / -1; }
-  #app .tagzeit.mit-blick .zeitrahmen { max-height: max(380px, calc(100vh - 420px)); }
+  #app .tagliste > .blick { grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 12px 0 8px; }
   #app .tagzeit-kopf { text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--muted); }
 
   /* Post wie Apple Mail: randlos bis an die Leiste, Liste und Lesebereich scrollen getrennt */

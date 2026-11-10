@@ -115,8 +115,9 @@ test('Oberfläche: Kaufen — Angebot eintragen, durchrechnen, Miete ändern', {
 
 test('Oberfläche: Tagesplan vorschlagen, übernehmen, zurücknehmen', { skip: pw ? false : 'Playwright nicht installiert' }, async function () {
   const gestern = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10);
+  // 16 statt 12: ein ganzer freier Tag fasst 12 × 30 Minuten (maxMinuten 360) — vor 8 Uhr wäre sonst nichts zu verschieben
   const aufgaben = [];
-  for (let i = 1; i <= 12; i++) {
+  for (let i = 1; i <= 16; i++) {
     aufgaben.push({ id: String(i), content: 'Aufgabe ' + i, priority: 1, project_id: '1', due: { date: gestern, is_recurring: false } });
   }
   const todoist = await fakeTodoist(aufgaben);
@@ -143,7 +144,7 @@ test('Oberfläche: Tagesplan vorschlagen, übernehmen, zurücknehmen', { skip: p
     await seite.waitForSelector('text=Auf die nächsten Tage');
     await seite.click('[data-act="plan-uebernehmen"]');
     await seite.waitForSelector('[data-act="plan-zurueck"]');
-    assert.ok(todoist.aenderungen.length >= 12, 'alle Aufgaben wurden eingeplant oder verschoben');
+    assert.ok(todoist.aenderungen.length >= 16, 'alle Aufgaben wurden eingeplant oder verschoben');
 
     const vorher = todoist.aenderungen.length;
     await seite.click('[data-act="plan-zurueck"]');
