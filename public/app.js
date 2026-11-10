@@ -1083,6 +1083,159 @@
     return liste.slice(0, 300);
   }
 
+  // =================================================================
+  // OneDrive: Dateien bei Objekten, Wohnungen und Mietern — die App liest nur und kopiert nichts.
+  // Der Server gleicht alle fünf Minuten ab und ordnet zu; hier wird angezeigt, gefiltert und korrigiert.
+  // =================================================================
+  const OD_ARTEN = ['Mietvertrag', 'Nebenkosten', 'Kaution', 'Kündigung', 'Übergabeprotokoll', 'Selbstauskunft', 'Versicherung', 'Plan',
+    'Angebot', 'Rechnung', 'Protokoll', 'Schriftverkehr', 'Kontoauszug', 'Foto', 'Sonstiges'];
+  const OD_MIETER = ['Mietvertrag', 'Kaution', 'Kündigung', 'Übergabeprotokoll', 'Selbstauskunft', 'Schriftverkehr'];
+  let od = { status: null, dateien: null, laedt: false, statusLaedt: false, geholt: 0, filter: {}, art: {}, suche: {} };
+
+  function odBereit() { return !!(od.status && od.status.verbunden); }
+  function odStatusLaden() {
+    if (od.statusLaedt) return Promise.resolve();
+    od.statusLaedt = true;
+    return apiRoh('onedrive').then(function (s) { od.status = s; })
+      .catch(function () { od.status = { eingerichtet: false, verbunden: false }; })
+      .then(function () { od.statusLaedt = false; });
+  }
+  function odLaden() {
+    if (od.laedt) return Promise.resolve();
+    od.laedt = true;
+    return apiRoh('onedrive/dateien').then(function (r) { od.dateien = r.dateien || []; od.info = r; od.geholt = Date.now(); })
+      .catch(function (e) { od.fehler = e.message; if (!od.dateien) od.dateien = []; })
+      .then(function () { od.laedt = false; });
+  }
+  // Beim Anzeigen: Stand und Dateien holen, wenn sie fehlen oder älter als fünf Minuten sind — danach einmal neu aufbauen
+  function odSicherstellen() {
+    const laeuft = [];
+    if (!od.status && !od.statusLaedt) laeuft.push(odStatusLaden());
+    if (odBereit() && !od.laedt && (!od.dateien || Date.now() - od.geholt > 5 * 60 * 1000)) laeuft.push(odLaden());
+    if (laeuft.length) Promise.all(laeuft).then(function () {
+      if (odBereit() && !od.dateien && !od.laedt) return odLaden();
+    }).then(function () {
+      // Im Fenster einer Wohnung nur den OneDrive-Teil auffrischen — sonst ginge Eingetipptes verloren
+      if (modal && modal.kind === 'unit') {
+        const feld = root.querySelector('.od-einheit-feld');
+        if (feld) {
+          feld.innerHTML = odEinheitHtml(modal.oid, modal.unit.id);
+          feld.querySelectorAll('[data-act]').forEach(function (el) {
+            el.addEventListener('click', function (ev) { ev.stopPropagation(); handle(el.getAttribute('data-act'), el); });
+          });
+        }
+        return;
+      }
+      if (modal && modal.kind !== 'od-einrichten') return;
+      render();
+    });
+  }
+  function odEndung(name) { const m = /\.([a-z0-9]+)$/i.exec(name || ''); return m ? m[1].toLowerCase() : ''; }
+  function odSymbol(d) {
+    const e = odEndung(d.name);
+    const art = /^(jpe?g|png|heic|heif|gif|webp)$/.test(e) ? ['od-bild', e === 'png' ? 'PNG' : 'JPG']
+      : /^(docx?|odt|rtf|txt)$/.test(e) ? ['od-text', 'DOC'] : /^(xlsx?|ods)$/.test(e) ? ['od-tabelle', 'XLS'] : ['od-pdf', 'PDF'];
+    return '<span class="od-ic ' + art[0] + '">' + art[1] + '</span>';
+  }
+  function odEinheitName(objektId, einheitId) {
+    const o = findObj(objektId);
+    const x = o && einheitId ? o.units.find(function (u) { return u.id === einheitId; }) : null;
+    return { einheit: x ? x.name : '', mieter: x ? (x.tenant || '') : '', objekt: o ? o.name.split(',')[0] : '' };
+  }
+  function odDatum(d) {
+    if (d.datum) return rgDatum(d.datum);
+    return d.geaendert ? new Date(d.geaendert).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
+  }
+  function odNeu(d) { return d.gesehen && Date.now() - d.gesehen < 2 * 86400000; }
+  // Eine Zeile: Antippen öffnet die Datei in OneDrive, „Ändern“ ordnet neu zu
+  function odZeileHtml(d, mitWo) {
+    const wo = odEinheitName(d.objekt, d.einheit);
+    return '<div class="od-zeile">'
+      + '<a class="od-link" href="' + esc(d.url) + '" target="_blank" rel="noopener">' + odSymbol(d)
+      + '<span class="od-inhalt"><span class="od-name">' + esc(d.titel || d.name) + (odNeu(d) ? '<span class="od-neu">NEU</span>' : '') + '</span>'
+      + '<span class="od-meta"><span class="od-art od-art-' + esc(String(d.art || 'Sonstiges').toLowerCase().replace(/[^a-z]/g, '')) + '">' + esc(d.art || 'Sonstiges') + '</span>'
+      + esc(odDatum(d)) + (d.titel ? ' · ' + esc(d.name) : '') + ' · ' + esc(d.pfad || '/') + '</span></span>'
+      + (mitWo ? '<span class="od-wo">' + esc(wo.einheit || 'ganzes Objekt') + (wo.mieter ? '<small>' + esc(wo.mieter) + '</small>' : '') + '</span>' : '')
+      + '</a>'
+      + (nutzerRolle === 'verwalter' ? '<button class="tiny ghost od-aendern" data-act="od-aendern" data-id="' + esc(d.id) + '" title="Anders zuordnen">Ändern</button>' : '')
+      + '</div>';
+  }
+  function odVorschlagHtml(d) {
+    const wo = odEinheitName(d.objekt, d.einheit);
+    return '<div class="od-pk"><div class="od-pk-name">' + odSymbol(d) + '<a href="' + esc(d.url) + '" target="_blank" rel="noopener">' + esc(d.name) + '</a></div>'
+      + '<div class="od-pk-vorschlag">' + (d.objekt
+          ? 'Sieht aus wie <b>' + esc(d.titel || d.art || 'Dokument') + '</b> für <b>' + esc(wo.einheit ? wo.einheit + (wo.mieter ? ' · ' + wo.mieter : '') : wo.objekt) + '</b>'
+          : 'Wozu gehört diese Datei?') + '</div>'
+      + (d.objekt ? '<button class="tiny primary" data-act="od-ok" data-id="' + esc(d.id) + '">Stimmt</button>' : '')
+      + '<button class="tiny" data-act="od-aendern" data-id="' + esc(d.id) + '">' + (d.objekt ? 'Ändern' : 'Zuordnen') + '</button>'
+      + '<button class="tiny ghost" data-act="od-weg" data-id="' + esc(d.id) + '">Gehört zu keinem</button></div>';
+  }
+
+  // Reiter „Dokumente“ beim Objekt
+  function odObjektHtml(o) {
+    odSicherstellen();
+    if (!od.status) return '<div class="empty-note">wird geladen …</div>';
+    if (!odBereit()) {
+      return '<div class="od-leer">Verbinde dein OneDrive, dann stehen hier von selbst alle Unterlagen zu diesem Objekt, '
+        + 'seinen Wohnungen und Mietern — und jede neue Datei kommt automatisch dazu.'
+        + (nutzerRolle === 'verwalter' ? '<button class="tiny primary" data-act="od-einrichten">OneDrive verbinden</button>' : '') + '</div>';
+    }
+    if (!od.dateien) return '<div class="empty-note">Dateien werden geladen …</div>';
+    const alle = od.dateien.filter(function (d) { return d.objekt === o.id && d.status === 'zugeordnet'; });
+    const pruefen = od.dateien.filter(function (d) { return d.objekt === o.id && d.status === 'pruefen'; });
+    const f = od.filter[o.id] || '', a = od.art[o.id] || '', q = String(od.suche[o.id] || '').toLowerCase().trim();
+    const imFilter = alle.filter(function (d) { return !f || (f === '#objekt' ? !d.einheit : d.einheit === f); });
+    const arten = {};
+    imFilter.forEach(function (d) { arten[d.art || 'Sonstiges'] = (arten[d.art || 'Sonstiges'] || 0) + 1; });
+    const liste = imFilter.filter(function (d) { return !a || (d.art || 'Sonstiges') === a; })
+      .filter(function (d) { return !q || (d.name + ' ' + (d.titel || '') + ' ' + d.pfad + ' ' + (d.art || '')).toLowerCase().indexOf(q) !== -1; });
+    const neu = alle.filter(odNeu).length;
+    const proEinheit = {};
+    alle.forEach(function (d) { if (d.einheit) proEinheit[d.einheit] = (proEinheit[d.einheit] || 0) + 1; });
+    const chip = function (wert, name, zahl) {
+      return '<button class="od-chip' + (f === wert ? ' an' : '') + '" data-act="od-filter" data-id="' + o.id + '" data-wert="' + esc(wert) + '">'
+        + esc(name) + (zahl ? ' <span>' + zahl + '</span>' : '') + '</button>';
+    };
+    let h = '';
+    if (neu || pruefen.length) {
+      h += '<div class="od-banner">☁︎ <span>' + (neu ? '<b>' + neu + (neu === 1 ? ' neue Datei' : ' neue Dateien') + '</b> aus OneDrive in den letzten zwei Tagen' : '')
+        + (neu && pruefen.length ? ' · ' : '') + (pruefen.length ? pruefen.length + ' bitte kurz prüfen' : '') + '</span></div>';
+    }
+    h += '<div class="od-leiste"><input type="search" id="od-q-' + o.id + '" data-od-suche="' + o.id + '" placeholder="In Dokumenten suchen" value="' + esc(od.suche[o.id] || '') + '" autocomplete="off">'
+      + '<div class="od-chips">' + chip('', 'Alle', alle.length) + chip('#objekt', 'Ganzes Objekt', alle.filter(function (d) { return !d.einheit; }).length)
+      + o.units.filter(function (x) { return proEinheit[x.id]; }).map(function (x) { return chip(x.id, x.name + (x.tenant ? ' · ' + x.tenant.split(',')[0] : ''), proEinheit[x.id]); }).join('')
+      + '</div></div>';
+    h += '<div class="od-raster">'
+      + '<div class="od-arten">' + ['', ].concat(OD_ARTEN.filter(function (k) { return arten[k]; })).map(function (k) {
+          return '<button class="od-artknopf' + (a === k ? ' an' : '') + '" data-act="od-art" data-id="' + o.id + '" data-wert="' + esc(k) + '">'
+            + esc(k || 'Alle Arten') + '<span>' + (k ? arten[k] : imFilter.length) + '</span></button>';
+        }).join('') + '</div>'
+      + '<div class="od-liste">' + (liste.length ? liste.map(function (d) { return odZeileHtml(d, true); }).join('')
+          : '<div class="empty-note">' + (alle.length ? 'Keine Datei passt zu diesem Filter.' : 'Noch keine Datei diesem Objekt zugeordnet. Neue Dateien in OneDrive tauchen hier nach ein paar Minuten auf.') + '</div>')
+      + '</div>'
+      + (pruefen.length ? '<div class="od-pruefen"><h4>Bitte kurz prüfen</h4><div class="od-hinweis">Hier war sich die App nicht sicher. '
+          + 'Ein Tipp genügt — sie merkt sich das für den Ordner.</div>' + pruefen.slice(0, 12).map(odVorschlagHtml).join('') + '</div>' : '')
+      + '</div>';
+    return h;
+  }
+
+  // In der Wohnung: Unterlagen des Mieters und der Wohnung
+  function odEinheitHtml(objektId, einheitId) {
+    odSicherstellen();
+    if (!od.status) return '';
+    if (!odBereit()) {
+      return nutzerRolle === 'verwalter' ? '<div class="od-klein">OneDrive ist nicht verbunden — dann stehen hier Mietvertrag, Protokolle und Rechnungen '
+        + 'von selbst. <button class="tiny ghost" data-act="od-einrichten">Verbinden</button></div>' : '';
+    }
+    if (!od.dateien) return '<div class="od-klein">Dateien werden geladen …</div>';
+    const hier = od.dateien.filter(function (d) { return d.objekt === objektId && d.einheit === einheitId && d.status === 'zugeordnet'; });
+    if (!hier.length) return '<div class="od-klein">Noch keine Datei aus OneDrive bei dieser Wohnung.</div>';
+    const mieter = hier.filter(function (d) { return OD_MIETER.indexOf(d.art) !== -1; });
+    const wohnung = hier.filter(function (d) { return OD_MIETER.indexOf(d.art) === -1; });
+    return (mieter.length ? '<div class="od-gruppe">Mieter</div><div class="od-liste klein">' + mieter.map(function (d) { return odZeileHtml(d, false); }).join('') + '</div>' : '')
+      + (wohnung.length ? '<div class="od-gruppe">Wohnung</div><div class="od-liste klein">' + wohnung.map(function (d) { return odZeileHtml(d, false); }).join('') + '</div>' : '');
+  }
+
   async function googleLaden() {
     try { google = await api('google'); } catch (e) { google = { eingerichtet: false, verbunden: false }; }
   }
@@ -4199,6 +4352,7 @@
         + eintrag('todoist', 'Todoist', todoist.verbunden ? 'verbunden' : 'offen')
         + eintrag('google', 'Postfach', google.verbunden ? 'verbunden' : 'offen')
         + (nutzerRolle === 'verwalter' ? eintrag('pf-einrichten', 'Mailkonto mzer.de', pfBereit() ? 'verbunden' : 'offen') : '')
+        + (nutzerRolle === 'verwalter' ? eintrag('od-einrichten', 'OneDrive', od.status ? (odBereit() ? 'verbunden' : 'offen') : '') : '')
         + eintrag('gkal', 'Kalender', gkal.eingerichtet ? 'verbunden' : 'offen')
         + eintrag('push', 'Mitteilungen', pushAbo ? 'aktiv' : 'aus')
         + eintrag('stimme', 'Vorlesestimme', stimme.verbunden ? 'verbunden' : 'Gerät')
@@ -4699,6 +4853,7 @@
         + '</div></div>';
 
       if (isOpen) {
+        odSicherstellen();   // Zahl am Reiter „Dokumente“ und die Unterlagen in den Wohnungen
         const tab = reiter[o.id] || 'einheiten';
         const offeneAufgaben = (aufgaben[o.id] || []).length;
         const ueberfaellig = (aufgaben[o.id] || []).some(function (t) {
@@ -4710,13 +4865,16 @@
         // Reiterleiste plus Werkzeuge
         html += '<div class="reiterzeile">'
           + '<div class="reiter">'
-          + ['einheiten', 'zahlen', 'aufgaben'].map(function (r) {
-              const namen = { einheiten: 'Einheiten', zahlen: 'Zahlen', aufgaben: 'Aufgaben' };
+          + ['einheiten', 'zahlen', 'aufgaben', 'dokumente'].map(function (r) {
+              const namen = { einheiten: 'Einheiten', zahlen: 'Zahlen', aufgaben: 'Aufgaben', dokumente: 'Dokumente' };
+              const dokZahl = od.dateien ? od.dateien.filter(function (d) { return d.objekt === o.id && d.status === 'zugeordnet'; }).length : 0;
+              const dokPruefen = od.dateien ? od.dateien.some(function (d) { return d.objekt === o.id && d.status === 'pruefen'; }) : false;
               return '<button class="rtab' + (tab === r ? ' aktiv' : '') + '" data-act="reiter" '
                 + 'data-id="' + o.id + '" data-r="' + r + '">' + namen[r]
                 + (r === 'einheiten' ? ' <span class="zahl">' + o.units.length + '</span>' : '')
                 + (r === 'aufgaben' && offeneAufgaben ? ' <span class="zahl' + (ueberfaellig ? ' rot' : '') + '">'
                     + offeneAufgaben + '</span>' : '')
+                + (r === 'dokumente' && dokZahl ? ' <span class="zahl' + (dokPruefen ? ' rot' : '') + '">' + dokZahl + '</span>' : '')
                 + '</button>';
             }).join('')
           + '</div>'
@@ -4882,6 +5040,9 @@
           }
         }
 
+        // ---- Reiter: Dokumente aus OneDrive ----
+        if (tab === 'dokumente') html += odObjektHtml(o);
+
         if (o.note) html += '<div class="unit-type" style="margin-top:10px">' + esc(o.note) + '</div>';
         html += '</div>';
       }
@@ -4931,13 +5092,15 @@
     const alterToast = root.querySelector('.toast');   // Hinweis unten überlebt den Neuaufbau
     const p2alt = root.querySelector('.p2-liste');       // Post am PC: Liste bleibt beim Neuaufbau an ihrer Stelle
     const p2Rolle = p2alt ? p2alt.scrollTop : 0;
-    const suchStelle = document.activeElement && document.activeElement.id === 'pf-q' ? (document.activeElement.selectionStart || 0) : -1;
+    // Wer gerade in einem Suchfeld tippt (Postfach, Dokumente), tippt nach dem Neuaufbau einfach weiter
+    const suchFeldId = document.activeElement && /^(pf-q|od-q-)/.test(document.activeElement.id || '') ? document.activeElement.id : '';
+    const suchStelle = suchFeldId ? (document.activeElement.selectionStart || 0) : -1;
     root.innerHTML = html;
     if (alterToast) root.appendChild(alterToast);
     const p2neu = root.querySelector('.p2-liste');
     if (p2neu && p2Rolle) p2neu.scrollTop = p2Rolle;
-    if (suchStelle >= 0) {   // wer gerade im Suchfeld tippt, tippt nach dem Neuaufbau einfach weiter
-      const sf = root.querySelector('#pf-q');
+    if (suchFeldId) {
+      const sf = document.getElementById(suchFeldId);
       if (sf) { sf.focus(); try { sf.setSelectionRange(suchStelle, suchStelle); } catch (e) { /* egal */ } }
     }
     fussVerblassen();
@@ -7468,11 +7631,20 @@
       .map(function (m) { return { typ: 'post', id: m.id, titel: m.betreff, unten: String(m.von || '').replace(/<.*>/, '').replace(/"/g, '').trim() }; }));
     gruppe('Abrechnungen', ((rg && rg.liste) || []).filter(function (e) { return passt(e.nummer, e.objekt); })
       .map(function (e) { return { typ: 'rechnung', id: e.id, titel: e.nummer, unten: e.objekt || '' }; }));
+    // Dateien aus OneDrive: nach Name, Titel, Art, Objekt, Wohnung und Mieter
+    gruppe('Dokumente', (od.dateien || []).filter(function (d) {
+      if (d.status !== 'zugeordnet') return false;
+      const wo = odEinheitName(d.objekt, d.einheit);
+      return passt(d.name, d.titel, d.art, wo.objekt, wo.einheit, wo.mieter);
+    }).map(function (d) {
+      const wo = odEinheitName(d.objekt, d.einheit);
+      return { typ: 'datei', id: d.id, titel: d.titel || d.name, unten: [d.art, wo.objekt, wo.einheit, wo.mieter].filter(Boolean).join(' · ') };
+    }));
     return gruppen;
   }
 
   function sucheTrefferHtml(q) {
-    if (!String(q || '').trim()) return '<div class="such-leer">Seiten, Objekte, Mieter, Interessenten, Aufgaben, Mails und Abrechnungen'
+    if (!String(q || '').trim()) return '<div class="such-leer">Seiten, Objekte, Mieter, Interessenten, Aufgaben, Mails, Abrechnungen und Dokumente'
       + (mobil ? '' : '<br><span class="such-tipp">Pfeiltasten wählen, Enter öffnet · N legt überall eine neue Aufgabe an</span>') + '</div>';
     const gruppen = sucheTreffer(q);
     if (!gruppen.length) return '<div class="such-leer">Nichts gefunden</div>';
@@ -7534,6 +7706,10 @@
     modal = null;
     if (typ === 'seite') {
       handle('zu-' + id, el);
+    } else if (typ === 'datei') {
+      const d = (od.dateien || []).find(function (x) { return x.id === id; });
+      render();
+      if (d && d.url) window.open(d.url, '_blank', 'noopener');
     } else if (typ === 'objekt') {
       ansicht = 'objekte'; query = ''; open[id] = true; render();
       const kopf = root.querySelector('.obj-head[data-id="' + id + '"]');
@@ -7581,6 +7757,69 @@
         + (modal.anhaenge ? '<div class="hint">📎 ' + modal.anhaenge + (modal.anhaenge === 1 ? ' Anhang wird' : ' Anhänge werden') + ' mitgeschickt.</div>' : '')
         + '<div class="modal-actions"><button data-act="close">Verwerfen</button><div class="spacer"></div>'
         + '<button class="primary" data-act="pf-senden"' + (modal.sendet ? ' disabled' : '') + '>' + (modal.sendet ? 'Wird gesendet …' : 'Senden') + '</button></div>';
+    } else if (modal.kind === 'od-einrichten') {
+      const s = od.status || {};
+      const z = s.zahlen || {};
+      const rueck = location.origin + '/api/onedrive/zurueck';
+      body = '<h2>OneDrive</h2>';
+      if (!s.eingerichtet) {
+        body += '<div class="hint">Damit die App deine Dateien lesen darf, wird sie einmal bei Microsoft eingetragen — ähnlich wie damals bei Google. '
+          + 'Das dauert etwa zehn Minuten. Die App bekommt nur Lesezugriff und kopiert keine Dateien.</div>'
+          + '<ol class="od-schritte">'
+          + '<li><b>entra.microsoft.com</b> öffnen und mit deinem Microsoft-Konto anmelden (dasselbe wie für OneDrive).</li>'
+          + '<li>Links „Anwendungen“ → „App-Registrierungen“ → „Neue Registrierung“. Name: <b>Ziegler Verwaltung</b>. '
+          + 'Bei den Kontotypen: <b>„Konten in einem beliebigen Organisationsverzeichnis und persönliche Microsoft-Konten“</b>.</li>'
+          + '<li>Umleitungs-URI: Plattform <b>Web</b>, Adresse:<div class="od-kopie"><code>' + esc(rueck) + '</code>'
+          + '<button class="tiny" data-act="od-kopieren" data-wert="' + esc(rueck) + '">Kopieren</button></div> Dann „Registrieren“.</li>'
+          + '<li>Auf der Übersicht steht die <b>Anwendungs-ID (Client)</b> — kopieren und unten einfügen.</li>'
+          + '<li>Links „Zertifikate &amp; Geheimnisse“ → „Neuer geheimer Clientschlüssel“ → Ablauf 24 Monate → hinzufügen. '
+          + 'Den <b>Wert</b> (nicht die ID) kopieren und unten einfügen.</li>'
+          + '</ol>'
+          + f('Anwendungs-ID (Client)', '<input type="text" id="od-client-id" autocomplete="off" placeholder="z. B. 1a2b3c4d-…">')
+          + f('Geheimer Clientschlüssel (Wert)', '<input type="password" id="od-client-secret" autocomplete="off">')
+          + '<div class="modal-actions"><div class="spacer"></div><button data-act="close">Abbrechen</button>'
+          + '<button class="primary" data-act="od-speichern">Speichern</button></div>';
+      } else if (!s.verbunden) {
+        body += '<div class="hint">Fast fertig: Melde dich jetzt bei Microsoft an und erlaube der App, deine Dateien zu lesen. '
+          + 'Danach liest sie dein OneDrive ein und ordnet zu — das läuft im Hintergrund.</div>'
+          + '<div class="modal-actions" style="justify-content:flex-start"><a class="od-anmelden" href="/api/onedrive/start">Mit Microsoft anmelden</a></div>'
+          + '<div class="legal">Klappt die Anmeldung nicht, stimmt meist die Umleitungs-URI nicht: <code>' + esc(rueck) + '</code></div>'
+          + '<div class="modal-actions"><button class="danger" data-act="od-trennen">Zugangsdaten löschen</button><div class="spacer"></div><button data-act="close">Schließen</button></div>';
+      } else {
+        const unklar = (od.dateien || []).filter(function (d) { return d.status === 'unklar' || (d.status === 'pruefen' && !d.objekt); });
+        body += '<div class="hintbox">Verbunden' + (s.konto ? ' mit <b>' + esc(s.konto) + '</b>' : '') + '. Die App schaut alle fünf Minuten nach neuen Dateien.'
+          + (s.laeuft ? ' Gerade läuft ein Abgleich …' : (s.zuletzt ? ' Zuletzt: ' + new Date(s.zuletzt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) + ' Uhr.' : ''))
+          + (s.fehler ? '<br><b>Fehler:</b> ' + esc(s.fehler) : '') + '</div>'
+          + '<div class="od-zahlen">'
+          + '<div><b>' + (z.zugeordnet || 0) + '</b><span>zugeordnet</span></div>'
+          + '<div><b>' + (z.pruefen || 0) + '</b><span>zum Prüfen</span></div>'
+          + '<div><b>' + ((z.offen || 0) + (z.unklar || 0)) + '</b><span>noch ohne Objekt</span></div>'
+          + '<div><b>' + (z.fremd || 0) + '</b><span>nicht Vermietung</span></div>'
+          + '</div>'
+          + '<div class="legal">Der Assistent hat heute ' + (s.assistentHeute || 0) + ' Dateien gelesen (höchstens 300 am Tag, etwa 1 Cent je Datei). '
+          + 'Er liest nur PDFs, die am Namen nicht zu erkennen sind.</div>'
+          + (unklar.length ? '<div class="od-gruppe">Keinem Objekt zugeordnet (' + unklar.length + ')</div><div class="od-unklar">'
+              + unklar.slice(0, 40).map(odVorschlagHtml).join('') + '</div>' : '')
+          + '<div class="modal-actions"><button class="danger" data-act="od-trennen">Trennen</button><div class="spacer"></div>'
+          + '<button data-act="od-abgleich">Jetzt abgleichen</button><button data-act="close">Schließen</button></div>';
+      }
+    } else if (modal.kind === 'od-zuordnen') {
+      const d = (od.dateien || []).find(function (x) { return x.id === modal.id; }) || {};
+      const objektId = modal.objekt !== undefined ? modal.objekt : (d.objekt || '');
+      const o = objektId ? findObj(objektId) : null;
+      body = '<h2>Zuordnen</h2>'
+        + '<div class="od-datei">' + odSymbol(d) + '<div><b>' + esc(d.name || '') + '</b><div class="od-meta">' + esc(d.pfad || '/') + ' · ' + esc(odDatum(d)) + '</div></div>'
+        + (d.url ? '<a class="tiny-link" href="' + esc(d.url) + '" target="_blank" rel="noopener">Öffnen</a>' : '') + '</div>'
+        + f('Objekt', '<select id="od-objekt"><option value="">— bitte wählen —</option>'
+            + data.objects.map(function (x) { return '<option value="' + esc(x.id) + '"' + (x.id === objektId ? ' selected' : '') + '>' + esc(x.name.split(',')[0]) + '</option>'; }).join('') + '</select>')
+        + (o ? f('Wohnung', '<select id="od-einheit"><option value="">Ganzes Objekt</option>'
+            + o.units.map(function (x) { return '<option value="' + esc(x.id) + '"' + (x.id === (modal.einheit !== undefined ? modal.einheit : d.einheit) ? ' selected' : '') + '>'
+                + esc(x.name + (x.tenant ? ' · ' + x.tenant : '')) + '</option>'; }).join('') + '</select>') : '')
+        + f('Art', '<select id="od-art">' + OD_ARTEN.map(function (k) { return '<option' + (k === (modal.art || d.art || 'Sonstiges') ? ' selected' : '') + '>' + esc(k) + '</option>'; }).join('') + '</select>')
+        + '<label class="od-merken"><input type="checkbox" id="od-merken" checked> Für den Ordner „' + esc(d.pfad || '/') + '“ merken — weitere Dateien von dort landen dann auch hier '
+        + '<small>(gilt nicht für Sammelordner wie „Scans“ oder „Dokumente“)</small></label>'
+        + '<div class="modal-actions"><button class="ghost" data-act="od-weg" data-id="' + esc(d.id || '') + '">Gehört zu keinem</button><div class="spacer"></div>'
+        + '<button data-act="close">Abbrechen</button><button class="primary" data-act="od-zuordnen-speichern">Speichern</button></div>';
     } else if (modal.kind === 'pf-mail') {
       body = '<div class="pf-fenstermail">' + pfLeseHtml() + '</div>';
     } else if (modal.kind === 'pf-ziel') {
@@ -7652,6 +7891,8 @@
         + '<div class="sum-line plain"><span>Gesamt inkl. Nebenkosten</span><span class="num">' + money(brutto(x)) + '</span></div>'
         + '<div class="sum-line plain"><span>Kaution' + (x.deposit == null ? ' (2 Kaltmieten)' : ' (abweichend)') + '</span><span class="num">' + money(kaution(x)) + '</span></div>'
         + '<div class="divider"></div>'
+        // Aus OneDrive: von selbst zugeordnet, getrennt nach Mieter und Wohnung
+        + (modal.isNew ? '' : '<div class="field"><label>Unterlagen aus OneDrive</label><div class="od-einheit-feld">' + odEinheitHtml(modal.oid, x.id) + '</div></div>')
         + '<div class="field"><label>Dokumente</label><div class="doclist">'
         + (x.docs && x.docs.length ? x.docs.map(function (d, i) {
             return '<div class="docrow"><div class="grow"><a href="' + esc(d.url) + '" target="_blank" rel="noopener">' + esc(d.name) + '</a></div>'
@@ -8686,7 +8927,8 @@
       schnell: 'Aufgabe hinzufügen', suche: 'Suchen', absender: 'Einstellungen',
       kauf: 'Durchgerechnet', 'kauf-neu': 'Angebot eintragen', 'kauf-annahmen': 'Annahmen',
       anfrage: 'Anfrage', 'anf-kriterien': 'Kriterien',
-      'pf-schreiben': 'Mail', 'pf-mail': 'Mail', 'pf-ziel': 'Verschieben', 'pf-einrichten': 'Mailkonto'
+      'pf-schreiben': 'Mail', 'pf-mail': 'Mail', 'pf-ziel': 'Verschieben', 'pf-einrichten': 'Mailkonto',
+      'od-einrichten': 'OneDrive', 'od-zuordnen': 'Zuordnen'
     }[modal.kind] || '';
 
 
@@ -8757,6 +8999,12 @@
     nkBinden();
     stammBinden();
     sucheBinden();
+    // Dokumente beim Objekt: Suche beim Tippen; im Zuordnen-Fenster lädt die Wahl des Objekts dessen Wohnungen
+    root.querySelectorAll('[data-od-suche]').forEach(function (feld) {
+      feld.addEventListener('input', function () { od.suche[feld.getAttribute('data-od-suche')] = feld.value; render(); });
+    });
+    const odo = root.querySelector('#od-objekt');
+    if (odo) odo.addEventListener('change', function () { modal.objekt = odo.value; modal.einheit = ''; modal.art = val('od-art'); render(); });
     // Suchfeld im Postfach: Enter sucht, Esc beendet; das Getippte übersteht jeden Neuaufbau
     const pfq = root.querySelector('#pf-q');
     if (pfq) {
@@ -9487,6 +9735,75 @@
             .then(function () { pf = pfLeer(); pf.status = { eingerichtet: false }; pf.pfad = ''; modal = null; toast('Mailkonto getrennt'); render(); })
             .catch(function (e) { toast(e.message); });
         });
+    }
+    // ---- OneDrive ----
+    else if (act === 'od-filter') { od.filter[el.getAttribute('data-id')] = el.getAttribute('data-wert') || ''; od.art[el.getAttribute('data-id')] = ''; render(); }
+    else if (act === 'od-art') { od.art[el.getAttribute('data-id')] = el.getAttribute('data-wert') || ''; render(); }
+    else if (act === 'od-einrichten') {
+      seiteOffen = false;
+      modal = { kind: 'od-einrichten' }; render();
+      odStatusLaden().then(function () { return odBereit() ? odLaden() : null; })
+        .then(function () { if (modal && modal.kind === 'od-einrichten') render(); });
+    }
+    else if (act === 'od-kopieren') {
+      const wert = el.getAttribute('data-wert');
+      (navigator.clipboard ? navigator.clipboard.writeText(wert) : Promise.reject())
+        .then(function () { toast('Kopiert'); }).catch(function () { toast(wert); });
+    }
+    else if (act === 'od-speichern') {
+      const koerper = { clientId: val('od-client-id'), clientSecret: val('od-client-secret') };
+      if (!koerper.clientId || !koerper.clientSecret) { toast('Bitte Anwendungs-ID und Schlüssel einfügen'); return; }
+      api('onedrive', { method: 'PUT', body: koerper })
+        .then(function () { return odStatusLaden(); })
+        .then(function () { toast('Gespeichert — jetzt bei Microsoft anmelden'); render(); })
+        .catch(function (e) { toast(e.message); });
+    }
+    else if (act === 'od-abgleich') {
+      api('onedrive/abgleich', { method: 'POST' }).then(function () {
+        toast('Abgleich läuft — neue Dateien erscheinen in ein, zwei Minuten');
+        setTimeout(function () { odStatusLaden().then(odLaden).then(function () { if (modal && modal.kind === 'od-einrichten') render(); }); }, 20000);
+      }).catch(function (e) { toast(e.message); });
+    }
+    else if (act === 'od-trennen') {
+      dialog({ titel: 'OneDrive trennen?', text: 'Die App vergisst den Zugang und alle Zuordnungen. Deine Dateien in OneDrive bleiben, wie sie sind.',
+        knoepfe: [{ label: 'Abbrechen', wert: false }, { label: 'Trennen', wert: true, art: 'primaer' }] })
+        .then(function (r) {
+          if (!r.wert) return;
+          api('onedrive', { method: 'DELETE' }).then(function () {
+            od = { status: null, dateien: null, laedt: false, statusLaedt: false, geholt: 0, filter: {}, art: {}, suche: {} };
+            modal = null; toast('OneDrive getrennt'); render();
+          }).catch(function (e) { toast(e.message); });
+        });
+    }
+    else if (act === 'od-aendern') {
+      const zurueck = modal && modal.kind === 'od-einrichten' ? 'od-einrichten' : null;
+      modal = { kind: 'od-zuordnen', id: el.getAttribute('data-id'), zurueck: zurueck }; render();
+    }
+    else if (act === 'od-ok' || act === 'od-weg' || act === 'od-zuordnen-speichern') {
+      const id = act === 'od-zuordnen-speichern' ? modal.id : el.getAttribute('data-id');
+      const d = (od.dateien || []).find(function (x) { return x.id === id; });
+      if (!d) return;
+      let koerper;
+      if (act === 'od-weg') koerper = { ignorieren: true };
+      else if (act === 'od-ok') koerper = { objekt: d.objekt, einheit: d.einheit, art: d.art, merken: false };
+      else {
+        koerper = { objekt: val('od-objekt'), einheit: root.querySelector('#od-einheit') ? val('od-einheit') : '', art: val('od-art'),
+          merken: !!(root.querySelector('#od-merken') && root.querySelector('#od-merken').checked) };
+        if (!koerper.objekt) { toast('Bitte ein Objekt wählen'); return; }
+      }
+      const zurueck = modal && modal.zurueck;
+      api('onedrive/dateien/' + encodeURIComponent(id), { method: 'PUT', body: koerper })
+        .then(function (r) {
+          if (koerper.ignorieren) od.dateien = od.dateien.filter(function (x) { return x.id !== id; });
+          else Object.assign(d, r.datei);
+          if (od.status) od.status.zahlen = r.zahlen;
+          if (modal && (modal.kind === 'od-zuordnen')) modal = zurueck ? { kind: zurueck } : null;
+          toast(koerper.ignorieren ? 'Ausgeblendet' : (koerper.merken ? 'Zugeordnet — gilt jetzt auch für den Ordner' : 'Zugeordnet'));
+          // Gelernte Ordner können weitere Dateien umsortiert haben
+          if (koerper.merken) odLaden().then(function () { render(); });
+          render();
+        })
+        .catch(function (e) { toast(e.message); });
     }
     else if (act === 'post-waehlen') {
       postGewaehlt = el.getAttribute('data-id');
