@@ -87,8 +87,19 @@
       const q = root.querySelector('#q');
       if (q) q.focus(); else sucheOeffnen();
     }
-    if (ev.key === 'q' && !imFeld && !ev.ctrlKey && !ev.metaKey && !ev.altKey && todoist.verbunden) {
+    // q wie in Todoist, n wie „neu“: schnell eine Aufgabe anlegen
+    if ((ev.key === 'q' || ev.key === 'n') && !imFeld && !ev.ctrlKey && !ev.metaKey && !ev.altKey && todoist.verbunden) {
       ev.preventDefault(); tdSchnell();
+    }
+    // Post am PC: mit den Pfeiltasten durch die Mails
+    if ((ev.key === 'ArrowDown' || ev.key === 'ArrowUp') && !imFeld && ansicht === 'post' && postListe && postListe.length && root.querySelector('.post2')) {
+      ev.preventDefault();
+      let i = postListe.findIndex(function (m) { return m.id === postGewaehlt; });
+      i = Math.max(0, Math.min(postListe.length - 1, i + (ev.key === 'ArrowDown' ? 1 : -1)));
+      postGewaehlt = postListe[i].id;
+      render();
+      const zeile = root.querySelector('.p2-mail.an');
+      if (zeile) zeile.scrollIntoView({ block: 'nearest' });
     }
     if (ev.key === 'Escape' && !imFeld && (tdMenue || tdEditor)) {
       tdMenue = null; tdEditor = null; render();
@@ -775,6 +786,18 @@
   let wocheListe = null;    // alles, was in den nächsten sieben Tagen ansteht
   let google = { eingerichtet: false, verbunden: false, adresse: null };
   let postListe = null;     // gefilterte Mails
+  let postGewaehlt = null;  // am PC: die Mail im Lesebereich rechts
+  let postTexte = {};       // Volltexte, einmal geholt: id -> { text, … } | { laedt } | { fehler }
+  let postLeise = false;    // Post schon einmal im Hintergrund geholt (für Kachel und Zähler)
+
+  function postTextLaden(id) {
+    if (!id || postTexte[id]) return;
+    postTexte[id] = { laedt: true };
+    api('post/' + encodeURIComponent(id) + '/text')
+      .then(function (r) { postTexte[id] = r; })
+      .catch(function (e) { postTexte[id] = { fehler: e.message }; })
+      .then(function () { if (ansicht === 'post' && postGewaehlt === id && !modal) render(); });
+  }
 
   async function googleLaden() {
     try { google = await api('google'); } catch (e) { google = { eingerichtet: false, verbunden: false }; }
@@ -3669,7 +3692,9 @@
   }
   const money = function (v) {
     if (v === null || v === undefined || v === '' || v === 0) return '—';
-    return Number(v).toLocaleString('de-DE', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + ' €';
+    // Ganze Beträge ohne Komma, sonst immer mit Cent: 1.860,90 € statt 1.860,9 €
+    const ganz = Math.abs(Math.round(Number(v) * 100) % 100) === 0;
+    return Number(v).toLocaleString('de-DE', { minimumFractionDigits: ganz ? 0 : 2, maximumFractionDigits: ganz ? 0 : 2 }) + ' €';
   };
   const dateDE = function (s) { if (!s) return '—'; const p = s.split('-'); return p.length === 3 ? p[2] + '.' + p[1] + '.' + p[0] : s; };
   const esc = function (s) {
@@ -3692,6 +3717,113 @@
       : s === 'gesperrt' ? 'Nicht vermietbar' : 'Offen';
   };
 
+  // Die Bereiche der App — oben als Reiter (Tablet), links in der Seitenleiste (PC), in der Suche als „Seiten“
+  const SEITEN = [['heute', 'Heute'], ['aufgaben', 'Aufgaben'], ['objekte', 'Objekte'], ['mieten', 'Mieten'],
+    ['interessenten', 'Interessenten'], ['anfragen', 'Anfragen'], ['post', 'Post'], ['rechnungen', 'Abrechnungen'], ['kaufen', 'Kaufen']];
+
+  // Strichsymbole (24er Raster) für Seitenleiste und Kacheln
+  const SYM = {
+    heute: '<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9.5h13V10"/>',
+    aufgaben: '<rect x="4" y="4" width="16" height="16" rx="4"/><path d="m8.5 12 2.5 2.5 4.5-5"/>',
+    anfragen: '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="m4 7 8 6 8-6"/>',
+    post: '<path d="M4 13h4l2 3h4l2-3h4"/><path d="M4 13V7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/>',
+    objekte: '<path d="M5 21V5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v16"/><path d="M15 10h3a1 1 0 0 1 1 1v10M3 21h18M8.5 8h3M8.5 12h3M8.5 16h3"/>',
+    mieten: '<rect x="3" y="6" width="18" height="13" rx="3"/><path d="M3 10.5h18"/>',
+    interessenten: '<circle cx="9" cy="8.5" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 5.2a3.5 3.5 0 0 1 0 6.6M18.5 14.5a6.5 6.5 0 0 1 3 5.5"/>',
+    rechnungen: '<path d="M6 3h9l4 4v14H6z"/><path d="M14.5 3v4.5H19M9 12h7M9 16h5"/>',
+    kaufen: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M8 10.5h5M10.5 8v5"/>',
+    suche: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/>',
+    zahnrad: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6"/>'
+  };
+  const MUELL_SYM = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+    + '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>';
+  function sym(name, groesse) {
+    return '<svg viewBox="0 0 24 24" width="' + (groesse || 18) + '" height="' + (groesse || 18) + '" fill="none" stroke="currentColor" '
+      + 'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + SYM[name] + '</svg>';
+  }
+
+  // Zahlen für Seitenleiste und Kacheln: was heute ansteht, was noch offen ist
+  function mietenOffen() {
+    const d = new Date();
+    const k = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+    let zahl = 0, summe = 0;
+    data.objects.forEach(function (o) {
+      o.units.forEach(function (x) {
+        if (x.status !== 'vermietet' || !soll(x)) return;
+        const betrag = Math.round(soll(x) * 100) / 100;
+        const gezahlt = (x.zahlungen && x.zahlungen[k] != null) ? n(x.zahlungen[k]) : 0;
+        if (gezahlt >= betrag - 0.005) return;
+        zahl++; summe += Math.max(0, betrag - gezahlt);
+      });
+    });
+    return { zahl: zahl, summe: summe };
+  }
+  function heuteFaelligZahl() {
+    const h = heuteISO();
+    return (alleAufgaben || []).filter(function (t) { return t.faellig && t.faellig <= h; }).length;
+  }
+  function interessentenZahl() {
+    return (data.interessenten || []).filter(function (i) { return i.status !== 'absage'; }).length;
+  }
+
+  function appLeisteHtml() {
+    const eintrag = function (id, name, zusatz, rot) {
+      return '<button class="al-eintrag' + (ansicht === id ? ' aktiv' : '') + '" data-act="zu-' + id + '" title="' + name + '">'
+        + sym(id) + '<span class="al-name">' + name + '</span>'
+        + (zusatz ? '<span class="al-zahl' + (rot ? ' rot' : '') + '">' + zusatz + '</span>' : '')
+        + '</button>';
+    };
+    const miete = mietenOffen();
+    const neu = anfNeuZahl();
+    const kuerzel = String(nutzerName || '?').trim().slice(0, 2).toUpperCase();
+    return '<nav class="appleiste" aria-label="Bereiche">'
+      + '<div class="al-kopf"><div class="siegel">Z</div><span class="al-marke">Ziegler</span></div>'
+      + '<button class="al-suche" data-act="suche" title="Suchen (Strg+K)">' + sym('suche', 15)
+      + '<span class="al-name">Suchen</span><kbd>Strg K</kbd></button>'
+      + eintrag('heute', 'Heute', alleAufgaben ? String(heuteFaelligZahl() || '') : '')
+      + eintrag('aufgaben', 'Aufgaben', alleAufgaben ? String(alleAufgaben.length || '') : '')
+      + eintrag('anfragen', 'Anfragen', neu ? String(neu) : '', true)
+      + eintrag('post', 'Post', postListe && postListe.length ? String(postListe.length) : '')
+      + '<div class="al-gruppe">Bestand</div>'
+      + eintrag('objekte', 'Objekte')
+      + eintrag('mieten', 'Mieten', miete.zahl ? miete.zahl + ' offen' : '')
+      + eintrag('interessenten', 'Interessenten', String(interessentenZahl() || ''))
+      + '<div class="al-gruppe">Abrechnung</div>'
+      + eintrag('rechnungen', 'Abrechnungen')
+      + eintrag('kaufen', 'Kaufen')
+      + '<div class="al-fuss"><button class="al-eintrag al-ich" data-act="seite" title="Menü und Einstellungen">'
+      + '<span class="al-kuerzel">' + esc(kuerzel) + '</span><span class="al-name">' + esc(nutzerName || '') + '</span>'
+      + sym('zahnrad', 17) + '</button></div>'
+      + '</nav>';
+  }
+
+  // Frist in einer Mail finden („bis zum 20. November“, „spätestens 20.11.2026“) — die früheste künftige
+  const MONATE = ['januar', 'februar', 'märz', 'april', 'mai', 'juni', 'juli', 'august', 'september', 'oktober', 'november', 'dezember'];
+  function fristErkennen(text) {
+    if (!text) return null;
+    const heute = new Date(); heute.setHours(0, 0, 0, 0);
+    const muster = /(?:bis\s+(?:zum\s+|spätestens\s+(?:zum\s+|am\s+)?)?|spätestens\s+(?:am\s+|zum\s+|bis\s+)?|frist\D{0,25}?|fällig\s+(?:am\s+|zum\s+)?)(\d{1,2})\.\s?(?:(\d{1,2})\.|(januar|februar|märz|maerz|april|mai|juni|juli|august|september|oktober|november|dezember))\s?(\d{4}|\d{2}(?!\d))?/gi;
+    let m, beste = null;
+    while ((m = muster.exec(text))) {
+      const tag = Number(m[1]);
+      const monat = m[2] ? Number(m[2]) - 1 : MONATE.indexOf(m[3].toLowerCase().replace('maerz', 'märz'));
+      const jahrDa = !!m[4];
+      let jahr = jahrDa ? Number(m[4].length === 2 ? '20' + m[4] : m[4]) : heute.getFullYear();
+      if (monat < 0 || monat > 11 || tag < 1 || tag > 31) continue;
+      let d = new Date(jahr, monat, tag);
+      if (d.getMonth() !== monat) continue;               // 31. Februar und Ähnliches
+      if (!jahrDa && d < heute) d = new Date(jahr + 1, monat, tag);
+      if (d < heute || d - heute > 400 * 86400000) continue;
+      if (!beste || d < beste) beste = d;
+    }
+    if (!beste) return null;
+    return {
+      iso: kalIso(beste),
+      text: beste.toLocaleDateString('de-DE', { day: 'numeric', month: 'long' })
+        + (beste.getFullYear() !== heute.getFullYear() ? ' ' + beste.getFullYear() : '')
+    };
+  }
+
   function render() {
     if (phase === 'einrichten') { renderEinrichten(); return; }
     if (phase === 'anmelden') { renderAnmelden(); return; }
@@ -3707,23 +3839,32 @@
     const missing = rented.filter(function (x) { return !netto(x.u); }).length;
 
     let html = '';
+    root.setAttribute('data-ansicht', ansicht);   // für die Stilregeln: Aufgaben und Post am PC randlos
+    const seitenName = (SEITEN.find(function (t) { return t[0] === ansicht; }) || [0, 'Ziegler'])[1];
+    // Am Handy steht oben der Name der Seite mit Lupe und Plus; das Menü steckt unten unter „Mehr“
     html += '<div class="top"><div class="marke">'
       + '<button class="burger" data-act="seite" title="Menü"><span></span><span></span><span></span></button>'
       + '<div class="siegel">Z</div>'
-      + '<div><h1>Ziegler</h1></div></div>'
+      + '<div><h1><span class="marke-name">Ziegler</span><span class="seiten-name">' + esc(seitenName) + '</span></h1></div></div>'
       + '<div class="top-actions">'
       + '<button class="theme lupe" data-act="suche" title="Suchen (Strg+K)" aria-label="Suchen">'
       + '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/></svg></button>'
+      + (mobil
+          ? '<button class="theme plus' + (fabOffen ? ' offen' : '') + '" data-act="fab" title="Neu" aria-label="Neu anlegen">'
+            + '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg></button>'
+          : '')
       + '</div></div>';
 
     html += '<div class="seitennav">'
-      + [['heute', 'Heute'], ['aufgaben', 'Aufgaben'], ['objekte', 'Objekte'], ['mieten', 'Mieten'],
-         ['interessenten', 'Interessenten'], ['anfragen', 'Anfragen'], ['post', 'Post'], ['rechnungen', 'Abrechnungen'], ['kaufen', 'Kaufen']].map(function (t) {
+      + SEITEN.map(function (t) {
           const zahl = t[0] === 'anfragen' ? anfNeuZahl() : 0;   // wie viele Anfragen noch niemand angesehen hat
           return '<button class="' + (ansicht === t[0] ? 'aktiv' : '') + '" data-act="zu-' + t[0] + '">' + t[1]
             + (zahl ? '<span class="zahl">' + zahl + '</span>' : '') + '</button>';
         }).join('')
       + '</div>';
+
+    // Am PC: feste Seitenleiste links wie bei Apple Mail (ersetzt Kopf und Reiter, siehe apple.css)
+    if (!mobil) html += appLeisteHtml();
 
     // ---- Seitenleiste ----
     if (seiteOffen) {
@@ -3937,8 +4078,12 @@
       const laeuft = (istHeute ? sprichQuelle !== 'kal' : sprichQuelle === 'kal');
 
       html += '<div class="tafel heute memo tagkarte' + (memoWunsch ? ' wunsch' : '') + '">'
-        + '<div class="memokopf"><h3>' + (istHeute ? 'Heute · ' : '')
-        + esc(gewaehlt.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' })) + '</h3>'
+        // Großer Titel „Heute“ mit dem Datum daneben; an anderen Tagen ist das Datum selbst der Titel
+        + '<div class="memokopf"><h3>' + (istHeute
+            ? '<span class="mk-titel">Heute</span><span class="mk-datum">'
+              + esc(gewaehlt.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' })) + '</span>'
+            : '<span class="mk-titel mk-tag">' + esc(gewaehlt.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long' })) + '</span>')
+        + '</h3>'
         + '<div class="memoknoepfe">'
         + (assistent.verbunden && istHeute
             ? '<button type="button" class="mikro' + (hoert ? ' hoert' : '') + '" data-act="memo-hoeren">'
@@ -3981,32 +4126,34 @@
       html += '</div>';
 
 
+      // Auf einen Blick: Kacheln wie in Apples Erinnerungen — am Handy oben, am PC über dem Zeitplan.
+      // Die Stimme für das Vorlesen wählt man jetzt unter Menü → Vorlesestimme.
+      const kachel = function (act, farbe, symbol, zahl, name, unten) {
+        return '<button type="button" class="blick-kachel" data-act="' + act + '" style="--kf:' + farbe + '">'
+          + '<span class="bk-oben"><span class="bk-sym">' + sym(symbol, 16) + '</span>'
+          + '<span class="bk-zahl num">' + zahl + '</span></span>'
+          + '<span class="bk-name">' + name + '</span>'
+          + (unten ? '<span class="bk-unten">' + unten + '</span>' : '')
+          + '</button>';
+      };
+      const miete = mietenOffen();
+      const neuAnf = anfNeuZahl();
+      // Für die Post-Kachel die Mails einmal leise holen (der Server hält sie ohnehin zwischengespeichert)
+      if (istHeute && google.verbunden && postListe === null && !postLeise) {
+        postLeise = true;
+        postLaden().then(function () { if (ansicht === 'heute' && !modal) render(); });
+      }
+      const blickHtml = istHeute
+        ? '<div class="blick">'
+          + (mobil ? kachel('zu-aufgaben', 'var(--messing)', 'aufgaben', alleAufgaben ? heuteFaelligZahl() : '–', 'Für heute') : '')
+          + kachel('zu-mieten', '#30d158', 'mieten', miete.zahl, 'Mieten offen', mobil ? '' : (miete.zahl ? money(miete.summe) + ' stehen noch aus' : 'alle da'))
+          + kachel('zu-anfragen', '#ff453a', 'anfragen', neuAnf, 'Neue Anfragen', mobil ? '' : (neuAnf ? 'warten auf dich' : 'nichts Neues'))
+          + kachel('zu-post', '#ff9f0a', 'post', postListe ? postListe.length : '–', 'Post', mobil ? '' : 'zugeordnete Mails')
+          + '</div>'
+        : '';
+
+      if (istHeute && mobil) html += blickHtml;
       if (istHeute) html += planLeisteHtml();
-
-      if (stimme.verbunden) {
-        html += '<div class="memostimme"><label for="memo-stimme">Stimme</label>'
-          + '<select id="memo-stimme">'
-          + KI_STIMMEN.map(function (v) {
-              return '<option value="' + v[0] + '"' + (v[0] === stimme.stimme ? ' selected' : '') + '>'
-                + esc(v[1]) + '</option>';
-            }).join('')
-          + '</select></div>';
-      }
-      const stimmen = (!stimme.verbunden && kannSprechen) ? memoStimmen() : [];
-      if (stimmen.length > 1) {
-        const aktuell = memoStimme();
-        html += '<div class="memostimme"><label for="memo-stimme">Stimme</label>'
-          + '<select id="memo-stimme">'
-          + stimmen.map(function (v) {
-              return '<option value="' + esc(v.name) + '"'
-                + (aktuell && v.name === aktuell.name ? ' selected' : '') + '>'
-                + esc(v.name.replace(/\s*\((German|Germany|Deutsch|Deutschland)[^)]*\)/i, ''))
-                + (MEMO_MAENNLICH.test(v.name) ? ' — männlich' : '')
-                + '</option>';
-            }).join('')
-          + '</select></div>';
-      }
-
 
       html += '<div class="tagspalten"><div class="tagliste">';
 
@@ -4108,7 +4255,9 @@
       html += '</div>';
 
       // Rechte Spalte (am Handy darunter): der Zeitplan mit Uhrzeiten
-      html += '<div class="tagzeit"><div class="tagzeit-kopf">Zeitplan</div>';
+      html += '<div class="tagzeit' + (istHeute && !mobil ? ' mit-blick' : '') + '">'
+        + (istHeute && !mobil ? '<div class="tagzeit-kopf">Auf einen Blick</div>' + blickHtml : '')
+        + '<div class="tagzeit-kopf">Zeitplan</div>';
       // Ohne einen einzigen Eintrag mit Uhrzeit reicht eine Zeile statt eines leeren Rasters.
       // Am PC bleibt das Raster auch leer stehen — man kann Aufgaben hineinziehen
       if (!zeitplan.length && mobil) {
@@ -4443,9 +4592,9 @@
     } // Objektliste
 
     if (mobil) {
-      html += '<div class="fabwrap">'
-        + (fabOffen
-            ? '<div class="fabmenu">'
+      // Das Plus sitzt oben in der Kopfzeile (nicht mehr schwebend über den Häkchen); sein Menü klappt darunter auf
+      html += (fabOffen
+            ? '<div class="fab-schatten" data-act="fab"></div><div class="fabmenu oben">'
               + '<button data-act="fab-aufgabe">Aufgabe anlegen</button>'
               + '<button data-act="interessent-neu">Interessent vormerken</button>'
               + '<button data-act="add-object">Objekt anlegen</button>'
@@ -4453,8 +4602,6 @@
               + '<button data-act="datei-sichern">Daten sichern</button>'
               + '</div>'
             : '')
-        + '<button class="fab" data-act="fab">' + (fabOffen ? '✕' : '+') + '</button>'
-        + '</div>'
 
         // Untere Leiste mit Strichsymbolen; Anfragen mit Zähler statt Post (Post steht im Menü)
         + '<div class="untenleiste">'
@@ -4474,8 +4621,8 @@
           + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16v12H4z"/><path d="m4 8 8 6 8-6"/></svg>'
           + '</span>Anfragen' + (anfNeuZahl() ? '<i class="zaehler">' + anfNeuZahl() + '</i>' : '') + '</button>'
         + '<button data-act="seite"><span>'
-          + '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>'
-          + '</span>Menü</button>'
+          + '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>'
+          + '</span>Mehr</button>'
         + '</div>';
     }
 
@@ -4483,8 +4630,12 @@
 
     if (modal) html += renderModal();
     const alterToast = root.querySelector('.toast');   // Hinweis unten überlebt den Neuaufbau
+    const p2alt = root.querySelector('.p2-liste');       // Post am PC: Liste bleibt beim Neuaufbau an ihrer Stelle
+    const p2Rolle = p2alt ? p2alt.scrollTop : 0;
     root.innerHTML = html;
     if (alterToast) root.appendChild(alterToast);
+    const p2neu = root.querySelector('.p2-liste');
+    if (p2neu && p2Rolle) p2neu.scrollTop = p2Rolle;
     fussVerblassen();
     scrollSperre(!!modal);
 
@@ -5780,7 +5931,7 @@
         + '<span class="wer">' + rgDatum(e.datum) + (e.wer ? ' · ' + esc(e.wer) : '') + '</span>'
         + '<span class="knoepfe"><button class="tiny" data-act="rg-laden" data-id="' + e.id + '">Öffnen</button>'
         + '<button class="tiny" data-act="rg-folgejahr" data-id="' + e.id + '" title="Neue Rechnung mit den Daten dieser, ein Jahr weiter">Fürs nächste Jahr</button>'
-        + '<button class="tiny danger" data-act="rg-loeschen" data-id="' + e.id + '">Löschen</button></span></div>';
+        + '<button class="tiny ghost leise-weg" data-act="rg-loeschen" data-id="' + e.id + '" title="Löschen" aria-label="Löschen">' + MUELL_SYM + '</button></span></div>';
     });
     html += '</div>';
     return html;
@@ -6114,7 +6265,7 @@
         + '<span class="num">' + (e.brutto >= 0 ? 'Nachzahlung ' : 'Guthaben ') + rgEur(Math.abs(e.brutto)) + '</span>'
         + '<span class="wer">Nebenkosten ' + esc(nkJahr(i)) + ' · ' + rgDatum(e.datum) + '</span>'
         + '<span class="knoepfe"><button class="tiny" data-act="nk-laden" data-id="' + e.id + '">Öffnen</button>'
-        + '<button class="tiny danger" data-act="nk-loeschen" data-id="' + e.id + '">Löschen</button></span></div>';
+        + '<button class="tiny ghost leise-weg" data-act="nk-loeschen" data-id="' + e.id + '" title="Löschen" aria-label="Löschen">' + MUELL_SYM + '</button></span></div>';
     });
     html += '</div>';
     return html;
@@ -6330,8 +6481,121 @@
     return html;
   }
 
+  // Stand des Postfachs und ausgeblendete Mails — unter der Liste, in beiden Ansichten
+  function postFussHtml() {
+    let html = '';
+    if (postInfo) {
+      html += '<div class="poststand">'
+        + (postInfo.postfach ? '<strong>' + esc(postInfo.postfach) + '</strong>'
+            + (postInfo.gesamt ? ' · ' + postInfo.gesamt + ' Mails im Konto' : '') + ' · ' : '')
+        + (postInfo.geprueft !== undefined ? postInfo.geprueft + ' Mails geprüft' : '')
+        + (postInfo.neueste ? ' · neueste vom ' + new Date(postInfo.neueste).toLocaleString('de-DE') : '')
+        + (postInfo.geholt ? ' · Stand ' + new Date(postInfo.geholt).toLocaleTimeString('de-DE') : '')
+        + (postInfo.ausCache ? ' (zwischengespeichert)' : '')
+        + '</div>';
+    }
+    if (postInfo && postInfo.versteckt && postInfo.versteckt.length) {
+      html += '<div class="iabsagen"><button class="tiny ghost" data-act="post-versteckt">'
+        + postInfo.versteckt.length + ' ausgeblendet — ' + (verstecktOffen ? 'verbergen' : 'anzeigen') + '</button>'
+        + (verstecktOffen ? postInfo.versteckt.slice().reverse().map(function (v) {
+            const von = String(v.von || '').replace(/<.*>/, '').replace(/"/g, '').trim();
+            return '<div class="faellig">'
+              + '<div class="fpunkt" style="background:var(--frei)"></div>'
+              + '<div class="fgrow"><div class="fwas">' + esc(v.betreff || 'Ohne Betreff') + '</div>'
+              + '<div class="fobj">' + esc(von) + '</div></div>'
+              + '<button class="tiny ghost" data-act="post-zurueck" data-id="' + v.id + '">einblenden</button></div>';
+          }).join('') : '')
+        + '</div>';
+    }
+    return html;
+  }
+
+  // Google liefert den Auszug mit HTML-Zeichen (&#39; usw.) — für die Anzeige zurückverwandeln
+  function htmlZeichenWeg(s) {
+    return String(s || '').replace(/&#(\d+);/g, function (x, z) { return String.fromCharCode(Number(z)); })
+      .replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&');
+  }
+
+  // Post am PC wie Apple Mail: links die Liste, rechts die gewählte Mail — die Knöpfe nur einmal oben
+  function post2Html() {
+    if (!postGewaehlt || !postListe.some(function (z) { return z.id === postGewaehlt; })) postGewaehlt = postListe[0].id;
+    const m = postListe.find(function (z) { return z.id === postGewaehlt; });
+    postTextLaden(m.id);
+    const voll = postTexte[m.id] || {};
+    const heute0 = new Date(); heute0.setHours(0, 0, 0, 0);
+    const absender = function (von) { return String(von || '').replace(/<.*>/, '').replace(/"/g, '').trim() || String(von || ''); };
+    const ort = function (z) { return z.objekt ? (z.einheit ? z.objekt.split(',')[0] + ' · ' + z.einheit : z.objekt.split(',')[0]) : ''; };
+    const kurzZeit = function (w) {
+      const d = w ? new Date(w) : null;
+      if (!d || isNaN(d)) return '';
+      if (d >= heute0) return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+      if (d >= new Date(heute0.getTime() - 86400000)) return 'Gestern';
+      return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' });
+    };
+    const knopf = function (wert, name, aktiv, act, attr) {
+      return '<button class="' + (aktiv ? 'aktiv' : '') + '" data-act="' + act + '" ' + attr + '="' + wert + '">' + name + '</button>';
+    };
+
+    let liste = '<div class="p2-kopf"><h2>Post <span class="p2-anzahl">' + postListe.length + '</span></h2>'
+      + '<div class="p2-filter">'
+      + knopf('streng', 'Treffer', postModus === 'streng', 'post-modus', 'data-m')
+      + knopf('breit', 'Alles', postModus === 'breit', 'post-modus', 'data-m')
+      + knopf('roh', 'Ungefiltert', postModus === 'roh', 'post-modus', 'data-m')
+      + '</div><div class="p2-zeit">'
+      + [30, 90, 365].map(function (t) { return knopf(t, t === 365 ? '1 Jahr' : t + ' Tage', postTage === t, 'post-tage', 'data-t'); }).join('')
+      + '<button class="p2-frisch" data-act="post-frisch" title="Neu bei Google abfragen">↻</button></div></div>';
+    liste += postListe.map(function (z) {
+      return '<div class="p2-mail' + (z.id === m.id ? ' an' : '') + '" data-act="post-waehlen" data-id="' + z.id + '">'
+        + '<div class="p2-o"><span class="p2-von">' + esc(absender(z.von)) + '</span><span class="p2-wann num">' + kurzZeit(z.wann) + '</span></div>'
+        + '<div class="p2-betreff">' + esc(z.betreff) + '</div>'
+        + (z.auszug ? '<div class="p2-auszug">' + esc(htmlZeichenWeg(z.auszug)) + '</div>' : '')
+        + (ort(z) ? '<span class="p2-chip">' + esc(ort(z)) + '</span>' : '')
+        + '</div>';
+    }).join('');
+    liste += postFussHtml();
+
+    const name = absender(m.von);
+    const adresse = (String(m.von || '').match(/<([^>]+)>/) || [])[1] || '';
+    const kuerzel = name.replace(/[^A-Za-zÄÖÜäöüß ]/g, '').split(/\s+/).filter(Boolean).slice(0, 2)
+      .map(function (w) { return w.charAt(0).toUpperCase(); }).join('') || '✉';
+    const wann = m.wann && !isNaN(new Date(m.wann))
+      ? new Date(m.wann).toLocaleString('de-DE', { weekday: 'short', day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' }) : '';
+    const frist = voll.text ? fristErkennen(voll.text) : null;
+
+    const lese = '<div class="p2-leiste">'
+      + '<button class="primary" data-act="post-aufgabe" data-id="' + m.id + '">' + sym('aufgaben', 15) + 'Als Aufgabe</button>'
+      + '<button data-act="post-interessent" data-id="' + m.id + '">Interessent</button>'
+      + '<button data-act="post-belege" data-id="' + m.id + '">Beleg</button>'
+      + '<span class="p2-platz"></span>'
+      + '<button class="p2-ic" data-act="post-oeffnen" data-id="' + m.id + '" title="In Gmail öffnen" aria-label="In Gmail öffnen">'
+      + '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg></button>'
+      + '<button class="p2-ic" data-act="post-weg" data-id="' + m.id + '" title="Uninteressant — taucht nie wieder auf" aria-label="Ausblenden">'
+      + '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>'
+      + '</div>'
+      + '<div class="p2-inhalt">'
+      + '<h2 class="p2-titel">' + esc(m.betreff) + '</h2>'
+      + '<div class="p2-absender"><span class="p2-av">' + esc(kuerzel) + '</span>'
+      + '<div class="p2-wer"><div class="p2-name">' + esc(name) + '</div>' + (adresse ? '<div class="p2-adresse">' + esc(adresse) + '</div>' : '') + '</div>'
+      + '<div class="p2-datum">' + esc(wann) + (ort(m) ? '<br><span class="p2-chip">' + esc(ort(m)) + '</span>' : '') + '</div></div>'
+      + (frist
+          ? '<div class="p2-frist">' + sym('aufgaben', 18)
+            + '<div class="p2-frist-text"><b>Frist erkannt: ' + esc(frist.text) + '</b>'
+            + '<span>Aufgabe „' + esc(m.betreff) + '“ mit diesem Datum anlegen</span></div>'
+            + '<button class="primary tiny" data-act="post-aufgabe" data-id="' + m.id + '" data-faellig="' + frist.iso + '">Anlegen</button></div>'
+          : '')
+      + '<div class="p2-text">'
+      + (voll.text ? esc(voll.text)
+          : voll.fehler ? '<span class="p2-hinweis">Der volle Text ließ sich nicht holen (' + esc(voll.fehler) + ').</span>\n\n' + esc(htmlZeichenWeg(m.auszug || ''))
+          : '<span class="p2-hinweis">wird geladen …</span>\n\n' + esc(htmlZeichenWeg(m.auszug || '')))
+      + '</div></div>';
+
+    return '<div class="post2"><div class="p2-liste">' + liste + '</div><div class="p2-lese">' + lese + '</div></div>';
+  }
+
   function postAbschnitt() {
     let html = '';
+    // Am PC mit Seitenleiste: zweispaltig wie Apple Mail
+    if (google.verbunden && postListe && postListe.length && !mobil && window.innerWidth >= 901) return post2Html();
     // ---- Post ----
     if (google.verbunden) {
       html += '<div class="tafel"><h3>Post <span class="anzahl">'
@@ -6419,30 +6683,7 @@
             + '</div></div>';
         }).join('');
       }
-      if (postInfo) {
-        html += '<div class="poststand">'
-          + (postInfo.postfach ? '<strong>' + esc(postInfo.postfach) + '</strong>'
-              + (postInfo.gesamt ? ' · ' + postInfo.gesamt + ' Mails im Konto' : '') + ' · ' : '')
-          + (postInfo.geprueft !== undefined ? postInfo.geprueft + ' Mails geprüft' : '')
-          + (postInfo.neueste ? ' · neueste vom ' + new Date(postInfo.neueste).toLocaleString('de-DE') : '')
-          + (postInfo.geholt ? ' · Stand ' + new Date(postInfo.geholt).toLocaleTimeString('de-DE') : '')
-          + (postInfo.ausCache ? ' (zwischengespeichert)' : '')
-          + '</div>';
-      }
-
-      if (postInfo && postInfo.versteckt && postInfo.versteckt.length) {
-        html += '<div class="iabsagen"><button class="tiny ghost" data-act="post-versteckt">'
-          + postInfo.versteckt.length + ' ausgeblendet — ' + (verstecktOffen ? 'verbergen' : 'anzeigen') + '</button>'
-          + (verstecktOffen ? postInfo.versteckt.slice().reverse().map(function (v) {
-              const von = String(v.von || '').replace(/<.*>/, '').replace(/"/g, '').trim();
-              return '<div class="faellig">'
-                + '<div class="fpunkt" style="background:var(--frei)"></div>'
-                + '<div class="fgrow"><div class="fwas">' + esc(v.betreff || 'Ohne Betreff') + '</div>'
-                + '<div class="fobj">' + esc(von) + '</div></div>'
-                + '<button class="tiny ghost" data-act="post-zurueck" data-id="' + v.id + '">einblenden</button></div>';
-            }).join('') : '')
-          + '</div>';
-      }
+      html += postFussHtml();
       html += '</div>';
     }
 
@@ -6679,6 +6920,10 @@
     const gruppen = [];
     const gruppe = function (name, liste) { if (liste.length) gruppen.push({ name: name, liste: liste.slice(0, 5), mehr: liste.length - 5 }); };
 
+    // Seiten zuerst: „mie“ + Enter springt zu den Mieten
+    gruppe('Seiten', SEITEN.filter(function (t) { return passt(t[1]); })
+      .map(function (t) { return { typ: 'seite', id: t[0], titel: t[1], unten: 'Bereich öffnen' }; }));
+
     gruppe('Objekte', data.objects.filter(function (o) { return passt(o.name, o.note); }).map(function (o) {
       return { typ: 'objekt', id: o.id, titel: o.name, unten: o.units.length + ' Einheiten' };
     }));
@@ -6704,7 +6949,8 @@
   }
 
   function sucheTrefferHtml(q) {
-    if (!String(q || '').trim()) return '<div class="such-leer">Objekte, Mieter, Interessenten, Aufgaben, Mails und Abrechnungen</div>';
+    if (!String(q || '').trim()) return '<div class="such-leer">Seiten, Objekte, Mieter, Interessenten, Aufgaben, Mails und Abrechnungen'
+      + (mobil ? '' : '<br><span class="such-tipp">Pfeiltasten wählen, Enter öffnet · N legt überall eine neue Aufgabe an</span>') + '</div>';
     const gruppen = sucheTreffer(q);
     if (!gruppen.length) return '<div class="such-leer">Nichts gefunden</div>';
     let erster = true;
@@ -6763,7 +7009,9 @@
   function sucheSpringen(el) {
     const typ = el.getAttribute('data-typ'), id = el.getAttribute('data-id');
     modal = null;
-    if (typ === 'objekt') {
+    if (typ === 'seite') {
+      handle('zu-' + id, el);
+    } else if (typ === 'objekt') {
       ansicht = 'objekte'; query = ''; open[id] = true; render();
       const kopf = root.querySelector('.obj-head[data-id="' + id + '"]');
       if (kopf) kopf.scrollIntoView({ block: 'start', behavior: 'smooth' });
@@ -7379,6 +7627,18 @@
           + '<button data-act="stimme-probe">Hörprobe</button>'
           + '<button class="danger" data-act="stimme-trennen">Schlüssel entfernen</button></div>';
       }
+      // Ohne Schlüssel liest die Stimme des Geräts — die Auswahl stand früher auf der Heute-Seite
+      const geraetStimmen = (!stimme.verbunden && ('speechSynthesis' in window)) ? memoStimmen() : [];
+      if (geraetStimmen.length > 1) {
+        const aktuell = memoStimme();
+        body += '<div class="field"><label for="memo-stimme">Stimme dieses Geräts</label><select id="memo-stimme">'
+          + geraetStimmen.map(function (v) {
+              return '<option value="' + esc(v.name) + '"' + (aktuell && v.name === aktuell.name ? ' selected' : '') + '>'
+                + esc(v.name.replace(/\s*\((German|Germany|Deutsch|Deutschland)[^)]*\)/i, ''))
+                + (MEMO_MAENNLICH.test(v.name) ? ' — männlich' : '') + '</option>';
+            }).join('')
+          + '</select></div>';
+      }
       body += '<div class="modal-actions"><div class="spacer"></div>'
         + '<button data-act="close">Schließen</button></div>';
 
@@ -7978,7 +8238,9 @@
         let ziel = 7 * HOEHE;                                  // sonst: der Morgen
         const erster = rahmen.querySelector('.ztermin');
         if (kalTag === heuteISO()) {
-          ziel = Math.max(0, (new Date().getHours() - 2) * HOEHE);   // heute: die aktuelle Stunde …
+          // heute: die aktuelle Stunde — nachts und frühmorgens aber den Morgen ab 7 Uhr …
+          const stunde = new Date().getHours();
+          ziel = stunde < 7 ? 7 * HOEHE : Math.max(0, (stunde - 2) * HOEHE);
           // … aber frühere Termine des Tages mit zeigen, solange „jetzt“ noch ins Bild passt
           const frueh = erster ? Math.max(0, parseFloat(erster.style.top) - HOEHE) : ziel;
           if (frueh < ziel && ziel - frueh < rahmen.clientHeight - 2 * HOEHE) ziel = frueh;
@@ -8534,16 +8796,22 @@
       const m = alle2.find(function (z) { return z.id === el.getAttribute('data-id'); });
       if (!m) return;
       const o = m.objekt ? data.objects.find(function (z) { return z.name === m.objekt; }) : null;
+      const bis = el.getAttribute('data-faellig') || '';   // Frist aus dem Mailtext, wenn erkannt
       api('todoist/aufgabe', {
         method: 'POST',
         body: {
           inhalt: m.betreff,
           beschreibung: 'Aus Mail von ' + m.von + '\n' + m.url,
-          projektId: (o && todoist.zuordnung) ? (todoist.zuordnung[o.id] || '') : ''
+          projektId: (o && todoist.zuordnung) ? (todoist.zuordnung[o.id] || '') : '',
+          faellig: bis || undefined
         }
       }).then(function () { return wocheLaden(); })
-        .then(function () { toast('Als Aufgabe angelegt'); render(); })
+        .then(function () { toast(bis ? 'Aufgabe angelegt, fällig am ' + rgDatum(bis) : 'Als Aufgabe angelegt'); render(); })
         .catch(function (e) { toast(e.message); });
+    }
+    else if (act === 'post-waehlen') {
+      postGewaehlt = el.getAttribute('data-id');
+      render();
     }
     else if (act === 'post-belege') {
       const alle3 = (postListe || []).concat((postInfo && postInfo.rest) || []);

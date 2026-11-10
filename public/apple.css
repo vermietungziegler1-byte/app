@@ -626,3 +626,212 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 @media (min-width: 1600px) {
   #app .modal.mittel .td-fenster { grid-template-columns: minmax(0, 1fr) 360px; }
 }
+
+/* ==================================================================
+   Reihe D (November 2026): ein richtiges Programm statt einer Webseite.
+   Am PC eine feste Seitenleiste wie bei Apple Mail, flache Seiten ohne
+   Kästen in Kästen, Kacheln „Auf einen Blick“, Post mit Lesebereich.
+   Am Handy der Seitenname oben, das Plus in der Kopfzeile, „Mehr“ unten.
+   ================================================================== */
+
+/* ---------- Kopf am Handy ---------- */
+#app .top h1 .seiten-name { display: none; }
+#app .appleiste { display: none; }
+@media (max-width: 620px) {
+  #app .top .burger, #app .top .siegel { display: none; }
+  #app .top h1 .marke-name { display: none; }
+  #app .top h1 .seiten-name { display: inline; }
+  #app .top h1 { font-size: 24px; letter-spacing: -0.025em; }
+  #app .top .top-actions { gap: 8px; }
+  #app .top .theme.lupe, #app .top .theme.plus {
+    width: 36px; height: 36px; padding: 0; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  #app .top .theme.lupe { color: var(--messing); }
+  #app .top .theme.plus { background: var(--messing); color: #fff; }
+  #app .top .theme.plus svg { transition: transform .18s ease; }
+  #app .top .theme.plus.offen svg { transform: rotate(45deg); }
+  #app .fab-schatten { position: fixed; inset: 0; z-index: 30; background: rgba(0, 0, 0, .28); }
+  #app .fabmenu.oben {
+    position: fixed; z-index: 31; right: 12px; top: calc(62px + env(safe-area-inset-top));
+    min-width: 230px; gap: 0; align-items: stretch; padding: 6px;
+    background: var(--surface); border-radius: 14px; box-shadow: 0 14px 44px rgba(0, 0, 0, .35);
+  }
+  #app .fabmenu.oben button {
+    background: transparent; border: none; box-shadow: none; border-radius: 10px;
+    text-align: left; padding: 12px 14px; font-size: 16px; color: var(--ink);
+  }
+  #app .fabmenu.oben button + button { border-top: .5px solid var(--line-soft); border-radius: 0; }
+
+  /* Heute am Handy: kein Kasten drumherum, das Datum klein über der Woche, Kacheln, Liste als Gruppe */
+  #app .tafel.tagkarte { background: transparent; padding: 0; }
+  #app .tagkarte .memokopf { align-items: center; }
+  #app .tagkarte .memokopf h3 .mk-titel:not(.mk-tag) { display: none; }
+  #app .tagkarte .memokopf h3 .mk-datum, #app .tagkarte .memokopf h3 .mk-tag {
+    font-size: 13px; font-weight: 600; color: var(--messing); text-transform: uppercase; letter-spacing: .03em;
+  }
+  #app .tagkarte ol.memoliste { background: var(--surface); border-radius: 12px; padding: 0 12px; margin-top: 6px; }
+  #app .tagkarte .tagzeit .zeitrahmen { background: var(--surface); border-radius: 12px; }
+}
+
+/* ---------- Kacheln „Auf einen Blick“ (wie in Apples Erinnerungen) ---------- */
+#app .blick { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 14px 0 8px; }
+#app button.blick-kachel {
+  display: flex; flex-direction: column; align-items: stretch; gap: 6px; text-align: left;
+  padding: 11px 12px 11px; border-radius: 14px; background: var(--surface); color: var(--ink);
+  font-weight: 400; min-height: 0; box-shadow: none;
+}
+#app button.blick-kachel:hover { background: var(--surface); color: var(--ink); filter: brightness(1.12); }
+#app:not([data-theme="dark"]) button.blick-kachel:hover { filter: brightness(.97); }
+#app .bk-oben { display: flex; justify-content: space-between; align-items: flex-start; }
+#app .bk-sym {
+  width: 30px; height: 30px; border-radius: 50%; background: var(--kf); color: #fff;
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+}
+#app .bk-zahl { font-size: 26px; font-weight: 700; letter-spacing: -0.02em; line-height: 1; }
+#app .bk-name { font-size: 14px; font-weight: 600; color: var(--muted); }
+#app .bk-unten { font-size: 12px; color: var(--muted); margin-top: -4px; }
+
+/* Abrechnungen: Löschen als stilles Papierkorb-Symbol, rot erst beim Drüberfahren */
+#app button.leise-weg { color: var(--muted); padding: 5px 8px; display: inline-flex; align-items: center; }
+#app button.leise-weg:hover { color: var(--sperr); background: var(--sperr-soft); }
+#app .such-tipp { display: inline-block; margin-top: 6px; font-size: 12px; opacity: .8; }
+
+/* ---------- PC: Seitenleiste, flache Seiten, Post mit Lesebereich ---------- */
+@media (min-width: 901px) {
+  #app { --al-grund: #fbfbfd; --al-linie: rgba(0, 0, 0, .08); padding: 30px 40px 40px calc(232px + 40px); }
+  #app[data-theme="dark"] { --al-grund: #1c1c1e; --al-linie: rgba(255, 255, 255, .08); }
+  #app .top, #app .seitennav { display: none; }
+
+  #app .appleiste {
+    display: flex; flex-direction: column; gap: 1px;
+    position: fixed; left: 0; top: 0; bottom: 0; width: 232px; z-index: 25; box-sizing: border-box;
+    padding: 16px 10px 10px; overflow-y: auto; background: var(--al-grund); border-right: 1px solid var(--al-linie);
+  }
+  #app .al-kopf { display: flex; align-items: center; gap: 10px; padding: 2px 8px 14px; }
+  #app .al-kopf .siegel { width: 30px; height: 30px; font-size: 16px; border-radius: 8px; flex: none; }
+  #app .al-marke { font-weight: 700; font-size: 17px; letter-spacing: -0.02em; color: var(--ink); }
+  #app .appleiste button {
+    display: flex; align-items: center; gap: 10px; width: 100%; min-height: 0; box-shadow: none; text-align: left;
+    padding: 6px 10px; border-radius: 8px; background: transparent; color: var(--ink); font-size: 14px; font-weight: 500;
+  }
+  #app .appleiste button svg { flex: none; color: var(--messing); }
+  #app .appleiste button:hover { background: var(--fuellung); color: var(--ink); }
+  #app .appleiste button:active { transform: none; opacity: 1; }
+  #app .appleiste button.aktiv, #app .appleiste button.aktiv:hover { background: var(--messing); color: #fff; }
+  #app .appleiste button.aktiv svg { color: #fff; }
+  #app .al-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #app .al-zahl { font-size: 12px; font-weight: 500; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
+  #app .al-zahl.rot {
+    min-width: 18px; padding: 0 6px; border-radius: 9px; box-sizing: border-box; text-align: center;
+    background: var(--td-rot); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px;
+  }
+  #app .appleiste button.aktiv .al-zahl { color: rgba(255, 255, 255, .85); }
+  #app .appleiste button.aktiv .al-zahl.rot { background: #fff; color: var(--messing); }
+  #app .appleiste button.al-suche { margin: 0 0 12px; background: var(--fuellung); color: var(--muted); font-size: 13px; font-weight: 400; }
+  #app .appleiste button.al-suche svg { color: var(--muted); }
+  #app .al-suche kbd { font: inherit; font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; flex: none; }
+  #app .al-gruppe { margin: 16px 10px 4px; font-size: 11px; font-weight: 600; color: var(--muted); letter-spacing: .02em; }
+  #app .al-fuss { margin-top: auto; padding-top: 8px; border-top: 1px solid var(--al-linie); }
+  #app .al-kuerzel {
+    width: 26px; height: 26px; border-radius: 50%; background: #5e5ce6; color: #fff; flex: none;
+    font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center;
+  }
+  #app .appleiste .al-ich svg { color: var(--muted); }
+
+  /* Das Menü (Einstellungen, Verbindungen) fährt rechts neben der Leiste heraus */
+  #app .seitenleiste { left: 232px; }
+
+  /* Aufgaben: Leiste schmal mit Symbolen, damit die Todoist-Ansicht ihre Breite behält */
+  #app[data-ansicht="aufgaben"] { padding: 0 0 0 64px; }
+  #app[data-ansicht="aufgaben"] .seitenleiste { left: 64px; }
+  #app[data-ansicht="aufgaben"] .appleiste { width: 64px; padding: 14px 10px 10px; align-items: center; }
+  #app[data-ansicht="aufgaben"] .appleiste .al-name,
+  #app[data-ansicht="aufgaben"] .appleiste .al-marke,
+  #app[data-ansicht="aufgaben"] .appleiste kbd,
+  #app[data-ansicht="aufgaben"] .appleiste .al-zahl:not(.rot),
+  #app[data-ansicht="aufgaben"] .appleiste .al-ich > svg { display: none; }
+  #app[data-ansicht="aufgaben"] .al-kopf { padding: 2px 0 12px; }
+  #app[data-ansicht="aufgaben"] .al-gruppe { width: 28px; height: 1px; margin: 10px 0; padding: 0; font-size: 0; background: var(--al-linie); }
+  #app[data-ansicht="aufgaben"] .appleiste button { width: 44px; height: 38px; padding: 0; justify-content: center; position: relative; }
+  #app[data-ansicht="aufgaben"] .appleiste button.al-suche { margin-bottom: 10px; }
+  #app[data-ansicht="aufgaben"] .al-zahl.rot { position: absolute; top: 1px; right: 0; min-width: 16px; line-height: 16px; font-size: 10px; padding: 0 4px; }
+  #app[data-ansicht="aufgaben"] .al-fuss { border-top: none; }
+  #app[data-ansicht="aufgaben"] .td { margin: 0; min-height: 100vh; }
+
+  /* Flache Seiten: keine grauen Karten mehr auf dem Grund, Abschnitte trennt der Abstand */
+  #app .tafel { background: transparent; padding: 0; margin-bottom: 36px; border-radius: 0; }
+  #app .tafel h3 { font-size: 22px; }
+  #app .tafel.anf-kopf h3 { font-size: 30px; }
+  #app:not([data-theme="dark"]) .tafel input[type="text"], #app:not([data-theme="dark"]) .tafel input[type="number"],
+  #app:not([data-theme="dark"]) .tafel input[type="date"], #app:not([data-theme="dark"]) .tafel select,
+  #app:not([data-theme="dark"]) .tafel textarea { background: var(--surface); }
+
+  /* Heute: großer Titel mit Datum, rechts „Auf einen Blick“ über dem Zeitplan */
+  #app .tagkarte .memokopf { align-items: flex-end; margin-bottom: 4px; }
+  #app .tagkarte .memokopf h3 { display: flex; align-items: baseline; gap: 12px; }
+  #app .tagkarte .memokopf .mk-titel { font-size: 32px; font-weight: 700; letter-spacing: -0.03em; line-height: 1.05; }
+  #app .tagkarte .memokopf .mk-datum { font-size: 16px; font-weight: 500; color: var(--muted); letter-spacing: -0.01em; }
+  #app .tagzeit.mit-blick .blick { margin: 0 0 6px; }
+  #app .tagzeit.mit-blick .blick-kachel:first-child { grid-column: 1 / -1; }
+  #app .tagzeit.mit-blick .zeitrahmen { max-height: max(380px, calc(100vh - 420px)); }
+  #app .tagzeit-kopf { text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--muted); }
+
+  /* Post wie Apple Mail: randlos bis an die Leiste, Liste und Lesebereich scrollen getrennt */
+  #app[data-ansicht="post"]:has(.post2) { padding: 0 0 0 232px; }
+  #app[data-ansicht="post"]:has(.post2) .foot { display: none; }
+  #app .post2 { display: grid; grid-template-columns: minmax(320px, 400px) minmax(0, 1fr); height: 100vh; }
+  #app .p2-liste { overflow-y: auto; border-right: 1px solid var(--line-soft); padding: 0 0 24px; }
+  #app .p2-kopf { position: sticky; top: 0; z-index: 2; padding: 26px 18px 12px; background: var(--bg); }
+  #app .p2-kopf h2 { margin: 0; display: flex; align-items: baseline; gap: 8px; font-size: 28px; font-weight: 700; letter-spacing: -0.025em; }
+  #app .p2-anzahl { font-size: 14px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+  #app .p2-filter { display: flex; margin-top: 12px; padding: 2px; border-radius: 9px; background: var(--fuellung); }
+  #app .p2-filter button { flex: 1; padding: 4px 0; border-radius: 7px; background: transparent; color: var(--ink); font-size: 12.5px; font-weight: 500; }
+  #app .p2-filter button.aktiv { background: var(--segment); font-weight: 600; box-shadow: 0 3px 8px rgba(0, 0, 0, .12), 0 3px 1px rgba(0, 0, 0, .04); }
+  #app .p2-zeit { display: flex; gap: 4px; margin-top: 8px; }
+  #app .p2-zeit button { padding: 3px 8px; border-radius: 6px; background: transparent; color: var(--muted); font-size: 12px; font-weight: 500; }
+  #app .p2-zeit button.aktiv { background: var(--glas); color: var(--messing); }
+  #app .p2-zeit .p2-frisch { margin-left: auto; color: var(--messing); }
+  #app .p2-mail { position: relative; margin: 0 8px; padding: 10px 12px 11px; border-radius: 10px; cursor: pointer; }
+  #app .p2-mail + .p2-mail::before { content: ''; position: absolute; left: 12px; right: 12px; top: 0; border-top: 1px solid var(--line-soft); }
+  #app .p2-mail.an::before, #app .p2-mail.an + .p2-mail::before { display: none; }
+  #app .p2-mail:hover { background: var(--fuellung); }
+  #app .p2-mail.an, #app .p2-mail.an:hover { background: var(--messing); color: #fff; }
+  #app .p2-o { display: flex; align-items: baseline; gap: 8px; }
+  #app .p2-von { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #app .p2-wann { flex: none; font-size: 12px; color: var(--muted); }
+  #app .p2-betreff { margin-top: 1px; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #app .p2-auszug {
+    margin-top: 1px; font-size: 12.5px; color: var(--muted); overflow: hidden;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }
+  #app .p2-chip { display: inline-block; margin-top: 5px; padding: 1px 7px; border-radius: 5px; background: var(--fuellung); color: var(--muted); font-size: 11px; font-weight: 500; }
+  #app .p2-mail.an .p2-wann, #app .p2-mail.an .p2-auszug { color: rgba(255, 255, 255, .78); }
+  #app .p2-mail.an .p2-chip { background: rgba(255, 255, 255, .2); color: #fff; }
+  #app .p2-liste .poststand, #app .p2-liste .iabsagen { padding: 14px 20px 0; font-size: 12px; }
+  #app .p2-lese { min-width: 0; overflow-y: auto; }
+  #app .p2-leiste {
+    position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 6px;
+    padding: 14px 28px; background: var(--bg); border-bottom: 1px solid var(--line-soft);
+  }
+  #app .p2-leiste button { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 8px; font-size: 13px; }
+  #app .p2-leiste .p2-ic { padding: 6px 8px; color: var(--ink); }
+  #app .p2-platz { flex: 1; }
+  #app .p2-inhalt { max-width: 780px; padding: 26px 32px 60px; }
+  #app .p2-titel { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.25; }
+  #app .p2-absender { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--line-soft); }
+  #app .p2-av {
+    width: 40px; height: 40px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(180deg, #a1a1a6, #6e6e73); color: #fff; font-size: 14px; font-weight: 600;
+  }
+  #app .p2-wer { flex: 1; min-width: 0; }
+  #app .p2-name { font-weight: 600; }
+  #app .p2-adresse, #app .p2-datum { font-size: 12px; color: var(--muted); }
+  #app .p2-datum { text-align: right; }
+  #app .p2-frist { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding: 12px 14px; border-radius: 12px; background: var(--glas); }
+  #app .p2-frist > svg { flex: none; color: var(--messing); }
+  #app .p2-frist-text { flex: 1; min-width: 0; display: flex; flex-direction: column; font-size: 12.5px; color: var(--muted); }
+  #app .p2-frist-text b { font-size: 14px; color: var(--ink); }
+  #app .p2-text { margin-top: 18px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14.5px; line-height: 1.6; color: var(--ink); }
+  #app .p2-hinweis { color: var(--muted); font-style: italic; }
+}

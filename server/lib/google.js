@@ -222,6 +222,22 @@ app.get('/api/post/suche', nurAngemeldet, async function (req, res) {
   } catch (e) { res.status(502).json({ fehler: e.message }); }
 });
 
+// Volltext einer Mail für den Lesebereich der Post-Seite (nur lesen, an der Mail ändert sich nichts)
+app.get('/api/post/:id/text', nurAngemeldet, async function (req, res) {
+  try {
+    const token = await googleToken();
+    const mail = await gmail(token, '/messages/' + encodeURIComponent(req.params.id) + '?format=full');
+    // erst hier laden: anfragen.js braucht selbst google.js
+    const { mailText } = require('./anfragen');
+    const h = {};
+    ((mail.payload && mail.payload.headers) || []).forEach(function (x) { h[x.name] = x.value; });
+    res.json({
+      id: mail.id, von: h.From || '', an: h.To || '', betreff: h.Subject || '', wann: h.Date || null,
+      text: mailText(mail.payload).slice(0, 20000)
+    });
+  } catch (e) { res.status(502).json({ fehler: e.message }); }
+});
+
 // Anhänge einer Mail auflisten
 app.get('/api/post/:id/anhaenge', nurAngemeldet, async function (req, res) {
   try {
