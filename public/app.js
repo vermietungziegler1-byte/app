@@ -92,7 +92,7 @@
       ev.preventDefault(); tdSchnell();
     }
     // Mailkonto am PC: Pfeiltasten wählen, Entf löscht — wie in Apple Mail und Outlook
-    const pfSuchliste = pf.pfad === '#suche' && pf.suche && pf.suche.ergebnis ? pf.suche.ergebnis.mails : null;
+    const pfSuchliste = pf.pfad === '#suche' && pf.suche && pf.suche.ergebnis ? pfSuchTreffer() : null;
     if (!imFeld && ansicht === 'post' && pf.pfad && root.querySelector('.post2') && (pfSuchliste || pf.listen[pf.pfad])) {
       const mails = pfSuchliste || pf.listen[pf.pfad].mails;
       if ((ev.key === 'ArrowDown' || ev.key === 'ArrowUp') && mails.length) {
@@ -863,9 +863,39 @@
   function pfZeilen(ort, uid) {
     const z = [];
     const l = pfZeile(ort, uid); if (l) z.push(l);
-    const s = pf.suche && pf.suche.ergebnis ? pf.suche.ergebnis.mails.find(function (m) { return m.uid === uid && m.ordner === ort; }) : null;
-    if (s) z.push(s);
+    pfSuchTreffer().forEach(function (m) { if (m.uid === uid && m.ordner === ort) z.push(m); });
     return z;
+  }
+  // Alle Suchtreffer in der Reihenfolge der Anzeige: erst die Top-Treffer, dann die übrigen
+  function pfSuchTreffer() {
+    const r = pf.suche && pf.suche.ergebnis;
+    return r ? (r.top || []).concat(r.mails || []) : [];
+  }
+  function pfAusSuche(ort, uid) {
+    const r = pf.suche && pf.suche.ergebnis;
+    if (!r) return;
+    ['top', 'mails'].forEach(function (k) {
+      r[k] = (r[k] || []).filter(function (m) { return !(m.uid === uid && m.ordner === ort); });
+    });
+  }
+  // Beim Tippen: nach kurzer Pause sofort aus dem Suchverzeichnis (ohne Assistent); Enter sucht dann mitdenkend
+  let pfTippUhr = null;
+  function pfSofortSuchen(text) {
+    clearTimeout(pfTippUhr);
+    const q = String(text || '').trim();
+    if (!q) { if (pf.pfad === '#suche') pfSucheEnde(); return; }
+    if (q.length < 3) return;
+    pfTippUhr = setTimeout(function () {
+      apiRoh('postfach/suche?schnell=1&q=' + encodeURIComponent(q)).then(function (r) {
+        if (String(pf.suchText || '').trim() !== q) return;           // inzwischen weitergetippt
+        if (!r.index || !r.index.eingelesen) { pf.index = r.index; return; }   // Verzeichnis noch leer: Enter sucht beim Mailserver
+        if (pf.pfad !== '#suche') { pf.vorSuche = pf.pfad; pf.pfad = '#suche'; pf.gewaehlt = null; pf.gewaehltOrdner = null; }
+        if (pf.suche && pf.suche.laedtSchlau && pf.suche.q === q) return;   // die mitdenkende Suche läuft schon
+        pf.suche = { q: q, ergebnis: r, schnell: true };
+        pf.index = r.index;
+        render();
+      }).catch(function () { /* beim nächsten Tastendruck */ });
+    }, 180);
   }
   function pfSignatur() {
     if (pf.signatur !== undefined) return Promise.resolve(pf.signatur);
@@ -875,12 +905,16 @@
   function pfSuchen(q) {
     q = String(q || '').trim();
     if (q.length < 2) { toast('Bitte mindestens zwei Zeichen eingeben'); return; }
+    clearTimeout(pfTippUhr);
     if (pf.pfad !== '#suche') pf.vorSuche = pf.pfad;
-    pf.pfad = '#suche'; pf.gewaehlt = null; pf.gewaehltOrdner = null; pf.suchText = q;
-    pf.suche = { q: q, laedt: true };
+    // Die Treffer vom Tippen bleiben stehen, bis die mitdenkende Suche fertig ist
+    const vorher = pf.suche && pf.suche.q === q && pf.suche.ergebnis ? pf.suche.ergebnis : null;
+    pf.pfad = '#suche'; pf.suchText = q;
+    if (!vorher) { pf.gewaehlt = null; pf.gewaehltOrdner = null; }
+    pf.suche = { q: q, laedt: !vorher, laedtSchlau: true, ergebnis: vorher };
     render();
     api('postfach/suche?q=' + encodeURIComponent(q))
-      .then(function (r) { if (pf.suche && pf.suche.q === q) pf.suche = { q: q, ergebnis: r }; })
+      .then(function (r) { if (pf.suche && pf.suche.q === q) { pf.suche = { q: q, ergebnis: r }; pf.index = r.index; } })
       .catch(function (e) { if (pf.suche && pf.suche.q === q) pf.suche = { q: q, fehler: e.message }; })
       .then(function () { if (ansicht === 'post') render(); });
   }
@@ -936,13 +970,13 @@
           if (aktion === 'loeschen' || aktion === 'verschieben') {
             // aus Ordnerliste und Suchtreffern nehmen, die nächste Mail der sichtbaren Liste wählen
             const imSuchen = pf.pfad === '#suche' && pf.suche && pf.suche.ergebnis;
-            const sichtbar = imSuchen ? pf.suche.ergebnis.mails : (pf.listen[pfad] || { mails: [] }).mails;
-            const i = sichtbar.findIndex(function (m) { return m.uid === uid && (!imSuchen || m.ordner === pfad); });
+            const vorher = imSuchen ? pfSuchTreffer() : (pf.listen[pfad] || { mails: [] }).mails.slice();
+            const i = vorher.findIndex(function (m) { return m.uid === uid && (!imSuchen || m.ordner === pfad); });
             if (z && !z.gelesen && o && o.ungelesen) o.ungelesen--;
             const l = pf.listen[pfad];
             if (l) { const j = l.mails.findIndex(function (m) { return m.uid === uid; }); if (j >= 0) { l.mails.splice(j, 1); if (l.gesamt) l.gesamt--; } }
-            if (imSuchen) { const j = pf.suche.ergebnis.mails.findIndex(function (m) { return m.uid === uid && m.ordner === pfad; }); if (j >= 0) pf.suche.ergebnis.mails.splice(j, 1); }
-            const naechste = i >= 0 ? (sichtbar[i] || sichtbar[i - 1]) : null;
+            pfAusSuche(pfad, uid);
+            const naechste = i >= 0 ? (vorher[i + 1] || vorher[i - 1]) : null;
             pf.gewaehlt = (!mobil && window.innerWidth >= 901 && naechste) ? naechste.uid : null;
             if (imSuchen) pf.gewaehltOrdner = pf.gewaehlt ? naechste.ordner : null;
             if (pf.gewaehlt) pfMailLaden(pfOrt(), pf.gewaehlt);
@@ -6946,22 +6980,37 @@
       + (m.anhang ? '<span class="p2-clip" title="mit Anhang">📎</span>' : '')
       + '<span class="p2-wann num">' + pfZeit(m.datum) + '</span></div>'
       + '<div class="p2-betreff">' + (m.beantwortet ? '<span class="p2-bea" title="beantwortet">↩</span>' : '') + esc(m.betreff) + '</div>'
+      // Fundstelle aus dem Suchverzeichnis, die Suchwörter hervorgehoben
+      + (m.ausschnitt ? '<div class="p2-fund">' + esc(m.ausschnitt).replace(/\u0001/g, '<mark>').replace(/\u0002/g, '</mark>') + '</div>' : '')
       + (mitOrdner ? '<span class="p2-chip">' + esc(m.ordnerName || m.ordner) + '</span>' : '')
       + '</div>';
+  }
+  function pfIndexHinweis(ix) {
+    if (!ix || (ix.fertig && !ix.laeuft) || !ix.gesamt || ix.eingelesen >= ix.gesamt) return '';
+    return '<div class="p2-index">Suchverzeichnis wird aufgebaut: ' + Number(ix.eingelesen).toLocaleString('de-DE') + ' von '
+      + Number(ix.gesamt).toLocaleString('de-DE') + ' Mails — die neuesten sind schon drin</div>';
   }
   function pfSuchListeHtml() {
     const s = pf.suche || {};
     let h = '<div class="p2-kopf">' + pfSuchfeld() + '<h2>Suche</h2></div>';
-    if (s.laedt) return h + '<div class="p2-leer">Ich suche in allen Ordnern …</div>';
+    if (s.laedt) return h + '<div class="p2-leer">Ich suche …</div>';
     if (s.fehler) return h + '<div class="p2-leer">' + esc(s.fehler) + '</div>';
-    const r = s.ergebnis || { mails: [], gesamt: 0 };
-    h += '<div class="p2-erkl">' + (r.erklaerung ? esc(r.erklaerung) : '') + '<span>'
-      + (r.gesamt > r.mails.length ? 'die neuesten ' + r.mails.length + ' von ' + r.gesamt : r.mails.length + (r.mails.length === 1 ? ' Treffer' : ' Treffer'))
-      + (r.schlau ? '' : ' · nach den Wörtern gesucht')
+    const r = s.ergebnis || { top: [], mails: [], gesamt: 0 };
+    const top = r.top || [], rest = r.mails || [];
+    const zahl = top.length + rest.length;
+    h += '<div class="p2-erkl">'
+      + (s.laedtSchlau ? '<b>Der Assistent denkt mit …</b>' : (r.erklaerung ? esc(r.erklaerung) : (s.schnell ? 'Treffer beim Tippen' : '')))
+      + '<span>' + (r.gesamt > zahl ? 'die besten ' + zahl + ' von ' + r.gesamt : zahl + ' Treffer')
+      + (s.schnell && !s.laedtSchlau ? ' · Enter: der Assistent denkt mit (ähnliche Wörter, Absender, Zeitraum)' : '')
+      + (!s.schnell && !r.schlau && !s.laedtSchlau ? ' · nach den Wörtern gesucht' : '')
       + (r.textGrenze ? ' · Mailtexte aus dem letzten Jahr, Betreff und Absender ganz' : '')
-      + (r.abgebrochen ? ' · nach 15 Sekunden beendet, kleinere Ordner nicht durchsucht' : '') + '</span></div>';
-    if (!r.mails.length) return h + '<div class="p2-leer">Nichts gefunden. Anders formulieren oder weniger Wörter nehmen.</div>';
-    return h + r.mails.map(function (m) { return pfZeileHtml(m, pfOrdnerVon(m.ordner) && pfOrdnerVon(m.ordner).spezial === 'gesendet', true); }).join('');
+      + (r.abgebrochen ? ' · nach 15 Sekunden beendet, kleinere Ordner nicht durchsucht' : '') + '</span></div>'
+      + pfIndexHinweis(r.index || pf.index);
+    if (!zahl) return h + '<div class="p2-leer">Nichts gefunden. Anders formulieren oder Enter drücken, dann denkt der Assistent mit.</div>';
+    const zeile = function (m) { return pfZeileHtml(m, pfOrdnerVon(m.ordner) && pfOrdnerVon(m.ordner).spezial === 'gesendet', true); };
+    return h
+      + (top.length ? '<div class="p2-abschnitt">Top-Treffer</div>' + top.map(zeile).join('') + (rest.length ? '<div class="p2-abschnitt">Alle weiteren, neueste zuerst</div>' : '') : '')
+      + rest.map(zeile).join('');
   }
 
   function pfListeHtml() {
@@ -8711,7 +8760,7 @@
     // Suchfeld im Postfach: Enter sucht, Esc beendet; das Getippte übersteht jeden Neuaufbau
     const pfq = root.querySelector('#pf-q');
     if (pfq) {
-      pfq.addEventListener('input', function () { pf.suchText = pfq.value; });
+      pfq.addEventListener('input', function () { pf.suchText = pfq.value; pfSofortSuchen(pfq.value); });
       pfq.addEventListener('keydown', function (ev) {
         if (ev.key === 'Enter') { ev.preventDefault(); pfSuchen(pfq.value); }
         else if (ev.key === 'Escape') { ev.preventDefault(); if (pf.pfad === '#suche') pfSucheEnde(); else { pfq.value = ''; pf.suchText = ''; pfq.blur(); } }

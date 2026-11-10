@@ -197,7 +197,119 @@ async function mailHolen(c, uid) {
   return { m: m, p: await simpleParser(m.source) };
 }
 
+// ---------------- Suchverzeichnis aktuell halten ----------------
+// Eigene Verbindung zum Mailserver, damit das Einlesen nie ein Klick in der App aufhält. Beim ersten Mal werden alle
+// Mails (außer Spam) eingelesen, neueste zuerst — je Mail nur die ersten 64 KB, also Text ohne Anhänge. Danach alle
+// drei Minuten: neue Mails dazu, gelöschte raus, gelesen/markiert nachziehen.
+const indexMod = require('./postfach-index');
+const { ohneZitat } = require('./postfach-text');
+let ix = null;
+function index() { if (!ix) ix = indexMod.oeffnen(path.join(DATENORDNER, 'mailindex.db')); return ix; }
+function indexAnzahl() { try { return indexMod.anzahl(index()); } catch (e) { return 0; } }
+const indexStand = { laeuft: false, gesamt: 0, eingelesen: 0, zuletzt: 0, fehler: null };
+function indexInfo() {
+  return { eingelesen: indexStand.laeuft ? indexStand.eingelesen : indexAnzahl(), gesamt: indexStand.gesamt || indexAnzahl(),
+    laeuft: indexStand.laeuft, fertig: !indexStand.laeuft && indexStand.zuletzt > 0 && !indexStand.fehler, fehler: indexStand.fehler };
+}
+function anhangNamen(s, liste) {
+  liste = liste || [];
+  if (!s) return liste;
+  const name = (s.dispositionParameters && s.dispositionParameters.filename) || (s.parameters && s.parameters.name);
+  if (name && (s.disposition === 'attachment' || s.disposition === 'inline' || !/^text\//.test(s.type || ''))) liste.push(name);
+  (s.childNodes || []).forEach(function (k) { anhangNamen(k, liste); });
+  return liste;
+}
+const RANG_INDEX = { '\\Inbox': 0, '\\Sent': 1, '\\Archive': 2 };
+
+async function indexAbgleich() {
+  if (indexStand.laeuft || !ImapFlow || !simpleParser) return;
+  const z = zugang();
+  if (!z) return;
+  indexStand.laeuft = true; indexStand.fehler = null;
+  const c = new ImapFlow(imapOptionen(z));
+  c.on('error', function () { /* steht unten in fehler */ });
+  try {
+    await c.connect();
+    const ordner = (await c.list())
+      .filter(function (f) { return !(f.flags && (f.flags.has('\\Noselect') || f.flags.has('\\NonExistent'))) && artVon(f) !== '\\Junk'; })
+      .sort(function (a, b) { return (RANG_INDEX[artVon(a)] != null ? RANG_INDEX[artVon(a)] : 9) - (RANG_INDEX[artVon(b)] != null ? RANG_INDEX[artVon(b)] : 9); });
+    indexMod.ordnerAufraeumen(index(), ordner.map(function (f) { return f.path; }));
+
+    // 1. Je Ordner abgleichen: was ist neu, was ist weg, was hat sich an gelesen/markiert geändert
+    const plan = [];
+    let gesamt = 0, fehlend = 0;
+    for (const f of ordner) {
+      const sperre = await c.getMailboxLock(f.path, { readOnly: true });
+      try {
+        const uv = String(c.mailbox.uidValidity);
+        if (indexMod.uidValidity(index(), f.path) !== uv) { indexMod.ordnerLeeren(index(), f.path); indexMod.uidValiditySetzen(index(), f.path, uv); }
+        const server = new Map();
+        if (c.mailbox.exists) {
+          for await (const m of c.fetch('1:*', { uid: true, flags: true })) server.set(m.uid, m.flags);
+        }
+        const bekannt = indexMod.bekannte(index(), f.path);
+        const weg = [], merker = [], neu = [];
+        bekannt.forEach(function (b, uid) { if (!server.has(uid)) weg.push(uid); });
+        server.forEach(function (fl, uid) {
+          const b = bekannt.get(uid);
+          const g = fl.has('\\Seen') ? 1 : 0, mk = fl.has('\\Flagged') ? 1 : 0, be = fl.has('\\Answered') ? 1 : 0;
+          if (!b) neu.push(uid);
+          else if (b.gelesen !== g || b.markiert !== mk || b.beantwortet !== be) merker.push({ uid: uid, gelesen: g, markiert: mk, beantwortet: be });
+        });
+        if (weg.length) indexMod.entfernen(index(), f.path, weg);
+        if (merker.length) indexMod.merkerSetzen(index(), f.path, merker);
+        gesamt += server.size; fehlend += neu.length;
+        if (neu.length) plan.push({ pfad: f.path, neu: neu.sort(function (a, b) { return b - a; }) });
+      } finally { sperre.release(); }
+    }
+    indexStand.gesamt = gesamt;
+    indexStand.eingelesen = gesamt - fehlend;
+
+    // 2. Neue Mails einlesen, neueste zuerst, je 20 auf einmal
+    for (const p of plan) {
+      const sperre = await c.getMailboxLock(p.pfad, { readOnly: true });
+      try {
+        for (let i = 0; i < p.neu.length; i += 20) {
+          if (!zugang()) return;   // inzwischen getrennt
+          const stueck = p.neu.slice(i, i + 20);
+          const geholt = [];
+          for await (const m of c.fetch(stueck.join(','), { uid: true, flags: true, envelope: true, bodyStructure: true, internalDate: true, source: { start: 0, maxLength: 65536 } }, { uid: true })) {
+            geholt.push(m);
+          }
+          for (const m of geholt) {
+            let text = '';
+            try { const geparst = await simpleParser(m.source || ''); text = String(geparst.text || htmlZuText(geparst.html || '')); }
+            catch (e) { text = ''; }
+            const e = m.envelope || {};
+            const von = adressen(e.from)[0] || { name: '', adresse: '' };
+            const namen = anhangNamen(m.bodyStructure);
+            indexMod.eintragen(index(), {
+              ordner: p.pfad, uid: m.uid, datum: new Date(e.date || m.internalDate || 0).getTime() || 0,
+              vonName: von.name, vonAdresse: von.adresse,
+              an: adressen(e.to).concat(adressen(e.cc)).map(function (a) { return a.name ? a.name + ' <' + a.adresse + '>' : a.adresse; }).join('; '),
+              betreff: e.subject || '', anhang: hatAnhang(m.bodyStructure), anhaenge: namen.join(' '),
+              gelesen: m.flags && m.flags.has('\\Seen'), markiert: m.flags && m.flags.has('\\Flagged'), beantwortet: m.flags && m.flags.has('\\Answered'),
+              text: ohneZitat(text).slice(0, 12000)
+            });
+            indexStand.eingelesen++;
+          }
+          await new Promise(function (r) { setTimeout(r, 25); });   // dem Mailserver Luft lassen
+        }
+      } finally { sperre.release(); }
+    }
+  } catch (e) {
+    indexStand.fehler = anmeldeFehler(e);
+  } finally {
+    indexStand.laeuft = false; indexStand.zuletzt = Date.now();
+    c.logout().catch(function () { /* egal */ });
+  }
+}
+setTimeout(function () { indexAbgleich().catch(function () { /* nächster Lauf */ }); }, 20000).unref();
+setInterval(function () { indexAbgleich().catch(function () { /* nächster Lauf */ }); }, 3 * 60 * 1000).unref();
+
 // ---------------- Schnittstellen ----------------
+app.get('/api/postfach/index', nurAngemeldet, nurVerwalter, function (req, res) { res.json(indexInfo()); });
+
 app.get('/api/postfach', nurAngemeldet, nurVerwalter, function (req, res) {
   res.json({
     eingerichtet: !!zugang(),
@@ -230,12 +342,14 @@ app.put('/api/postfach', nurAngemeldet, nurVerwalter, mitFehler(async function (
   einstellungSetzen('postfach_passwort', verschluesseln(passwort));
   einstellungSetzen('postfach_server', server);
   if (b.name) einstellungSetzen('postfach_name', String(b.name).trim().slice(0, 80));
+  setTimeout(function () { indexAbgleich().catch(function () { /* nächster Lauf */ }); }, 2000).unref();   // Suchverzeichnis gleich aufbauen
   res.json({ ok: true, eingerichtet: true });
 }));
 
 app.delete('/api/postfach', nurAngemeldet, nurVerwalter, function (req, res) {
   trennen();
   db.prepare("DELETE FROM einstellungen WHERE schluessel IN ('postfach_passwort', 'postfach_benutzer')").run();
+  try { indexMod.alleLeeren(index()); } catch (e) { /* kein Verzeichnis da */ }   // mit dem Konto geht auch das Suchverzeichnis
   res.json({ ok: true });
 });
 
@@ -277,7 +391,10 @@ app.get('/api/postfach/mail', nurAngemeldet, nurVerwalter, mitFehler(async funct
   if (!uid) throw fehler('Welche Mail?', 400);
   const antwort = await imOrdner(ordner, async function (c) {
     const g = await mailHolen(c, uid);
-    if (!g.m.flags.has('\\Seen')) await c.messageFlagsAdd(String(uid), ['\\Seen'], { uid: true });
+    if (!g.m.flags.has('\\Seen')) {
+      await c.messageFlagsAdd(String(uid), ['\\Seen'], { uid: true });
+      try { indexMod.merkerAendern(index(), ordner, [uid], 'gelesen', true); } catch (e) { /* egal */ }
+    }
     const p = g.p;
     return {
       ordner: ordner, uid: uid, betreff: p.subject || '(ohne Betreff)',
@@ -332,6 +449,12 @@ app.post('/api/postfach/aktion', nurAngemeldet, nurVerwalter, mitFehler(async fu
       else { await c.messageDelete(menge, { uid: true }); endgueltig = true; }
     } else throw fehler('Unbekannte Aktion', 400);
   });
+  // Suchverzeichnis gleich nachziehen; verschobene Mails tauchen beim nächsten Abgleich im Zielordner auf
+  try {
+    if (b.aktion === 'loeschen' || b.aktion === 'verschieben') indexMod.entfernen(index(), ordner, uids);
+    else if (b.aktion === 'gelesen' || b.aktion === 'ungelesen') indexMod.merkerAendern(index(), ordner, uids, 'gelesen', b.aktion === 'gelesen');
+    else if (b.aktion === 'markieren' || b.aktion === 'entmarkieren') indexMod.merkerAendern(index(), ordner, uids, 'markiert', b.aktion === 'markieren');
+  } catch (e) { /* das Verzeichnis holt es beim nächsten Abgleich nach */ }
   res.json({ ok: true, endgueltig: endgueltig });
 }));
 
@@ -383,8 +506,10 @@ app.post('/api/postfach/senden', nurAngemeldet, nurVerwalter, mitFehler(async fu
   } catch (e) { console.log('Postfach: Kopie in „Gesendet“ fehlgeschlagen:', e.message); }
 
   if (bezug && b.art !== 'weiter') {
-    try { await imOrdner(bezug.ordner, function (c) { return c.messageFlagsAdd(String(bezug.uid), ['\\Answered'], { uid: true }); }); }
-    catch (e) { /* nicht schlimm */ }
+    try {
+      await imOrdner(bezug.ordner, function (c) { return c.messageFlagsAdd(String(bezug.uid), ['\\Answered'], { uid: true }); });
+      indexMod.merkerAendern(index(), bezug.ordner, [bezug.uid], 'beantwortet', true);
+    } catch (e) { /* nicht schlimm */ }
   }
   res.json({ ok: true, abgelegt: abgelegt });
 }));
@@ -442,7 +567,7 @@ const SUCH_SCHEMA = {
     seit: { type: 'string' },
     bis: { type: 'string' },
     nurAnhang: { type: 'boolean' },
-    ordner: { type: 'string', enum: ['alle', 'eingang', 'gesendet'] },
+    ordner: { type: 'string', enum: ['alle', 'eingang', 'gesendet', 'papierkorb'] },
     erklaerung: { type: 'string' }
   },
   required: ['begriffe', 'absender', 'empfaenger', 'seit', 'bis', 'nurAnhang', 'ordner', 'erklaerung']
@@ -477,24 +602,59 @@ async function kriterienVonClaude(q, b) {
     + ' (' + heute.toISOString().slice(0, 10) + ').\n'
     + '- nurAnhang: true, wenn nach Anhängen, PDFs, Dateien oder Fotos gefragt ist.\n'
     + '- ordner: "gesendet" für Mails, die Louis selbst geschrieben hat ("meine Mail an …", "was ich … geschickt habe"), '
-    + '"eingang" für "neue Mails", sonst "alle".\n'
+    + '"eingang" für "neue Mails", "papierkorb" für gelöschte Mails, sonst "alle".\n'
     + '- erklaerung: ein kurzer deutscher Satz, wonach jetzt gesucht wird.\n\n'
     + 'Objekte: ' + (b.objekte.join(' | ') || '—') + '\n'
     + 'Bekannte Personen: ' + (b.personen.slice(0, 120).map(function (p) { return p.name + ' (' + p.wo + ')'; }).join('; ') || '—');
-  const antwort = await claude({
-    model: 'claude-opus-5-5', max_tokens: 4000, system: system,
-    messages: [{ role: 'user', content: String(q).slice(0, 300) }],
-    output_config: { effort: 'low', format: { type: 'json_schema', schema: SUCH_SCHEMA } }
-  }, null, 25000);
-  const block = (antwort.content || []).find(function (x) { return x.type === 'text'; });
-  return JSON.parse(block.text);
+  // Fürs Suchen zählt Tempo: erst das schnelle Modell, bei Problemen das große mit wenig Nachdenken
+  const versuche = [
+    { model: 'claude-haiku-5-5', output_config: { format: { type: 'json_schema', schema: SUCH_SCHEMA } } },
+    { model: 'claude-opus-5-5', output_config: { effort: 'low', format: { type: 'json_schema', schema: SUCH_SCHEMA } } }
+  ];
+  let letzter = null;
+  for (const v of versuche) {
+    try {
+      const antwort = await claude(Object.assign({ max_tokens: 2000, system: system, messages: [{ role: 'user', content: String(q).slice(0, 300) }] }, v), null, 20000);
+      const block = (antwort.content || []).find(function (x) { return x.type === 'text'; });
+      return JSON.parse(block.text);
+    } catch (e) {
+      letzter = e;
+      if (e.status && e.status !== 400 && e.status !== 404) throw e;   // Schlüssel, Guthaben, Auslastung: das zweite Modell hilft nicht
+    }
+  }
+  throw letzter;
 }
 
 function oder(liste) { return liste.length === 1 ? liste[0] : { or: liste }; }
 
+// Ordnernamen für die Treffer aus dem Verzeichnis
+async function mitOrdnernamen(r) {
+  const liste = await ordnerListe(false).catch(function () { return []; });
+  const name = function (pfad) { const o = liste.find(function (x) { return x.pfad === pfad; }); return o ? o.name : pfad; };
+  r.top.forEach(function (m) { m.ordnerName = name(m.ordner); });
+  r.mails.forEach(function (m) { m.ordnerName = name(m.ordner); });
+  return r;
+}
+async function ordnerFuer(art) {
+  const liste = await ordnerListe(false);
+  const pfade = function (sp) { return liste.filter(function (o) { return o.spezial === sp; }).map(function (o) { return o.pfad; }); };
+  if (art === 'eingang' || art === 'gesendet' || art === 'papierkorb') return { nurOrdner: pfade(art) };
+  return { ohneOrdner: pfade('papierkorb').concat(pfade('spam')) };
+}
+
 app.get('/api/postfach/suche', nurAngemeldet, nurVerwalter, mitFehler(async function (req, res) {
   const q = String(req.query.q || '').trim();
   if (q.length < 2) throw fehler('Bitte mindestens zwei Zeichen eingeben', 400);
+  const imVerzeichnis = indexAnzahl() > 0;
+
+  // Beim Tippen: sofort aus dem Verzeichnis, ohne Assistent
+  if (req.query.schnell === '1') {
+    if (!imVerzeichnis) return res.json({ q: q, schnell: true, top: [], mails: [], gesamt: 0, index: indexInfo() });
+    const r = indexMod.suchen(index(), Object.assign({ gruppen: einfacheKriterien(q).begriffe }, await ordnerFuer('alle')));
+    await mitOrdnernamen(r);
+    return res.json({ q: q, schnell: true, top: r.top, mails: r.mails, gesamt: r.gesamt, index: indexInfo() });
+  }
+
   const b = bekannte();
   let k = null, schlau = false;
   if (req.query.schlau !== '0' && einstellung('anthropic_token')) {
@@ -518,8 +678,25 @@ app.get('/api/postfach/suche', nurAngemeldet, nurVerwalter, mitFehler(async func
     });
   });
   const empfaenger = (k.empfaenger || []).filter(Boolean).slice(0, 6);
-  if (!gruppen.length && !absender.length && !empfaenger.length) {
-    return res.json({ q: q, erklaerung: k.erklaerung || '', schlau: schlau, mails: [], gesamt: 0 });
+  const erklaerung = k.erklaerung || ('Mails ' + [
+    gruppen.length ? 'mit ' + gruppen.map(function (g) { return '„' + g[0] + '“'; }).join(' und ') : '',
+    absender.length ? 'von ' + absender[0] : ''
+  ].filter(Boolean).join(', '));
+  const nurZeit = /^\d{4}-\d{2}-\d{2}$/.test(k.seit || '') || /^\d{4}-\d{2}-\d{2}$/.test(k.bis || '');
+  if (!gruppen.length && !absender.length && !empfaenger.length && !(imVerzeichnis && (nurZeit || k.nurAnhang))) {
+    return res.json({ q: q, erklaerung: k.erklaerung || '', schlau: schlau, top: [], mails: [], gesamt: 0, index: indexInfo() });
+  }
+
+  // Steht das Suchverzeichnis, wird dort gesucht — in Millisekunden, über alle Jahre und auch im Mailtext
+  if (imVerzeichnis) {
+    const seit = /^\d{4}-\d{2}-\d{2}$/.test(k.seit || '') ? new Date(k.seit + 'T00:00:00').getTime() : 0;
+    let bis = 0;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(k.bis || '')) { const d = new Date(k.bis + 'T00:00:00'); d.setDate(d.getDate() + 1); bis = d.getTime(); }
+    const r = indexMod.suchen(index(), Object.assign({
+      gruppen: gruppen, absender: absender, empfaenger: empfaenger, seit: seit, bis: bis, nurAnhang: !!k.nurAnhang
+    }, await ordnerFuer(k.ordner)));
+    await mitOrdnernamen(r);
+    return res.json({ q: q, schlau: schlau, top: r.top, mails: r.mails, gesamt: r.gesamt, index: indexInfo(), erklaerung: erklaerung });
   }
 
   // Ordner: alle außer Papierkorb, Spam und Entwürfe — oder nur Eingang bzw. Gesendet. Die großen zuerst,
@@ -528,6 +705,7 @@ app.get('/api/postfach/suche', nurAngemeldet, nurVerwalter, mitFehler(async func
   const ordner = (await ordnerListe(false)).filter(function (o) {
     if (k.ordner === 'eingang') return o.spezial === 'eingang';
     if (k.ordner === 'gesendet') return o.spezial === 'gesendet';
+    if (k.ordner === 'papierkorb') return o.spezial === 'papierkorb';
     return ['papierkorb', 'spam', 'entwuerfe'].indexOf(o.spezial) === -1;
   }).sort(function (a, b2) { return (RANG[a.spezial] != null ? RANG[a.spezial] : 9) - (RANG[b2.spezial] != null ? RANG[b2.spezial] : 9); });
   const zeit = {};
@@ -594,14 +772,11 @@ app.get('/api/postfach/suche', nurAngemeldet, nurVerwalter, mitFehler(async func
   }
   treffer.sort(function (a, b2) { return new Date(b2.datum || 0) - new Date(a.datum || 0); });
   res.json({
-    q: q, schlau: schlau, gesamt: gesamt, mails: treffer.slice(0, 80),
+    q: q, schlau: schlau, gesamt: gesamt, top: [], mails: treffer.slice(0, 80), index: indexInfo(),
     // Die Jahresgrenze für Mailtexte gilt nur, wenn zuerst nach Begriffen gesucht wurde — nach einem Absender
     // werden dessen Mails ohne Grenze geprüft
     textGrenze: textGrenze && gruppen.length > 0 && !absender.length && !empfaenger.length, abgebrochen: abgebrochen,
-    erklaerung: k.erklaerung || ('Mails ' + [
-      gruppen.length ? 'mit ' + gruppen.map(function (g) { return '„' + g[0] + '“'; }).join(' und ') : '',
-      absender.length ? 'von ' + absender[0] : ''
-    ].filter(Boolean).join(', '))
+    erklaerung: erklaerung
   });
 }));
 

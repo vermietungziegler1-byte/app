@@ -4,7 +4,13 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { signaturAus, umlautVarianten, einfacheKriterien } = require('../lib/postfach-text');
+const { signaturAus, umlautVarianten, einfacheKriterien, ohneZitat } = require('../lib/postfach-text');
+
+test('Fürs Suchverzeichnis: nur der eigene Text, ohne zitierte Vorgeschichte', function () {
+  assert.equal(ohneZitat('Danke, passt.\n\nAm 09.11.2026 um 10:12 schrieb Herr X:\n> alte Mail'), 'Danke, passt.');
+  assert.equal(ohneZitat('Hallo\n> zitiert\nweiter'), 'Hallo');
+  assert.equal(ohneZitat('Nur ein Text ohne Zitat'), 'Nur ein Text ohne Zitat');
+});
 
 test('Signatur: der Block ab dem letzten Gruß vor dem Zitat, ohne mailto-Reste', function () {
   const mail = [

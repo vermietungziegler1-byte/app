@@ -20,6 +20,16 @@ function signaturAus(text) {
   return block;
 }
 
+// Fürs Suchverzeichnis: nur der eigene Text einer Mail, ohne die zitierte Vorgeschichte (die steht in den
+// früheren Mails ohnehin) — hält das Verzeichnis klein und die Treffer eindeutig
+function ohneZitat(text) {
+  const zeilen = String(text || '').replace(/\r/g, '').split('\n');
+  for (let i = 0; i < zeilen.length; i++) {
+    if (ZITATKOPF.test(zeilen[i]) || /^>/.test(zeilen[i])) return zeilen.slice(0, i).join('\n').trim();
+  }
+  return zeilen.join('\n').trim();
+}
+
 // ä/ae, ö/oe, ü/ue, ß/ss: Mailserver suchen nur nach Teilwörtern, „Müller“ findet „Mueller“ sonst nicht
 function umlautVarianten(w) {
   const v = [String(w || '').trim()].filter(Boolean);
@@ -37,4 +47,4 @@ function einfacheKriterien(q) {
   return { begriffe: worte.map(function (w) { return [w]; }), absender: [], empfaenger: [], seit: '', bis: '', nurAnhang: false, ordner: 'alle', erklaerung: '' };
 }
 
-module.exports = { signaturAus, umlautVarianten, einfacheKriterien };
+module.exports = { signaturAus, umlautVarianten, einfacheKriterien, ohneZitat };
