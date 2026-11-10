@@ -176,7 +176,8 @@ function suchen(ix, k) {
   let zeilen;
   if (fts.length) {
     werte.q = fts.join(' AND ');
-    zeilen = ix.db.prepare('SELECT m.*, snippet(mails_fts, -1, char(1), char(2), \' … \', 14) AS ausschnitt, '
+    // Fundstelle immer aus dem Mailtext (Spalte 3): passt das Wort nur im Absender, zeigt sie den Anfang der Mail
+    zeilen = ix.db.prepare('SELECT m.*, snippet(mails_fts, 3, char(1), char(2), \' … \', 14) AS ausschnitt, '
       + 'bm25(mails_fts, 10.0, 6.0, 2.0, 1.0, 4.0) AS rang '
       + 'FROM mails_fts JOIN mails m ON m.id = mails_fts.rowid WHERE mails_fts MATCH @q'
       + (filter.length ? ' AND ' + filter.join(' AND ') : '') + ' ORDER BY rang LIMIT ' + grenze).all(werte);
@@ -188,7 +189,7 @@ function suchen(ix, k) {
   // Top-Treffer nur, wenn nach Begriffen gesucht wurde und es mehr als eine Handvoll gibt — sonst reicht die Zeitfolge
   const top = hatText && zeilen.length > 5 ? zeilen.slice(0, 3) : [];
   const rest = zeilen.filter(function (z) { return top.indexOf(z) === -1; }).sort(function (x, y) { return (y.datum || 0) - (x.datum || 0); });
-  return { top: top.map(zeileAus), mails: rest.slice(0, 150).map(zeileAus), gesamt: zeilen.length };
+  return { top: top.map(zeileAus), mails: rest.slice(0, 150).map(zeileAus), gesamt: zeilen.length, mehr: zeilen.length >= grenze };
 }
 
 module.exports = {

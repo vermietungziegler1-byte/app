@@ -7000,7 +7000,7 @@
     const zahl = top.length + rest.length;
     h += '<div class="p2-erkl">'
       + (s.laedtSchlau ? '<b>Der Assistent denkt mit …</b>' : (r.erklaerung ? esc(r.erklaerung) : (s.schnell ? 'Treffer beim Tippen' : '')))
-      + '<span>' + (r.gesamt > zahl ? 'die besten ' + zahl + ' von ' + r.gesamt : zahl + ' Treffer')
+      + '<span>' + (r.gesamt > zahl ? 'die besten ' + zahl + ' von ' + (r.mehr ? 'über ' : '') + r.gesamt : zahl + ' Treffer')
       + (s.schnell && !s.laedtSchlau ? ' · Enter: der Assistent denkt mit (ähnliche Wörter, Absender, Zeitraum)' : '')
       + (!s.schnell && !r.schlau && !s.laedtSchlau ? ' · nach den Wörtern gesucht' : '')
       + (r.textGrenze ? ' · Mailtexte aus dem letzten Jahr, Betreff und Absender ganz' : '')

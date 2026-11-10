@@ -652,7 +652,7 @@ app.get('/api/postfach/suche', nurAngemeldet, nurVerwalter, mitFehler(async func
     if (!imVerzeichnis) return res.json({ q: q, schnell: true, top: [], mails: [], gesamt: 0, index: indexInfo() });
     const r = indexMod.suchen(index(), Object.assign({ gruppen: einfacheKriterien(q).begriffe }, await ordnerFuer('alle')));
     await mitOrdnernamen(r);
-    return res.json({ q: q, schnell: true, top: r.top, mails: r.mails, gesamt: r.gesamt, index: indexInfo() });
+    return res.json({ q: q, schnell: true, top: r.top, mails: r.mails, gesamt: r.gesamt, mehr: r.mehr, index: indexInfo() });
   }
 
   const b = bekannte();
@@ -696,7 +696,7 @@ app.get('/api/postfach/suche', nurAngemeldet, nurVerwalter, mitFehler(async func
       gruppen: gruppen, absender: absender, empfaenger: empfaenger, seit: seit, bis: bis, nurAnhang: !!k.nurAnhang
     }, await ordnerFuer(k.ordner)));
     await mitOrdnernamen(r);
-    return res.json({ q: q, schlau: schlau, top: r.top, mails: r.mails, gesamt: r.gesamt, index: indexInfo(), erklaerung: erklaerung });
+    return res.json({ q: q, schlau: schlau, top: r.top, mails: r.mails, gesamt: r.gesamt, mehr: r.mehr, index: indexInfo(), erklaerung: erklaerung });
   }
 
   // Ordner: alle außer Papierkorb, Spam und Entwürfe — oder nur Eingang bzw. Gesendet. Die großen zuerst,
