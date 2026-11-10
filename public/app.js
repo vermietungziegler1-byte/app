@@ -3841,6 +3841,9 @@
     let html = '';
     root.setAttribute('data-ansicht', ansicht);   // für die Stilregeln: Aufgaben und Post am PC randlos
     const seitenName = (SEITEN.find(function (t) { return t[0] === ansicht; }) || [0, 'Ziegler'])[1];
+    // Am PC: feste Seitenleiste links wie bei Apple Mail (ersetzt Kopf und Reiter, siehe apple.css).
+    // Steht vorn im Aufbau, damit ihr Menüknopf der erste sichtbare ist
+    if (!mobil) html += appLeisteHtml();
     // Am Handy steht oben der Name der Seite mit Lupe und Plus; das Menü steckt unten unter „Mehr“
     html += '<div class="top"><div class="marke">'
       + '<button class="burger" data-act="seite" title="Menü"><span></span><span></span><span></span></button>'
@@ -3862,9 +3865,6 @@
             + (zahl ? '<span class="zahl">' + zahl + '</span>' : '') + '</button>';
         }).join('')
       + '</div>';
-
-    // Am PC: feste Seitenleiste links wie bei Apple Mail (ersetzt Kopf und Reiter, siehe apple.css)
-    if (!mobil) html += appLeisteHtml();
 
     // ---- Seitenleiste ----
     if (seiteOffen) {
