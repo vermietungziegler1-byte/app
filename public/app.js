@@ -6957,7 +6957,9 @@
     const r = s.ergebnis || { mails: [], gesamt: 0 };
     h += '<div class="p2-erkl">' + (r.erklaerung ? esc(r.erklaerung) : '') + '<span>'
       + (r.gesamt > r.mails.length ? 'die neuesten ' + r.mails.length + ' von ' + r.gesamt : r.mails.length + (r.mails.length === 1 ? ' Treffer' : ' Treffer'))
-      + (r.schlau ? '' : ' · nach den Wörtern gesucht') + '</span></div>';
+      + (r.schlau ? '' : ' · nach den Wörtern gesucht')
+      + (r.textGrenze ? ' · Mailtexte aus dem letzten Jahr, Betreff und Absender ganz' : '')
+      + (r.abgebrochen ? ' · nach 15 Sekunden beendet, kleinere Ordner nicht durchsucht' : '') + '</span></div>';
     if (!r.mails.length) return h + '<div class="p2-leer">Nichts gefunden. Anders formulieren oder weniger Wörter nehmen.</div>';
     return h + r.mails.map(function (m) { return pfZeileHtml(m, pfOrdnerVon(m.ordner) && pfOrdnerVon(m.ordner).spezial === 'gesendet', true); }).join('');
   }

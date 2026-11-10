@@ -522,31 +522,59 @@ app.get('/api/postfach/suche', nurAngemeldet, nurVerwalter, mitFehler(async func
     return res.json({ q: q, erklaerung: k.erklaerung || '', schlau: schlau, mails: [], gesamt: 0 });
   }
 
-  // Ordner: alle außer Papierkorb, Spam und Entwürfe — oder nur Eingang bzw. Gesendet
+  // Ordner: alle außer Papierkorb, Spam und Entwürfe — oder nur Eingang bzw. Gesendet. Die großen zuerst,
+  // damit bei Zeitnot wenigstens Posteingang, Gesendet und Archiv durchsucht sind
+  const RANG = { eingang: 0, gesendet: 1, archiv: 2 };
   const ordner = (await ordnerListe(false)).filter(function (o) {
     if (k.ordner === 'eingang') return o.spezial === 'eingang';
     if (k.ordner === 'gesendet') return o.spezial === 'gesendet';
     return ['papierkorb', 'spam', 'entwuerfe'].indexOf(o.spezial) === -1;
-  });
+  }).sort(function (a, b2) { return (RANG[a.spezial] != null ? RANG[a.spezial] : 9) - (RANG[b2.spezial] != null ? RANG[b2.spezial] : 9); });
   const zeit = {};
   if (/^\d{4}-\d{2}-\d{2}$/.test(k.seit || '')) zeit.since = new Date(k.seit + 'T00:00:00');
   if (/^\d{4}-\d{2}-\d{2}$/.test(k.bis || '')) { const d = new Date(k.bis + 'T00:00:00'); d.setDate(d.getDate() + 1); zeit.before = d; }
-  // Erst das schärfste Kriterium, dann der Rest — und nur in Ordnern, in denen das erste etwas fand
+  // Der Mailserver hat keinen Suchindex: Mailtexte durchsucht er Mail für Mail. Betreff und Absender also über alle
+  // Jahre, den Text nur im letzten Jahr — außer es ist ein Zeitraum genannt, dann in diesem
+  const textSeit = zeit.since || new Date(Date.now() - 365 * 86400000);
+  const textGrenze = !zeit.since;
+  // Schritte vom schärfsten zum weichsten; jeder weitere sucht nur noch in dem, was der vorige fand
   const schritte = [];
-  if (absender.length) schritte.push(oder(absender.map(function (a) { return { from: a }; })));
-  if (empfaenger.length) schritte.push(oder([].concat.apply([], empfaenger.map(function (a) { return [{ to: a }, { cc: a }]; }))));
+  if (absender.length) schritte.push({ kopf: oder(absender.map(function (a) { return { from: a }; })) });
+  if (empfaenger.length) schritte.push({ kopf: oder([].concat.apply([], empfaenger.map(function (a) { return [{ to: a }, { cc: a }]; }))) });
   gruppen.forEach(function (g) {
-    schritte.push(oder([].concat.apply([], g.map(function (w) { return [{ subject: w }, { from: w }, { body: w }]; }))));
+    schritte.push({
+      kopf: oder([].concat.apply([], g.map(function (w) { return [{ subject: w }, { from: w }]; }))),
+      text: oder(g.map(function (w) { return { body: w }; }))
+    });
   });
+  // UID-Menge kompakt für den Mailserver: 3,4,5,9 → 3:5,9
+  const menge = function (uids) {
+    const s = uids.slice().sort(function (a, b2) { return a - b2; }), teile = [];
+    for (let i = 0; i < s.length; i++) {
+      let j = i; while (j + 1 < s.length && s[j + 1] === s[j] + 1) j++;
+      teile.push(j > i ? s[i] + ':' + s[j] : String(s[i])); i = j;
+    }
+    return teile.join(',');
+  };
 
   const treffer = [];
-  let gesamt = 0;
+  const start = Date.now();
+  let gesamt = 0, abgebrochen = false;
   for (const o of ordner) {
+    if (Date.now() - start > 15000) { abgebrochen = true; break; }   // lieber rasch etwas zeigen als ewig suchen
     await imOrdner(o.pfad, async function (c) {
       if (!c.mailbox.exists) return;
       let uids = null;
       for (const s of schritte) {
-        const gefunden = await c.search(Object.assign({}, zeit, s), { uid: true }) || [];
+        const nur = uids === null ? {} : { uid: menge(uids) };
+        const imKopf = await c.search(Object.assign({}, zeit, nur, s.kopf), { uid: true }) || [];
+        let imText = [];
+        if (s.text) {
+          // Bei schon eingegrenzten Mails den Text ohne Zeitgrenze prüfen — das sind nur wenige
+          const wann = uids === null ? Object.assign({}, zeit, { since: textSeit }) : zeit;
+          imText = await c.search(Object.assign({}, wann, nur, s.text), { uid: true }) || [];
+        }
+        const gefunden = imKopf.concat(imText.filter(function (u) { return imKopf.indexOf(u) === -1; }));
         uids = uids === null ? gefunden : uids.filter(function (u) { return gefunden.indexOf(u) !== -1; });
         if (!uids.length) return;
       }
@@ -567,6 +595,7 @@ app.get('/api/postfach/suche', nurAngemeldet, nurVerwalter, mitFehler(async func
   treffer.sort(function (a, b2) { return new Date(b2.datum || 0) - new Date(a.datum || 0); });
   res.json({
     q: q, schlau: schlau, gesamt: gesamt, mails: treffer.slice(0, 80),
+    textGrenze: textGrenze && gruppen.length > 0, abgebrochen: abgebrochen,
     erklaerung: k.erklaerung || ('Mails ' + [
       gruppen.length ? 'mit ' + gruppen.map(function (g) { return '„' + g[0] + '“'; }).join(' und ') : '',
       absender.length ? 'von ' + absender[0] : ''
