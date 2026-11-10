@@ -947,7 +947,9 @@
         e.text = '\n\n---------- Weitergeleitete Nachricht ----------\nVon: ' + pfAdresse(m.von) + '\nDatum: ' + datum
           + '\nBetreff: ' + m.betreff + '\nAn: ' + m.an.map(pfAdresse).join(', ') + '\n\n' + (m.text || '');
       } else {
-        const zurueck = ((m.antwortAn && m.antwortAn.length) ? m.antwortAn : [m.von]).filter(Boolean);
+        // Eigene Mail (z. B. aus „Gesendet“) beantworten: an die damaligen Empfänger, nicht an sich selbst
+        const eigene = m.von && String(m.von.adresse || '').toLowerCase() === ich;
+        const zurueck = (eigene ? m.an : ((m.antwortAn && m.antwortAn.length) ? m.antwortAn : [m.von])).filter(Boolean);
         e.an = zurueck.map(pfAdresse).join(', ');
         if (art === 'allen') {
           e.cc = m.an.concat(m.cc).filter(function (a) {
