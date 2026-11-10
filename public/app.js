@@ -91,8 +91,24 @@
     if ((ev.key === 'q' || ev.key === 'n') && !imFeld && !ev.ctrlKey && !ev.metaKey && !ev.altKey && todoist.verbunden) {
       ev.preventDefault(); tdSchnell();
     }
+    // Mailkonto am PC: Pfeiltasten wählen, Entf löscht — wie in Apple Mail und Outlook
+    if (!imFeld && ansicht === 'post' && pf.pfad && root.querySelector('.post2') && pf.listen[pf.pfad]) {
+      const mails = pf.listen[pf.pfad].mails;
+      if ((ev.key === 'ArrowDown' || ev.key === 'ArrowUp') && mails.length) {
+        ev.preventDefault();
+        let i = mails.findIndex(function (m) { return m.uid === pf.gewaehlt; });
+        i = Math.max(0, Math.min(mails.length - 1, i + (ev.key === 'ArrowDown' ? 1 : -1)));
+        pf.gewaehlt = mails[i].uid;
+        pfMailLaden(pf.pfad, pf.gewaehlt);
+        render();
+        const zeile = root.querySelector('.p2-mail.an');
+        if (zeile) zeile.scrollIntoView({ block: 'nearest' });
+        return;
+      }
+      if ((ev.key === 'Delete' || ev.key === 'Backspace') && pf.gewaehlt) { ev.preventDefault(); pfAktion('loeschen'); return; }
+    }
     // Post am PC: mit den Pfeiltasten durch die Mails
-    if ((ev.key === 'ArrowDown' || ev.key === 'ArrowUp') && !imFeld && ansicht === 'post' && postListe && postListe.length && root.querySelector('.post2')) {
+    if ((ev.key === 'ArrowDown' || ev.key === 'ArrowUp') && !imFeld && ansicht === 'post' && !pf.pfad && postListe && postListe.length && root.querySelector('.post2')) {
       ev.preventDefault();
       let i = postListe.findIndex(function (m) { return m.id === postGewaehlt; });
       i = Math.max(0, Math.min(postListe.length - 1, i + (ev.key === 'ArrowDown' ? 1 : -1)));
@@ -799,6 +815,188 @@
       .then(function () { if (ansicht === 'post' && postGewaehlt === id && !modal) render(); });
   }
 
+  // =================================================================
+  // Mailkonto mzer.de (IMAP/SMTP über den Server): Ordner wie in Outlook,
+  // Mails lesen, schreiben, beantworten, weiterleiten, verschieben, löschen.
+  // Nur für den Verwalter. pf.pfad: '' = „Zugeordnet“ (die Gmail-Treffer), sonst ein Ordner.
+  // =================================================================
+  function pfLeer() { return { status: null, laedt: false, ordner: null, fehler: null, pfad: null, listen: {}, gewaehlt: null, mails: {} }; }
+  let pf = pfLeer();
+
+  function pfBereit() { return !!(pf.status && pf.status.eingerichtet); }
+  function pfStart() {
+    if (nutzerRolle !== 'verwalter' || pf.status || pf.laedt) return;
+    pf.laedt = true;
+    api('postfach').then(function (s) { pf.status = s; })
+      .catch(function () { pf.status = { eingerichtet: false }; })
+      .then(function () {
+        pf.laedt = false;
+        if (pfBereit()) return pfOrdnerLaden();
+        if (pf.pfad === null) pf.pfad = '';
+      })
+      .then(function () { if ((ansicht === 'post' || ansicht === 'heute') && !modal) render(); });
+  }
+  function pfOrdnerLaden() {
+    return api('postfach/ordner').then(function (l) {
+      pf.ordner = l; pf.fehler = null;
+      if (pf.pfad === null) pf.pfad = (l[0] && l[0].pfad) || 'INBOX';
+      if (pf.pfad) return pfListeLaden(pf.pfad);
+    }).catch(function (e) { pf.fehler = e.message; if (pf.pfad === null) pf.pfad = ''; });
+  }
+  function pfListeLaden(pfad, aelter) {
+    const alt = pf.listen[pfad];
+    if (alt && alt.laedt) return Promise.resolve();
+    const vor = aelter && alt ? alt.aeltere : 0;
+    pf.listen[pfad] = Object.assign({ mails: [] }, alt || {}, { laedt: true });
+    return api('postfach/mails?ordner=' + encodeURIComponent(pfad) + (vor ? '&vor=' + vor : ''))
+      .then(function (r) {
+        pf.listen[pfad] = { mails: (aelter && alt ? alt.mails : []).concat(r.mails), gesamt: r.gesamt, aeltere: r.aeltere, laedt: false, wann: Date.now() };
+      })
+      .catch(function (e) { pf.listen[pfad] = { mails: (alt && alt.mails) || [], fehler: e.message, laedt: false, wann: Date.now() }; });
+  }
+  function pfZeile(pfad, uid) { const l = pf.listen[pfad]; return l ? l.mails.find(function (m) { return m.uid === uid; }) : null; }
+  function pfOrdnerVon(pfad) { return (pf.ordner || []).find(function (o) { return o.pfad === pfad; }) || null; }
+  function pfSpezialPfad(art) { const o = (pf.ordner || []).find(function (x) { return x.spezial === art; }); return o ? o.pfad : null; }
+  function pfMailLaden(pfad, uid) {
+    const k = pfad + '\n' + uid;
+    if (pf.mails[k]) return;
+    pf.mails[k] = { laedt: true };
+    api('postfach/mail?ordner=' + encodeURIComponent(pfad) + '&uid=' + uid)
+      .then(function (m) {
+        pf.mails[k] = m;
+        const z = pfZeile(pfad, uid), o = pfOrdnerVon(pfad);
+        if (z && !z.gelesen) { z.gelesen = true; if (o && o.ungelesen) o.ungelesen--; }
+      })
+      .catch(function (e) { pf.mails[k] = { fehler: e.message }; })
+      .then(function () { if (ansicht === 'post') render(); });
+  }
+  function pfAdresse(a) {
+    if (!a) return '';
+    return a.name && a.adresse ? '"' + a.name.replace(/"/g, '') + '" <' + a.adresse + '>' : (a.adresse || a.name || '');
+  }
+  function pfName(a) { return a ? (a.name || a.adresse || '') : ''; }
+  function pfUngelesen() { const o = (pf.ordner || []).find(function (x) { return x.spezial === 'eingang'; }); return o ? o.ungelesen : 0; }
+  // Beim Auffrischen nur die neueste Seite holen — wer gerade ältere liest, behält sie
+  function pfAuffrischen() {
+    if (!pfBereit()) return Promise.resolve();
+    return api('postfach/ordner').then(function (l) { pf.ordner = l; pf.fehler = null; })
+      .catch(function (e) { pf.fehler = e.message; })
+      .then(function () {
+        const l = pf.pfad ? pf.listen[pf.pfad] : null;
+        if (pf.pfad && (!l || l.mails.length <= 50)) return pfListeLaden(pf.pfad);
+      });
+  }
+
+  // Löschen, verschieben, ungelesen, markieren — für die gewählte Mail
+  function pfAktion(aktion, ziel) {
+    const pfad = pf.pfad, uid = pf.gewaehlt;
+    if (!pfad || !uid) return;
+    const o = pfOrdnerVon(pfad);
+    function ausfuehren() {
+      api('postfach/aktion', { method: 'POST', body: { ordner: pfad, uids: [uid], aktion: aktion, ziel: ziel } })
+        .then(function (r) {
+          const z = pfZeile(pfad, uid);
+          const l = pf.listen[pfad];
+          if (aktion === 'loeschen' || aktion === 'verschieben') {
+            const i = l ? l.mails.findIndex(function (m) { return m.uid === uid; }) : -1;
+            if (z && !z.gelesen && o && o.ungelesen) o.ungelesen--;
+            if (i >= 0) { l.mails.splice(i, 1); if (l.gesamt) l.gesamt--; }
+            const naechste = l && (l.mails[i] || l.mails[i - 1]);
+            pf.gewaehlt = (!mobil && window.innerWidth >= 901 && naechste) ? naechste.uid : null;
+            if (pf.gewaehlt) pfMailLaden(pfad, pf.gewaehlt);
+            if (modal && (modal.kind === 'pf-mail' || modal.kind === 'pf-ziel')) modal = null;
+            const wohin = ziel || pfSpezialPfad('papierkorb');
+            if (wohin) delete pf.listen[wohin];
+            const zo = wohin ? pfOrdnerVon(wohin) : null;
+            if (zo && z && !z.gelesen && !r.endgueltig) zo.ungelesen++;
+            toast(aktion === 'verschieben' ? 'Verschoben nach „' + ((pfOrdnerVon(ziel) || {}).name || ziel) + '“'
+              : (r.endgueltig ? 'Endgültig gelöscht' : 'In den Papierkorb gelegt'));
+          } else if (z) {
+            if (aktion === 'ungelesen') {
+              z.gelesen = false; if (o) o.ungelesen++;
+              delete pf.mails[pfad + '\n' + uid];
+              pf.gewaehlt = null;
+              if (modal && modal.kind === 'pf-mail') modal = null;
+            }
+            if (aktion === 'markieren') z.markiert = true;
+            if (aktion === 'entmarkieren') z.markiert = false;
+          }
+          render();
+        })
+        .catch(function (e) { toast(e.message); });
+    }
+    if (aktion === 'loeschen' && o && o.spezial === 'papierkorb') {
+      dialog({ titel: 'Endgültig löschen?', text: 'Die Mail liegt schon im Papierkorb. Danach ist sie auch in Outlook weg und lässt sich nicht zurückholen.',
+        knoepfe: [{ label: 'Abbrechen', wert: false }, { label: 'Endgültig löschen', wert: true, art: 'primaer' }] })
+        .then(function (r) { if (r.wert) ausfuehren(); });
+      return;
+    }
+    ausfuehren();
+  }
+
+  // Schreiben: neu, antworten, allen antworten, weiterleiten — vorbefüllt wie in Outlook
+  function pfSchreiben(art) {
+    const m = art === 'neu' ? null : pf.mails[pf.pfad + '\n' + pf.gewaehlt];
+    if (art !== 'neu' && (!m || m.laedt || m.fehler)) return;
+    const ich = String((pf.status && pf.status.benutzer) || '').toLowerCase();
+    const e = { an: '', cc: '', betreff: '', text: '' };
+    if (m) {
+      const datum = m.datum ? new Date(m.datum).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' }) : '';
+      if (art === 'weiter') {
+        e.betreff = /^(wg|fwd?):/i.test(m.betreff) ? m.betreff : 'WG: ' + m.betreff;
+        e.text = '\n\n---------- Weitergeleitete Nachricht ----------\nVon: ' + pfAdresse(m.von) + '\nDatum: ' + datum
+          + '\nBetreff: ' + m.betreff + '\nAn: ' + m.an.map(pfAdresse).join(', ') + '\n\n' + (m.text || '');
+      } else {
+        const zurueck = ((m.antwortAn && m.antwortAn.length) ? m.antwortAn : [m.von]).filter(Boolean);
+        e.an = zurueck.map(pfAdresse).join(', ');
+        if (art === 'allen') {
+          e.cc = m.an.concat(m.cc).filter(function (a) {
+            return a.adresse && a.adresse.toLowerCase() !== ich && !zurueck.some(function (x) { return x.adresse === a.adresse; });
+          }).map(pfAdresse).join(', ');
+        }
+        e.betreff = /^(aw|re):/i.test(m.betreff) ? m.betreff : 'AW: ' + m.betreff;
+        e.text = '\n\nAm ' + datum + ' schrieb ' + pfName(m.von) + ':\n'
+          + String(m.text || '').split('\n').map(function (z) { return '> ' + z; }).join('\n');
+      }
+    }
+    modal = { kind: 'pf-schreiben', art: art, bezug: m ? { ordner: pf.pfad, uid: pf.gewaehlt } : null,
+      anhaenge: art === 'weiter' && m ? m.anhaenge.length : 0, entwurf: e };
+    render();
+    fensterGeoeffnet();
+    const feld = root.querySelector(art === 'neu' || art === 'weiter' ? '#pf-an' : '#pf-text');
+    if (feld) { feld.focus(); if (feld.id === 'pf-text') { feld.setSelectionRange(0, 0); feld.scrollTop = 0; } }
+  }
+  function pfSenden() {
+    modalEntwurfMerken();
+    const e = modal.entwurf || {};
+    if (!String(e.an || '').trim()) { toast('Bitte einen Empfänger eintragen'); return; }
+    modal.sendet = true; render();
+    const war = modal;
+    api('postfach/senden', { method: 'POST', body: { an: e.an, cc: e.cc, betreff: e.betreff, text: e.text, art: war.art, bezug: war.bezug } })
+      .then(function (r) {
+        const z = war.bezug ? pfZeile(war.bezug.ordner, war.bezug.uid) : null;
+        if (z && war.art !== 'weiter') z.beantwortet = true;
+        if (modal === war) modal = null;
+        const g = pfSpezialPfad('gesendet');
+        if (g) delete pf.listen[g];
+        toast(r.abgelegt ? 'Gesendet' : 'Gesendet — die Kopie in „Gesendet“ hat nicht geklappt');
+        render();
+      })
+      .catch(function (fehler) { war.sendet = false; toast(fehler.message); render(); });
+  }
+  // Adressen zum Vorschlagen: Mieter, Interessenten und wer zuletzt geschrieben hat
+  function pfAdressListe() {
+    const gesehen = {}, liste = [];
+    const dazu = function (text) {
+      const m = String(text || '').match(/[^\s<>,;"]+@[^\s<>,;"]+\.[a-z]{2,}/i);
+      if (m && !gesehen[m[0].toLowerCase()]) { gesehen[m[0].toLowerCase()] = true; liste.push(m[0]); }
+    };
+    (data && data.objects || []).forEach(function (o) { o.units.forEach(function (x) { dazu(x.contact); }); });
+    ((data && data.interessenten) || []).forEach(function (i) { dazu(i.kontakt); });
+    Object.keys(pf.listen).forEach(function (k) { pf.listen[k].mails.forEach(function (m) { if (m.von) dazu(m.von.adresse); }); });
+    return liste.slice(0, 300);
+  }
+
   async function googleLaden() {
     try { google = await api('google'); } catch (e) { google = { eingerichtet: false, verbunden: false }; }
   }
@@ -1293,6 +1491,12 @@
   function aufgabeOeffnen(oid, tid) { tdOeffnen(tid); }
   // Was gerade im Fenster steht, vor einem Neuaufbau festhalten
   function modalEntwurfMerken() {
+    // Mail schreiben: Eingetipptes übersteht jeden Neuaufbau
+    if (modal && modal.kind === 'pf-schreiben') {
+      const an = root.querySelector('.modal[data-fenster="pf-schreiben"] #pf-an');
+      if (an) modal.entwurf = { an: an.value, cc: val('pf-cc'), betreff: val('pf-betreff'), text: val('pf-text') };
+      return;
+    }
     if (modal && modal.entwurf && modal.kind.indexOf('kauf') === 0) {
       // nur aus dem Fenster derselben Art, sonst landen Felder des vorigen Fensters im neuen
       root.querySelectorAll('.modal[data-fenster="' + modal.kind + '"] [data-kf]').forEach(function (el) {
@@ -3783,7 +3987,7 @@
       + eintrag('heute', 'Heute', alleAufgaben ? String(heuteFaelligZahl() || '') : '')
       + eintrag('aufgaben', 'Aufgaben', alleAufgaben ? String(alleAufgaben.length || '') : '')
       + eintrag('anfragen', 'Anfragen', neu ? String(neu) : '', true)
-      + eintrag('post', 'Post', postListe && postListe.length ? String(postListe.length) : '')
+      + eintrag('post', 'Post', pfBereit() ? String(pfUngelesen() || '') : (postListe && postListe.length ? String(postListe.length) : ''))
       + '<div class="al-gruppe">Bestand</div>'
       + eintrag('objekte', 'Objekte')
       + eintrag('mieten', 'Mieten', miete.zahl ? miete.zahl + ' offen' : '')
@@ -3882,6 +4086,7 @@
         // Am PC stehen alle Bereiche als Reiter oben, am Handy fünf unten in der Leiste
         + (mobil
             ? '<div class="sl-gruppe"><span>Weitere Bereiche</span>'
+              + eintrag('zu-post', 'Post', pfBereit() && pfUngelesen() ? String(pfUngelesen()) : '')
               + eintrag('zu-interessenten', 'Interessenten')
               + eintrag('zu-anfragen', 'Anfragen', anfNeuZahl() ? String(anfNeuZahl()) : '')
               + eintrag('zu-rechnungen', 'Abrechnungen')
@@ -3902,6 +4107,7 @@
         + '<div class="sl-gruppe"><span>Verbindungen</span>'
         + eintrag('todoist', 'Todoist', todoist.verbunden ? 'verbunden' : 'offen')
         + eintrag('google', 'Postfach', google.verbunden ? 'verbunden' : 'offen')
+        + (nutzerRolle === 'verwalter' ? eintrag('pf-einrichten', 'Mailkonto mzer.de', pfBereit() ? 'verbunden' : 'offen') : '')
         + eintrag('gkal', 'Kalender', gkal.eingerichtet ? 'verbunden' : 'offen')
         + eintrag('push', 'Mitteilungen', pushAbo ? 'aktiv' : 'aus')
         + eintrag('stimme', 'Vorlesestimme', stimme.verbunden ? 'verbunden' : 'Gerät')
@@ -3957,7 +4163,7 @@
 
     // ---- Eigene Seite: Post ----
     if (ansicht === 'post') {
-      if (google.verbunden) {
+      if (google.verbunden || nutzerRolle === 'verwalter') {
         html += postAbschnitt();
       } else {
         html += '<div class="tafel"><h3>Post</h3>'
@@ -4143,12 +4349,15 @@
         postLeise = true;
         postLaden().then(function () { if (ansicht === 'heute' && !modal) render(); });
       }
+      if (istHeute && nutzerRolle === 'verwalter') pfStart();   // ungelesene Mails im Posteingang für die Kachel
       const blickHtml = istHeute
         ? '<div class="blick">'
           + (mobil ? kachel('zu-aufgaben', 'var(--messing)', 'aufgaben', alleAufgaben ? heuteFaelligZahl() : '–', 'Für heute') : '')
           + kachel('zu-mieten', '#30d158', 'mieten', miete.zahl, 'Mieten offen', mobil ? '' : (miete.zahl ? money(miete.summe) + ' stehen noch aus' : 'alle da'))
           + kachel('zu-anfragen', '#ff453a', 'anfragen', neuAnf, 'Neue Anfragen', mobil ? '' : (neuAnf ? 'warten auf dich' : 'nichts Neues'))
-          + kachel('zu-post', '#ff9f0a', 'post', postListe ? postListe.length : '–', 'Post', mobil ? '' : 'zugeordnete Mails')
+          + (pfBereit()
+              ? kachel('zu-post', '#ff9f0a', 'post', pfUngelesen(), 'Ungelesen', mobil ? '' : 'im Posteingang')
+              : kachel('zu-post', '#ff9f0a', 'post', postListe ? postListe.length : '–', 'Post', mobil ? '' : 'zugeordnete Mails'))
           + '</div>'
         : '';
 
@@ -6588,13 +6797,172 @@
           : '<span class="p2-hinweis">wird geladen …</span>\n\n' + esc(htmlZeichenWeg(m.auszug || '')))
       + '</div></div>';
 
-    return '<div class="post2"><div class="p2-liste">' + liste + '</div><div class="p2-lese">' + lese + '</div></div>';
+    return { liste: liste, lese: lese };
+  }
+
+  // ---- Mailkonto: Bausteine für PC und Handy ----
+  const PF_SYM = {
+    eingang: '<path d="M4 13h4l2 3h4l2-3h4"/><path d="M4 13V7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/>',
+    gesendet: '<path d="M21 3 10 14"/><path d="M21 3 14.5 21l-4.5-7-7-4.5z"/>',
+    entwuerfe: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+    papierkorb: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
+    spam: '<path d="M12 3 3 7v5c0 5 4 8 9 9 5-1 9-4 9-9V7z"/><path d="M12 8v4M12 16h.01"/>',
+    archiv: '<rect x="3" y="4" width="18" height="5" rx="1"/><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"/>',
+    zugeordnet: '<path d="M5 21V5a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v16"/><path d="M15 10h3a1 1 0 0 1 1 1v10M3 21h18M8.5 8h3M8.5 12h3M8.5 16h3"/>',
+    ordner: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    antworten: '<path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 6 6v4"/>',
+    weiter: '<path d="m15 14 5-5-5-5"/><path d="M20 9H10a6 6 0 0 0-6 6v4"/>',
+    stift: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>'
+  };
+  function pfSym(art, groesse) {
+    return '<svg viewBox="0 0 24 24" width="' + (groesse || 17) + '" height="' + (groesse || 17) + '" fill="none" stroke="currentColor" stroke-width="2" '
+      + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (PF_SYM[art] || PF_SYM.ordner) + '</svg>';
+  }
+  function pfZeit(w, lang) {
+    const d = w ? new Date(w) : null;
+    if (!d || isNaN(d)) return '';
+    if (lang) return d.toLocaleString('de-DE', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const heute0 = new Date(); heute0.setHours(0, 0, 0, 0);
+    if (d >= heute0) return d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+    if (d >= new Date(heute0.getTime() - 86400000)) return 'Gestern';
+    if (d >= new Date(heute0.getTime() - 6 * 86400000)) return d.toLocaleDateString('de-DE', { weekday: 'long' });
+    return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' });
+  }
+  function pfGroesse(b) { return b > 1048576 ? (b / 1048576).toLocaleString('de-DE', { maximumFractionDigits: 1 }) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB'; }
+  function pfKuerzel(name) {
+    return String(name || '').replace(/[^A-Za-zÄÖÜäöüß ]/g, '').split(/\s+/).filter(Boolean).slice(0, 2)
+      .map(function (w) { return w.charAt(0).toUpperCase(); }).join('') || '✉';
+  }
+
+  function pfOrdnerSpalte() {
+    const knopf = function (pfad, name, art, zahl, ebene) {
+      return '<button class="p2-of' + (pf.pfad === pfad ? ' an' : '') + '" data-act="pf-ordner" data-pfad="' + esc(pfad) + '"'
+        + (ebene ? ' style="padding-left:' + (10 + ebene * 14) + 'px"' : '') + '>'
+        + pfSym(art) + '<span class="p2-on">' + esc(name) + '</span>' + (zahl ? '<span class="p2-oz">' + zahl + '</span>' : '') + '</button>';
+    };
+    let h = '<div class="p2-ordner">'
+      + '<button class="primary p2-neu" data-act="pf-neu"' + (pfBereit() ? '' : ' disabled') + '>' + pfSym('stift', 15) + 'Neue Mail</button>';
+    if (google.verbunden) h += '<div class="p2-og">Aus deinen Daten</div>' + knopf('', 'Zugeordnet', 'zugeordnet', postListe ? postListe.length : '');
+    h += '<div class="p2-og">' + esc((pf.status && pf.status.benutzer) || 'Mailkonto') + '</div>';
+    if (!pf.status) h += '<div class="p2-ohne">wird geladen …</div>';
+    else if (!pfBereit()) h += '<div class="p2-ohne">Dein Mailkonto ist noch nicht verbunden.<button class="tiny" data-act="pf-einrichten">Verbinden</button></div>';
+    else if (!pf.ordner) h += '<div class="p2-ohne">' + (pf.fehler ? esc(pf.fehler) + '<button class="tiny" data-act="pf-neu-laden">Nochmal</button>' : 'Ordner werden geladen …') + '</div>';
+    else h += pf.ordner.map(function (o) { return knopf(o.pfad, o.name, o.spezial || 'ordner', o.ungelesen, o.ebene); }).join('');
+    return h + '</div>';
+  }
+
+  function pfListeHtml() {
+    const o = pfOrdnerVon(pf.pfad) || { name: pf.pfad, spezial: '' };
+    const l = pf.listen[pf.pfad];
+    let h = '<div class="p2-kopf"><h2>' + esc(o.name) + (o.ungelesen ? ' <span class="p2-anzahl">' + o.ungelesen + ' ungelesen</span>' : '') + '</h2>'
+      + '<div class="p2-zeit"><span class="p2-stand">' + (l && l.gesamt != null ? l.gesamt + (l.gesamt === 1 ? ' Mail' : ' Mails') : '') + '</span>'
+      + '<button class="p2-frisch" data-act="pf-frisch" title="Neu abrufen">↻</button></div></div>';
+    if (!l || (l.laedt && !l.mails.length)) return h + '<div class="p2-leer">wird geladen …</div>';
+    if (l.fehler && !l.mails.length) return h + '<div class="p2-leer">' + esc(l.fehler) + '</div>';
+    if (!l.mails.length) return h + '<div class="p2-leer">Keine Mails in diesem Ordner.</div>';
+    const anEmpfaenger = o.spezial === 'gesendet' || o.spezial === 'entwuerfe';
+    h += l.mails.map(function (m) {
+      const wer = anEmpfaenger ? 'An: ' + (m.an.map(pfName).join(', ') || '—') : (pfName(m.von) || '—');
+      return '<div class="p2-mail' + (m.uid === pf.gewaehlt ? ' an' : '') + (m.gelesen ? '' : ' neu') + '" data-act="pf-waehlen" data-uid="' + m.uid + '">'
+        + '<div class="p2-o">' + (m.gelesen ? '' : '<i class="p2-punkt"></i>') + '<span class="p2-von">' + esc(wer) + '</span>'
+        + (m.markiert ? '<span class="p2-flagge" title="markiert">⚑</span>' : '')
+        + (m.anhang ? '<span class="p2-clip" title="mit Anhang">📎</span>' : '')
+        + '<span class="p2-wann num">' + pfZeit(m.datum) + '</span></div>'
+        + '<div class="p2-betreff">' + (m.beantwortet ? '<span class="p2-bea" title="beantwortet">↩</span>' : '') + esc(m.betreff) + '</div></div>';
+    }).join('');
+    if (l.aeltere) h += '<button class="p2-mehr" data-act="pf-mehr"' + (l.laedt ? ' disabled' : '') + '>' + (l.laedt ? 'wird geladen …' : 'Ältere Mails laden') + '</button>';
+    return h;
+  }
+
+  function pfLeseHtml() {
+    if (!pf.gewaehlt) return '<div class="p2-leer gross">' + pfSym('eingang', 40) + '<span>Keine Mail ausgewählt</span></div>';
+    const m = pf.mails[pf.pfad + '\n' + pf.gewaehlt];
+    const z = pfZeile(pf.pfad, pf.gewaehlt) || {};
+    const bereit = m && !m.laedt && !m.fehler;
+    const leiste = '<div class="p2-leiste">'
+      + '<button data-act="pf-antworten"' + (bereit ? '' : ' disabled') + ' title="Antworten">' + pfSym('antworten', 15) + '<span class="p2-kt">Antworten</span></button>'
+      + '<button data-act="pf-allen"' + (bereit ? '' : ' disabled') + ' title="Allen antworten"><span class="p2-kt">Allen</span></button>'
+      + '<button data-act="pf-weiter"' + (bereit ? '' : ' disabled') + ' title="Weiterleiten">' + pfSym('weiter', 15) + '<span class="p2-kt">Weiterleiten</span></button>'
+      + '<span class="p2-platz"></span>'
+      + '<button class="p2-ic" data-act="pf-aufgabe"' + (bereit ? '' : ' disabled') + ' title="Als Aufgabe anlegen" aria-label="Als Aufgabe anlegen">' + sym('aufgaben', 16) + '</button>'
+      + '<button class="p2-ic' + (z.markiert ? ' an' : '') + '" data-act="pf-markieren" title="' + (z.markiert ? 'Markierung entfernen' : 'Markieren') + '" aria-label="Markieren">⚑</button>'
+      + '<button class="p2-ic" data-act="pf-ungelesen" title="Als ungelesen markieren" aria-label="Als ungelesen markieren"><i class="p2-punkt"></i></button>'
+      + '<button class="p2-ic" data-act="pf-ziel" title="In einen Ordner verschieben" aria-label="Verschieben">' + pfSym('ordner', 16) + '</button>'
+      + '<button class="p2-ic weg" data-act="pf-loeschen" title="Löschen (Entf)" aria-label="Löschen">' + MUELL_SYM + '</button>'
+      + '</div>';
+    if (!bereit) {
+      return leiste + '<div class="p2-inhalt"><h2 class="p2-titel">' + esc(z.betreff || '') + '</h2>'
+        + '<div class="p2-text"><span class="p2-hinweis">' + (m && m.fehler ? esc(m.fehler) : 'wird geladen …') + '</span></div></div>';
+    }
+    const frist = fristErkennen(m.text);
+    return leiste + '<div class="p2-inhalt">'
+      + '<h2 class="p2-titel">' + esc(m.betreff) + '</h2>'
+      + '<div class="p2-absender"><span class="p2-av">' + esc(pfKuerzel(pfName(m.von))) + '</span>'
+      + '<div class="p2-wer"><div class="p2-name">' + esc(pfName(m.von)) + '</div>'
+      + (m.von && m.von.name ? '<div class="p2-adresse">' + esc(m.von.adresse) + '</div>' : '')
+      + '<div class="p2-adresse">An: ' + esc(m.an.map(pfName).join(', ') || '—') + (m.cc.length ? ' · Cc: ' + esc(m.cc.map(pfName).join(', ')) : '') + '</div></div>'
+      + '<div class="p2-datum">' + esc(pfZeit(m.datum, true)) + '</div></div>'
+      + (m.anhaenge.length ? '<div class="p2-anhaenge">' + m.anhaenge.map(function (a) {
+          return '<a class="p2-anhang" href="' + esc('/api/postfach/anhang?ordner=' + encodeURIComponent(pf.pfad) + '&uid=' + m.uid + '&nr=' + a.nr) + '" download="' + esc(a.name) + '">'
+            + '📎 <b>' + esc(a.name) + '</b> <span>' + pfGroesse(a.groesse) + '</span></a>';
+        }).join('') + '</div>' : '')
+      + (frist
+          ? '<div class="p2-frist">' + sym('aufgaben', 18)
+            + '<div class="p2-frist-text"><b>Frist erkannt: ' + esc(frist.text) + '</b><span>Aufgabe „' + esc(m.betreff) + '“ mit diesem Datum anlegen</span></div>'
+            + '<button class="primary tiny" data-act="pf-aufgabe" data-faellig="' + frist.iso + '">Anlegen</button></div>'
+          : '')
+      + '<div class="p2-text">' + esc(m.text || '') + '</div></div>';
+  }
+
+  // PC: drei Spalten wie Apple Mail — Ordner, Liste, Mail
+  function postDreiHtml() {
+    const verwalter = nutzerRolle === 'verwalter';
+    let liste = '', lese = '';
+    if (verwalter && pf.pfad) {
+      liste = pfListeHtml(); lese = pfLeseHtml();
+    } else if (verwalter && pf.pfad === null) {
+      liste = '<div class="p2-kopf"><h2>Post</h2></div><div class="p2-leer">wird geladen …</div>';
+    } else if (!google.verbunden) {
+      liste = '<div class="p2-kopf"><h2>Zugeordnet</h2></div><div class="p2-leer">Das Google-Postfach ist nicht verbunden.'
+        + '<br><button class="tiny" data-act="google" style="margin-top:10px">Verbinden</button></div>';
+    } else if (!postListe) {
+      liste = '<div class="p2-kopf"><h2>Zugeordnet</h2></div><div class="p2-leer">wird geladen …</div>';
+    } else if (!postListe.length) {
+      liste = '<div class="p2-kopf"><h2>Zugeordnet</h2></div><div class="p2-leer">Keine Mail passt gerade zu deinen Objekten, Mietern oder Interessenten.</div>' + postFussHtml();
+    } else {
+      const t = post2Html(); liste = t.liste; lese = t.lese;
+    }
+    return '<div class="post2' + (verwalter ? ' mit-ordnern' : '') + '">' + (verwalter ? pfOrdnerSpalte() : '')
+      + '<div class="p2-liste">' + liste + '</div><div class="p2-lese">' + lese + '</div></div>';
+  }
+
+  // Handy und Tablet: Ordner als Leiste oben, darunter die Liste; eine Mail öffnet sich als Fenster
+  function pfLeisteHandy() {
+    const chip = function (pfad, name, zahl) {
+      return '<button class="pf-chip' + (pf.pfad === pfad ? ' an' : '') + '" data-act="pf-ordner" data-pfad="' + esc(pfad) + '">'
+        + esc(name) + (zahl ? ' <span>' + zahl + '</span>' : '') + '</button>';
+    };
+    return '<div class="pf-handykopf"><div class="pf-chips">'
+      + (google.verbunden ? chip('', 'Zugeordnet', '') : '')
+      + (pfBereit() && pf.ordner ? pf.ordner.map(function (o) { return chip(o.pfad, o.name, o.ungelesen); }).join('') : '')
+      + '</div>'
+      + (pfBereit() ? '<button class="primary tiny" data-act="pf-neu">' + pfSym('stift', 14) + ' Neu</button>'
+          : (pf.status ? '<button class="tiny" data-act="pf-einrichten">Mailkonto verbinden</button>' : ''))
+      + '</div>';
+  }
+  function pfHandyHtml() {
+    return '<div class="tafel pf-handy">' + pfLeisteHandy() + '<div class="pf-handyliste">' + pfListeHtml() + '</div></div>';
   }
 
   function postAbschnitt() {
     let html = '';
-    // Am PC mit Seitenleiste: zweispaltig wie Apple Mail
-    if (google.verbunden && postListe && postListe.length && !mobil && window.innerWidth >= 901) return post2Html();
+    const verwalter = nutzerRolle === 'verwalter';
+    if (verwalter) pfStart();
+    // Am PC mit Seitenleiste: drei Spalten wie Apple Mail
+    if (!mobil && window.innerWidth >= 901 && (google.verbunden || verwalter)) return postDreiHtml();
+    // Handy und Tablet: ein Ordner aus dem Mailkonto
+    if (verwalter && pf.pfad) return pfHandyHtml();
+    if (verwalter) html += '<div class="tafel pf-handy nur-kopf">' + pfLeisteHandy() + '</div>';
     // ---- Post ----
     if (google.verbunden) {
       html += '<div class="tafel"><h3>Post <span class="anzahl">'
@@ -7042,6 +7410,49 @@
     } else if (modal.kind === 'suche') {
       body = '<div class="such-feld"><input type="search" id="suche-q" placeholder="Suchen …" autocomplete="off" value="' + esc(modal.q || '') + '"></div>'
         + '<div id="suche-treffer">' + sucheTrefferHtml(modal.q) + '</div>';
+    } else if (modal.kind === 'pf-schreiben') {
+      const e = modal.entwurf || {};
+      const s = pf.status || {};
+      body = '<h2>' + ({ neu: 'Neue Mail', antworten: 'Antworten', allen: 'Allen antworten', weiter: 'Weiterleiten' }[modal.art] || 'Mail') + '</h2>'
+        + '<div class="pf-von">Von <b>' + esc(s.name || '') + '</b> &lt;' + esc(s.benutzer || '') + '&gt;</div>'
+        + '<datalist id="pf-adressen">' + pfAdressListe().map(function (a) { return '<option value="' + esc(a) + '">'; }).join('') + '</datalist>'
+        + '<div class="pf-felder">'
+        + '<label><span>An</span><input type="text" id="pf-an" list="pf-adressen" autocomplete="off" value="' + esc(e.an || '') + '" placeholder="name@beispiel.de, weitere mit Komma"></label>'
+        + '<label><span>Cc</span><input type="text" id="pf-cc" list="pf-adressen" autocomplete="off" value="' + esc(e.cc || '') + '"></label>'
+        + '<label><span>Betreff</span><input type="text" id="pf-betreff" value="' + esc(e.betreff || '') + '"></label>'
+        + '</div>'
+        + '<textarea id="pf-text" class="pf-text" rows="16">' + esc(e.text || '') + '</textarea>'
+        + (modal.anhaenge ? '<div class="hint">📎 ' + modal.anhaenge + (modal.anhaenge === 1 ? ' Anhang wird' : ' Anhänge werden') + ' mitgeschickt.</div>' : '')
+        + '<div class="modal-actions"><button data-act="close">Verwerfen</button><div class="spacer"></div>'
+        + '<button class="primary" data-act="pf-senden"' + (modal.sendet ? ' disabled' : '') + '>' + (modal.sendet ? 'Wird gesendet …' : 'Senden') + '</button></div>';
+    } else if (modal.kind === 'pf-mail') {
+      body = '<div class="pf-fenstermail">' + pfLeseHtml() + '</div>';
+    } else if (modal.kind === 'pf-ziel') {
+      body = '<h2>Verschieben nach …</h2><div class="pf-ziele">'
+        + (pf.ordner || []).filter(function (o) { return o.pfad !== pf.pfad; }).map(function (o) {
+            return '<button class="pf-zielknopf" data-act="pf-verschieben" data-pfad="' + esc(o.pfad) + '"'
+              + (o.ebene ? ' style="padding-left:' + (14 + o.ebene * 16) + 'px"' : '') + '>'
+              + pfSym(o.spezial || 'ordner') + '<span>' + esc(o.name) + '</span></button>';
+          }).join('')
+        + '</div><div class="modal-actions"><div class="spacer"></div><button data-act="close">Abbrechen</button></div>';
+    } else if (modal.kind === 'pf-einrichten') {
+      const s = pf.status || {};
+      const w = modal.werte || {};
+      body = '<h2>Mailkonto verbinden</h2>'
+        + '<div class="hint">Dann siehst du auf der Post-Seite deine Ordner wie in Outlook und kannst Mails lesen, beantworten, schreiben, '
+        + 'verschieben und löschen. Alles gleicht sich mit Outlook ab. Das Passwort liegt verschlüsselt auf deinem Server und ist im Browser nie sichtbar.</div>'
+        + f('Mailadresse', '<input type="email" id="pf-benutzer" autocomplete="username" value="' + esc(w.benutzer || s.benutzer || 'louis.ziegler@mzer.de') + '">')
+        + f('Passwort', '<input type="password" id="pf-passwort" autocomplete="current-password" placeholder="'
+            + (s.eingerichtet ? 'nur ausfüllen, wenn es sich geändert hat' : 'Passwort des Mailkontos') + '">')
+        + '<div class="two">'
+        + f('Mailserver', '<input type="text" id="pf-server" value="' + esc(w.server || s.server || 'mail.gate-7.de') + '">')
+        + f('Absendername', '<input type="text" id="pf-name" value="' + esc(w.name || s.name || 'Louis Ziegler') + '">')
+        + '</div>'
+        + (s.pakete === false ? '<div class="hintbox">Auf dem Server fehlen noch die Pakete fürs Postfach — einmal „einspielen“ ausführen.</div>' : '')
+        + '<div class="modal-actions">'
+        + (s.eingerichtet ? '<button class="danger" data-act="pf-trennen">Trennen</button>' : '')
+        + '<div class="spacer"></div><button data-act="close">Abbrechen</button>'
+        + '<button class="primary" data-act="pf-verbinden"' + (modal.prueft ? ' disabled' : '') + '>' + (modal.prueft ? 'Wird geprüft …' : 'Verbinden') + '</button></div>';
     } else if (modal.kind === 'unit') {
       const x = modal.unit;
       body = '<h2>' + (modal.isNew ? 'Einheit hinzufügen' : esc(x.name || 'Einheit')) + '</h2>'
@@ -8099,7 +8510,7 @@
     }
     const breit = (modal.kind === 'strom' || modal.kind === 'konto' || modal.kind === 'wartung'
       || modal.kind === 'nk' || modal.kind === 'auszug' || modal.kind === 'kauf' || modal.kind === 'anfrage') ? ' breit'
-      : (modal.kind === 'aufgabe' ? ' mittel' : '');
+      : (modal.kind === 'aufgabe' ? ' mittel' : (modal.kind === 'pf-schreiben' || modal.kind === 'pf-mail' ? ' mailfenster' : ''));
 
     const titel = {
       unit: 'Einheit', object: 'Objekt', strom: 'Stromabrechnung', konto: 'Mietkonto',
@@ -8108,7 +8519,8 @@
       schreiben: 'Schreiben', nk: 'Betriebskosten', auszug: 'Kontoauszug', beleg: 'Beleg ablegen',
       schnell: 'Aufgabe hinzufügen', suche: 'Suchen', absender: 'Einstellungen',
       kauf: 'Durchgerechnet', 'kauf-neu': 'Angebot eintragen', 'kauf-annahmen': 'Annahmen',
-      anfrage: 'Anfrage', 'anf-kriterien': 'Kriterien'
+      anfrage: 'Anfrage', 'anf-kriterien': 'Kriterien',
+      'pf-schreiben': 'Mail', 'pf-mail': 'Mail', 'pf-ziel': 'Verschieben', 'pf-einrichten': 'Mailkonto'
     }[modal.kind] || '';
 
 
@@ -8707,6 +9119,7 @@
       save();
       render();
     }
+    else if (act === 'backdrop' && modal && modal.kind === 'pf-schreiben') { /* ein Klick daneben verwirft keine halb geschriebene Mail */ }
     else if (act === 'close' || act === 'backdrop') { fensterZu(); }
     else if (act === 'fenster-reset') { fensterZuruecksetzen(); }
     else if (act === 'save-unit') { saveUnit(); }
@@ -8807,6 +9220,74 @@
       }).then(function () { return wocheLaden(); })
         .then(function () { toast(bis ? 'Aufgabe angelegt, fällig am ' + rgDatum(bis) : 'Als Aufgabe angelegt'); render(); })
         .catch(function (e) { toast(e.message); });
+    }
+    // ---- Mailkonto ----
+    else if (act === 'pf-ordner') {
+      const pfad = el.getAttribute('data-pfad') || '';
+      pf.pfad = pfad; pf.gewaehlt = null;
+      render();
+      if (!pfad) {
+        if (postListe === null && google.verbunden) postLaden().then(function () { render(); });
+      } else {
+        const l = pf.listen[pfad];
+        if (!l || l.fehler || Date.now() - (l.wann || 0) > 60000) pfListeLaden(pfad).then(function () { if (ansicht === 'post') render(); });
+      }
+      const liste = root.querySelector('.p2-liste'); if (liste) liste.scrollTop = 0;
+    }
+    else if (act === 'pf-waehlen') {
+      pf.gewaehlt = Number(el.getAttribute('data-uid'));
+      pfMailLaden(pf.pfad, pf.gewaehlt);
+      if (mobil || window.innerWidth < 901) { modal = { kind: 'pf-mail' }; render(); fensterGeoeffnet(); }
+      else render();
+    }
+    else if (act === 'pf-mehr') { pfListeLaden(pf.pfad, true).then(function () { render(); }); render(); }
+    else if (act === 'pf-frisch') { pfAuffrischen().then(function () { toast('Postfach abgerufen'); render(); }); }
+    else if (act === 'pf-neu-laden') { pf = pfLeer(); pfStart(); render(); }
+    else if (act === 'pf-neu' || act === 'pf-antworten' || act === 'pf-allen' || act === 'pf-weiter') {
+      pfSchreiben(act === 'pf-neu' ? 'neu' : act.slice(3));
+    }
+    else if (act === 'pf-senden') { pfSenden(); }
+    else if (act === 'pf-loeschen') { pfAktion('loeschen'); }
+    else if (act === 'pf-ungelesen') { pfAktion('ungelesen'); }
+    else if (act === 'pf-markieren') {
+      const z = pfZeile(pf.pfad, pf.gewaehlt);
+      pfAktion(z && z.markiert ? 'entmarkieren' : 'markieren');
+    }
+    else if (act === 'pf-ziel') { modal = { kind: 'pf-ziel' }; render(); }
+    else if (act === 'pf-verschieben') { pfAktion('verschieben', el.getAttribute('data-pfad')); }
+    else if (act === 'pf-aufgabe') {
+      const m = pf.mails[pf.pfad + '\n' + pf.gewaehlt];
+      if (!m || !m.betreff) return;
+      const bis = el.getAttribute('data-faellig') || '';
+      api('todoist/aufgabe', { method: 'POST', body: {
+        inhalt: m.betreff,
+        beschreibung: 'Aus Mail von ' + pfAdresse(m.von) + (m.datum ? ' vom ' + new Date(m.datum).toLocaleDateString('de-DE') : ''),
+        faellig: bis || undefined
+      } }).then(function () { return wocheLaden(); })
+        .then(function () { toast(bis ? 'Aufgabe angelegt, fällig am ' + rgDatum(bis) : 'Als Aufgabe angelegt'); render(); })
+        .catch(function (e) { toast(e.message); });
+    }
+    else if (act === 'pf-einrichten') {
+      seiteOffen = false;
+      modal = { kind: 'pf-einrichten' }; render();
+      if (!pf.status) { pfStart(); setTimeout(function () { if (modal && modal.kind === 'pf-einrichten') render(); }, 800); }
+    }
+    else if (act === 'pf-verbinden') {
+      const koerper = { benutzer: val('pf-benutzer'), passwort: val('pf-passwort'), server: val('pf-server'), name: val('pf-name') };
+      modal.werte = koerper; modal.prueft = true; render();
+      api('postfach', { method: 'PUT', body: koerper })
+        .then(function () { modal = null; pf = pfLeer(); toast('Mailkonto verbunden'); pfStart(); render(); })
+        .catch(function (e) { if (modal) modal.prueft = false; toast(e.message); render(); });
+    }
+    else if (act === 'pf-trennen') {
+      dialog({ titel: 'Mailkonto trennen?', text: 'Die App vergisst das Passwort. Deine Mails bleiben natürlich auf dem Mailserver und in Outlook.',
+        knoepfe: [{ label: 'Abbrechen', wert: false }, { label: 'Trennen', wert: true, art: 'primaer' }] })
+        .then(function (r) {
+          if (!r.wert) return;
+          api('postfach', { method: 'DELETE' })
+            .then(function () { pf = pfLeer(); pf.status = { eingerichtet: false }; pf.pfad = ''; modal = null; toast('Mailkonto getrennt'); render(); })
+            .catch(function (e) { toast(e.message); });
+        });
     }
     else if (act === 'post-waehlen') {
       postGewaehlt = el.getAttribute('data-id');
@@ -9553,6 +10034,7 @@
       }
       if (todoist.verbunden) { await alleLaden(); await planLaden(); }
       if (ansicht === 'post' && google.verbunden) await postLaden();
+      if (ansicht === 'post' && pfBereit() && !modal) await pfAuffrischen();
       if (ansicht === 'kaufen') await kaufLaden();
       if (ansicht === 'anfragen') await anfLaden();
       zuletztAufgefrischt = Date.now();

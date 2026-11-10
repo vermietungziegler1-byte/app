@@ -832,4 +832,123 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
   #app .p2-frist-text b { font-size: 14px; color: var(--ink); }
   #app .p2-text { margin-top: 18px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14.5px; line-height: 1.6; color: var(--ink); }
   #app .p2-hinweis { color: var(--muted); font-style: italic; }
+
+  /* Mailkonto: dritte Spalte links mit den Ordnern wie in Apple Mail */
+  #app .post2.mit-ordnern { grid-template-columns: 210px minmax(300px, 380px) minmax(0, 1fr); }
+  #app .p2-ordner {
+    overflow-y: auto; padding: 22px 10px 20px; border-right: 1px solid var(--line-soft);
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  #app .p2-ordner button.p2-neu { display: flex; align-items: center; justify-content: center; gap: 7px; margin: 0 2px 10px; padding: 8px 12px; font-size: 13.5px; }
+  #app .p2-og { margin: 14px 10px 4px; font-size: 11px; font-weight: 600; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #app .p2-og:first-of-type { margin-top: 4px; }
+  #app .p2-ordner button.p2-of {
+    display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; min-height: 0; box-shadow: none;
+    padding: 6px 10px; border-radius: 8px; background: transparent; color: var(--ink); font-size: 13.5px; font-weight: 500;
+  }
+  #app .p2-ordner button.p2-of svg { flex: none; color: var(--messing); }
+  #app .p2-ordner button.p2-of:hover { background: var(--fuellung); color: var(--ink); }
+  #app .p2-ordner button.p2-of.an, #app .p2-ordner button.p2-of.an:hover { background: var(--fuellung-stark); }
+  #app .p2-on { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #app .p2-oz { flex: none; font-size: 12px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
+  #app .p2-ohne { margin: 4px 10px; font-size: 12.5px; color: var(--muted); display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+  #app .p2-leer { padding: 30px 20px; color: var(--muted); font-size: 13.5px; text-align: center; }
+  #app .p2-leer.gross { height: 70vh; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; font-size: 15px; }
+  #app .p2-leer.gross svg { opacity: .35; }
+  #app .p2-stand { font-size: 12px; color: var(--muted); align-self: center; }
+  #app .p2-mail.neu .p2-von { font-weight: 700; }
+  #app .p2-punkt { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--messing); flex: none; align-self: center; margin-left: -3px; }
+  #app .p2-mail.an .p2-punkt { background: #fff; }
+  #app .p2-flagge { color: #ff9f0a; font-size: 12px; }
+  #app .p2-clip { font-size: 11px; opacity: .7; }
+  #app .p2-bea { color: var(--muted); margin-right: 4px; }
+  #app .p2-mail.an .p2-bea, #app .p2-mail.an .p2-flagge { color: rgba(255, 255, 255, .85); }
+  #app .p2-mehr { display: block; margin: 12px auto; background: transparent; color: var(--messing); font-size: 13px; }
+  #app .p2-leiste .p2-ic.an { color: #ff9f0a; }
+  #app .p2-leiste .p2-ic.weg:hover { color: var(--sperr); background: var(--sperr-soft); }
+  #app .p2-leiste .p2-ic .p2-punkt { margin: 0; }
+  #app .p2-anhaenge { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  #app .p2-anhang {
+    display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 7px 11px; border-radius: 10px;
+    background: var(--fuellung); color: var(--ink); text-decoration: none; font-size: 13px;
+  }
+  #app .p2-anhang b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+  #app .p2-anhang span { color: var(--muted); font-size: 12px; }
+  #app .p2-anhang:hover { background: var(--fuellung-stark); }
 }
+@media (min-width: 901px) and (max-width: 1250px) {
+  #app .post2.mit-ordnern { grid-template-columns: 180px minmax(260px, 320px) minmax(0, 1fr); }
+  #app .p2-leiste .p2-kt { display: none; }
+}
+
+/* Mailkonto am Handy und Tablet: Ordner als Leiste, Mail im Fenster */
+#app .pf-handykopf { display: flex; align-items: center; gap: 8px; }
+#app .pf-chips { display: flex; gap: 6px; overflow-x: auto; flex: 1; min-width: 0; scrollbar-width: none; padding: 2px 0; }
+#app .pf-chips::-webkit-scrollbar { display: none; }
+#app button.pf-chip {
+  flex: none; white-space: nowrap; padding: 6px 12px; border-radius: 999px; font-size: 13px; font-weight: 600;
+  background: var(--fuellung); color: var(--ink); min-height: 0;
+}
+#app button.pf-chip span { color: var(--muted); font-weight: 500; }
+#app button.pf-chip.an { background: var(--messing); color: #fff; }
+#app button.pf-chip.an span { color: rgba(255, 255, 255, .8); }
+#app .pf-handykopf .primary { flex: none; display: inline-flex; align-items: center; gap: 4px; }
+#app .tafel.pf-handy.nur-kopf { padding-bottom: 12px; }
+#app .pf-handyliste { margin-top: 10px; }
+#app .pf-handyliste .p2-kopf { padding: 4px 0 8px; position: static; background: transparent; }
+#app .pf-handyliste .p2-kopf h2 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.02em; display: flex; align-items: baseline; gap: 8px; }
+#app .pf-handyliste .p2-anzahl { font-size: 13px; color: var(--muted); font-weight: 500; }
+#app .pf-handyliste .p2-zeit { display: flex; gap: 6px; }
+#app .pf-handyliste .p2-frisch { margin-left: auto; background: transparent; color: var(--messing); }
+#app .pf-handyliste .p2-stand { font-size: 12px; color: var(--muted); align-self: center; }
+#app .pf-handyliste .p2-mail { padding: 11px 2px; border-top: .5px solid var(--line-soft); cursor: pointer; }
+#app .pf-handyliste .p2-o { display: flex; align-items: baseline; gap: 6px; }
+#app .pf-handyliste .p2-von { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#app .pf-handyliste .p2-mail.neu .p2-von { font-weight: 700; }
+#app .pf-handyliste .p2-wann { font-size: 13px; color: var(--muted); flex: none; }
+#app .pf-handyliste .p2-betreff { font-size: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#app .pf-handyliste .p2-punkt { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--messing); flex: none; align-self: center; }
+#app .pf-handyliste .p2-leer { padding: 24px 0; color: var(--muted); text-align: center; }
+#app .pf-handyliste .p2-mehr { display: block; margin: 10px auto 0; background: transparent; color: var(--messing); }
+#app .pf-handyliste .p2-flagge { color: #ff9f0a; }
+
+/* Mail im Fenster (Handy) und Schreibfenster */
+#app .modal.mailfenster { max-width: 820px; }
+#app .pf-fenstermail .p2-leiste { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 0 0 12px; border-bottom: .5px solid var(--line-soft); }
+#app .pf-fenstermail .p2-leiste button { display: inline-flex; align-items: center; gap: 5px; padding: 7px 10px; font-size: 13px; }
+#app .pf-fenstermail .p2-platz { flex: 1; }
+#app .pf-fenstermail .p2-ic.weg { color: var(--sperr); }
+#app .pf-fenstermail .p2-ic .p2-punkt { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--messing); }
+#app .pf-fenstermail .p2-titel { margin: 14px 0 0; font-size: 20px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.25; }
+#app .pf-fenstermail .p2-absender { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding-bottom: 12px; border-bottom: .5px solid var(--line-soft); }
+#app .pf-fenstermail .p2-av { width: 36px; height: 36px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center; background: linear-gradient(180deg, #a1a1a6, #6e6e73); color: #fff; font-weight: 600; font-size: 13px; }
+#app .pf-fenstermail .p2-wer { flex: 1; min-width: 0; }
+#app .pf-fenstermail .p2-name { font-weight: 600; }
+#app .pf-fenstermail .p2-adresse, #app .pf-fenstermail .p2-datum { font-size: 12px; color: var(--muted); }
+#app .pf-fenstermail .p2-anhaenge { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+#app .pf-fenstermail .p2-anhang { display: inline-flex; gap: 6px; padding: 8px 11px; border-radius: 10px; background: var(--fuellung); color: var(--ink); text-decoration: none; font-size: 13px; max-width: 100%; }
+#app .pf-fenstermail .p2-anhang span { color: var(--muted); }
+#app .pf-fenstermail .p2-frist { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 10px 12px; border-radius: 12px; background: var(--glas); }
+#app .pf-fenstermail .p2-frist-text { flex: 1; display: flex; flex-direction: column; font-size: 12.5px; color: var(--muted); }
+#app .pf-fenstermail .p2-frist-text b { color: var(--ink); font-size: 14px; }
+#app .pf-fenstermail .p2-text { margin-top: 14px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.55; }
+#app .pf-fenstermail .p2-hinweis { color: var(--muted); font-style: italic; }
+@media (max-width: 620px) { #app .pf-fenstermail .p2-kt { display: none; } }
+
+#app .pf-von { font-size: 13px; color: var(--muted); margin: -4px 0 10px; }
+#app .pf-felder { border-radius: 12px; background: var(--fuellung); overflow: hidden; }
+#app .pf-felder label { display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: .5px solid var(--line-soft); margin: 0; }
+#app .pf-felder label:last-child { border-bottom: none; }
+#app .pf-felder label span { width: 58px; flex: none; font-size: 13px; color: var(--muted); }
+#app .modal .pf-felder input[type="text"] { flex: 1; min-width: 0; background: transparent; border: none; box-shadow: none; padding: 11px 0; border-radius: 0; }
+#app .modal textarea.pf-text {
+  width: 100%; box-sizing: border-box; margin-top: 10px; min-height: 300px; resize: vertical;
+  font: inherit; font-size: 15px; line-height: 1.55; padding: 12px;
+}
+#app .pf-ziele { display: flex; flex-direction: column; gap: 2px; max-height: 60vh; overflow-y: auto; }
+#app button.pf-zielknopf {
+  display: flex; align-items: center; gap: 10px; text-align: left; padding: 11px 14px; border-radius: 10px;
+  background: transparent; color: var(--ink); font-weight: 500;
+}
+#app button.pf-zielknopf svg { color: var(--messing); flex: none; }
+#app button.pf-zielknopf:hover { background: var(--fuellung); color: var(--ink); }

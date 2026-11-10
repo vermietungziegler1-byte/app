@@ -59,6 +59,7 @@ app.use(require('./lib/sicherung').router);
 app.use(require('./lib/planer').router);
 app.use(require('./lib/kaufen').router);
 app.use(require('./lib/anfragen').router);
+app.use(require('./lib/postfach').router);
 
 // ---------------- Oberfläche ----------------
 app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'] }));

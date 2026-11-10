@@ -17,7 +17,9 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: server/package-lock.json
-      - run: npm ci
+      # npm install statt npm ci: neue Pakete aus package.json kommen dazu, auch wenn die Sperrdatei
+      # (package-lock.json) noch den alten Stand hat — auf dem Server macht einspielen es genauso
+      - run: npm install --no-audit --no-fund
       - name: Browser für den Oberflächen-Test
         run: npm install --no-save playwright && npx playwright install --with-deps chromium
       - name: Servercode und einspielen prüfen
