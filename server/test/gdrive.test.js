@@ -53,7 +53,9 @@ function fakeGoogle() {
         if (p === '/files') {
           const nurOrdner = /mimeType = 'application\/vnd\.google-apps\.folder'/.test(url.searchParams.get('q') || '');
           if (!nurOrdner) g.dateiListen++;
-          const alle = nurOrdner ? g.ordner : g.dateien;
+          // Wie Google: mit „'me' in owners“ fehlt, was andere in Louis' Ordner gelegt haben
+          const nurMeine = /'me' in owners/.test(url.searchParams.get('q') || '');
+          const alle = (nurOrdner ? g.ordner : g.dateien).filter(function (x) { return !(nurMeine && x.fremd); });
           // In Dreierseiten — so wird das Blättern mitgeprüft
           const ab = Number(url.searchParams.get('pageToken') || 0);
           const seite = alle.slice(ab, ab + 3);
@@ -113,6 +115,8 @@ test('Google Drive: Recht holen, Ordner wählen, einlesen, zuordnen, Änderungen
   g.dateiNeu('gaertner', 'Gärtner.pdf', 'belege7');
   g.dateiNeu('urlaub', 'Urlaub.pdf', 'privat');
   g.dateiNeu('ds', '.DS_Store', 'firma', 'application/octet-stream');
+  g.dateiNeu('fremd', 'Rechnung Hecke.pdf', 'belege7').fremd = true;   // vom Gärtner in den geteilten Ordner gelegt
+  g.dateiNeu('lose', 'Nebenkosten 2025.pdf', 'wurzel');                // lose in „Meine Ablage“
 
   const server = await serverStarten({ GOOGLE_TOKEN_URL: g.basis + '/token', GMAIL_BASIS: g.basis, GDRIVE_BASIS: g.basis + '/drive', ADRESSE: 'https://app.example' });
   try {
@@ -190,6 +194,8 @@ test('Google Drive: Recht holen, Ordner wählen, einlesen, zuordnen, Änderungen
     assert.equal(nach.passwoerter, undefined, 'abgewählter Ordner bleibt außen vor');
     assert.equal(nach.urlaub, undefined, 'nicht gewählter Ordner bleibt außen vor');
     assert.equal(nach.ds, undefined, 'Systemdateien nicht');
+    assert.equal(nach.fremd && nach.fremd.objekt, 'o2', 'was andere in Louis\' Ordner legen, gehört dazu');
+    assert.equal(nach.lose, undefined, 'lose Dateien nur, wenn „Meine Ablage“ angehakt ist');
 
     // Änderungen: eine neue Datei, eine gelöschte, ein umbenannter Ordner
     g.dateiDazu('kaution', 'Kaution Kirschner.pdf', 'eglinks');
@@ -211,6 +217,8 @@ test('Google Drive: Recht holen, Ordner wählen, einlesen, zuordnen, Änderungen
     nach = {}; r.dateien.forEach(function (d) { nach[d.id] = d; });
     assert.equal(nach.grundriss.pfad, '/Firma/Maybachstraße 12', 'umbenannter Ordner: alles neu eingelesen');
     assert.equal(nach.grundriss.objekt, 'o3');
+    assert.equal(nach.grundriss.status, 'zugeordnet', 'nur der Ordnername hat sich geändert: Zuordnung bleibt');
+    assert.equal(nach.fremd && nach.fremd.objekt, 'o2', 'auch nach dem Neu-Einlesen noch da');
 
     // Louis ordnet einen Stundenzettel zu → der Ordner ist gelernt, der zweite folgt
     assert.equal((await papa.put('/api/dokumente/dateien/okt', { objekt: 'o2' })).status, 403);
@@ -222,17 +230,34 @@ test('Google Drive: Recht holen, Ordner wählen, einlesen, zuordnen, Änderungen
     assert.equal(nov.objekt, 'o2', 'gelernter Ordner gilt für die nächste Datei');
     assert.equal(nov.status, 'zugeordnet');
 
-    // Auswahl verkleinern: was nicht mehr gewählt ist, ist sofort weg
-    const kleiner = await louis.put('/api/dokumente/ordner', { ein: ['firma'], aus: ['louis', 'bertha'] });
+    // Gelernter Ordner umbenannt: die Regel hängt an der Ordner-ID und gilt weiter
+    g.ordnerUmbenennen('hausmeister', 'Hausmeister Herr Kurz');
+    g.dateiDazu('dez', 'Stundenzettel Dezember.pdf', 'hausmeister');
+    await louis.post('/api/dokumente/abgleich');
+    await warten(50);
+    await fertig(louis);
+    r = (await louis.get('/api/dokumente/dateien')).json;
+    nach = {}; r.dateien.forEach(function (d) { nach[d.id] = d; });
+    assert.equal(nach.dez.objekt, 'o2', 'neue Datei im umbenannten, gelernten Ordner');
+    assert.equal(nach.nov.objekt, 'o2');
+    assert.equal(nach.nov.status, 'zugeordnet');
+
+    // Auswahl ändern: Bertha ab, „Meine Ablage“ an. Was nicht mehr gewählt ist, ist sofort weg.
+    const kleiner = await louis.put('/api/dokumente/ordner', { ein: ['firma', 'wurzel'], aus: ['louis', 'bertha'] });
     assert.equal(kleiner.status, 200);
-    await warten(150);
     r = (await louis.get('/api/dokumente/dateien')).json;
     assert.ok(!r.dateien.some(function (d) { return d.objekt === 'o1'; }), 'Bertha abgewählt');
+    await warten(150);
     await fertig(louis);
+    r = (await louis.get('/api/dokumente/dateien')).json;
+    nach = {}; r.dateien.forEach(function (d) { nach[d.id] = d; });
+    assert.ok(nach.lose, 'lose Datei in „Meine Ablage“ jetzt dabei');
+    assert.equal(nach.urlaub, undefined, '„Meine Ablage“ angehakt zieht keine obersten Ordner mit');
     const wahl2 = (await louis.get('/api/dokumente/ordner')).json;
-    assert.deepEqual(wahl2.ein, ['firma']);
+    assert.deepEqual(wahl2.ein.sort(), ['firma', 'wurzel']);
     assert.deepEqual(wahl2.aus.sort(), ['bertha', 'louis']);
     assert.equal(wahl2.ordner.find(function (o) { return o.id === 'maybach'; }).an, true, 'erbt von „Firma“');
+    assert.equal(wahl2.ordner.find(function (o) { return o.id === 'privat'; }).an, false);
 
     // Zurücksetzen: Auswahl und Zuordnungen weg, die Google-Verbindung bleibt
     assert.equal((await papa.del('/api/dokumente')).status, 403);

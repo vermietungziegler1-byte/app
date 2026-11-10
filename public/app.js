@@ -1241,30 +1241,19 @@
       if (modal && modal.kind === 'od-einrichten') { modal.wahl = { fehler: e.message }; render(); }
     });
   }
+  // „Meine Ablage“ (die Wurzel) gilt wie auf dem Server nur für lose Dateien — oberste Ordner erben davon nichts
   function odWahlAn(id) {
     const w = modal.wahl;
     if (w.ein[id]) return true;
     if (w.aus[id]) return false;
-    if (id === w.wurzel) return false;
     const z = w.nachId[id];
-    return z && z.ebene === 2 ? odWahlAn(z.eltern) : odWahlAn(w.wurzel);
+    return z && z.ebene === 2 ? odWahlAn(z.eltern) : false;
   }
   function odWahlSetzen(id, an) {
     const w = modal.wahl;
-    if (id === w.wurzel) {
-      // „Lose Dateien“ soll nicht alle obersten Ordner mitziehen: deren jetzigen Stand festhalten
-      w.ordner.filter(function (z) { return z.ebene === 1; }).forEach(function (z) {
-        const jetzt = odWahlAn(z.id);
-        delete w.ein[z.id]; delete w.aus[z.id];
-        if (jetzt !== an) (jetzt ? w.ein : w.aus)[z.id] = true;
-      });
-      delete w.ein[id]; delete w.aus[id];
-      if (an) w.ein[id] = true;
-      return;
-    }
     delete w.ein[id]; delete w.aus[id];
     const z = w.nachId[id];
-    const erbt = z && z.ebene === 2 ? odWahlAn(z.eltern) : odWahlAn(w.wurzel);
+    const erbt = id !== w.wurzel && z && z.ebene === 2 ? odWahlAn(z.eltern) : false;
     if (an !== erbt) (an ? w.ein : w.aus)[id] = true;
   }
   function odOrdnerWahlHtml() {
@@ -7886,8 +7875,10 @@
             + o.units.map(function (x) { return '<option value="' + esc(x.id) + '"' + (x.id === (modal.einheit !== undefined ? modal.einheit : d.einheit) ? ' selected' : '') + '>'
                 + esc(x.name + (x.tenant ? ' · ' + x.tenant : '')) + '</option>'; }).join('') + '</select>') : '')
         + f('Art', '<select id="od-art">' + OD_ARTEN.map(function (k) { return '<option' + (k === (modal.art || d.art || 'Sonstiges') ? ' selected' : '') + '>' + esc(k) + '</option>'; }).join('') + '</select>')
-        + '<label class="od-merken"><input type="checkbox" id="od-merken" checked> Für den Ordner „' + esc(d.pfad || '/') + '“ merken — weitere Dateien von dort landen dann auch hier '
-        + '<small>(gilt nicht für Sammelordner wie „Scans“ oder „Dokumente“)</small></label>'
+        // Eine schon zugeordnete Datei zu korrigieren heißt meist: nur diese lag falsch — dann nicht gleich den Ordner umlernen
+        + '<label class="od-merken"><input type="checkbox" id="od-merken"' + (d.status === 'zugeordnet' ? '' : ' checked') + '> Für den Ordner „' + esc(d.pfad || '/') + '“ merken — weitere Dateien von dort landen dann auch hier '
+        + '<small>(gilt nicht für Sammelordner wie „Scans“ oder „Rechnungen“)</small></label>'
+        + (o ? '<label class="od-merken"><input type="checkbox" id="od-mit-wohnung"> Der ganze Ordner gehört zur gewählten Wohnung, nicht nur zum Objekt</label>' : '')
         + '<div class="modal-actions"><button class="ghost" data-act="od-weg" data-id="' + esc(d.id || '') + '">Gehört zu keinem</button><div class="spacer"></div>'
         + '<button data-act="close">Abbrechen</button><button class="primary" data-act="od-zuordnen-speichern">Speichern</button></div>';
     } else if (modal.kind === 'pf-mail') {
@@ -9831,7 +9822,11 @@
     else if (act === 'od-wahl') {
       if (!modal || !modal.wahl || !modal.wahl.ordner) return;
       odWahlSetzen(el.getAttribute('data-id'), !!el.checked);
+      // Die Liste bleibt, wo sie war — sonst spränge sie bei jedem Häkchen nach oben
+      const vorher = root.querySelector('.od-wahl'), oben = vorher ? vorher.scrollTop : 0;
       render();
+      const nachher = root.querySelector('.od-wahl');
+      if (nachher) nachher.scrollTop = oben;
     }
     else if (act === 'od-wahl-speichern') {
       const w = modal.wahl;
@@ -9886,7 +9881,8 @@
       else if (act === 'od-ok') koerper = { objekt: d.objekt, einheit: d.einheit, art: d.art, merken: false };
       else {
         koerper = { objekt: val('od-objekt'), einheit: root.querySelector('#od-einheit') ? val('od-einheit') : '', art: val('od-art'),
-          merken: !!(root.querySelector('#od-merken') && root.querySelector('#od-merken').checked) };
+          merken: !!(root.querySelector('#od-merken') && root.querySelector('#od-merken').checked),
+          ordnerMitWohnung: !!(root.querySelector('#od-mit-wohnung') && root.querySelector('#od-mit-wohnung').checked) };
         if (!koerper.objekt) { toast('Bitte ein Objekt wählen'); return; }
       }
       const zurueck = modal && modal.zurueck;

@@ -107,29 +107,45 @@ function zuordnen(pfad, name, wb, regeln, mime) {
   const art = artVon(name, mime, pfad);
   const ganz = normal(String(pfad || '') + ' ' + String(name || '').replace(/\.[a-z0-9]+$/i, ''));
 
+  // Hinweise aus Pfad und Namen: Mieternamen (nur eindeutig je Wohnung) und Objekte an Adresse oder Kurzname
+  const mieterTreffer = wb.mieter.filter(function (m) { return enthaelt(ganz, m.nachname); });
+  const verschiedene = mieterTreffer.filter(function (m, i) { return mieterTreffer.findIndex(function (x) { return x.einheit === m.einheit; }) === i; });
+  const objektTreffer = wb.objekte.filter(function (o) {
+    return o.merkmale.some(function (mk) { return mk.indexOf(' ') !== -1 ? ganz.indexOf(' ' + mk + ' ') !== -1 : enthaelt(ganz, mk); });
+  });
+  const wohnungIm = function (objektId) {
+    return wb.einheiten.filter(function (e) { return e.objekt === objektId && ganz.indexOf(' ' + e.merkmal + ' ') !== -1; })
+      .sort(function (a, b) { return b.merkmal.length - a.merkmal.length; })[0];
+  };
+
   // 1. Feste Ordner: von Louis gelernt oder beim Objekt als Beleg-Ordner hinterlegt
   const p = String(pfad || '').toLowerCase();
   const regel = (regeln || []).filter(function (r) { return r.pfad && (p === r.pfad.toLowerCase() || p.indexOf(r.pfad.toLowerCase() + '/') === 0); })
     .sort(function (a, b) { return b.pfad.length - a.pfad.length; })[0];
   if (regel && regel.objekt) {
-    // Liegt die Datei tiefer, darf der Pfad noch die Wohnung verraten
+    // Liegt die Datei tiefer, darf der Pfad die Wohnung verraten — oder ein Mietername dieses Objekts
     let einheit = regel.einheit || '';
     if (!einheit) {
-      const w = wb.einheiten.filter(function (e) { return e.objekt === regel.objekt && ganz.indexOf(' ' + e.merkmal + ' ') !== -1; })
-        .sort(function (a, b) { return b.merkmal.length - a.merkmal.length; })[0];
+      const w = wohnungIm(regel.objekt);
+      const m = verschiedene.filter(function (x) { return x.objekt === regel.objekt; });
       if (w) einheit = w.id;
+      else if (m.length === 1) einheit = m[0].einheit;
+    }
+    // Nennen die Ordner unterhalb oder der Dateiname ausdrücklich ein anderes Objekt (oder einen Mieter von dort), lieber nachfragen
+    const rest = normal(String(pfad || '').slice(regel.pfad.length) + ' ' + String(name || '').replace(/\.[a-z0-9]+$/i, ''));
+    const objekteRest = wb.objekte.filter(function (o) {
+      return o.merkmale.some(function (mk) { return mk.indexOf(' ') !== -1 ? rest.indexOf(' ' + mk + ' ') !== -1 : enthaelt(rest, mk); });
+    });
+    const mieterRest = wb.mieter.filter(function (m) { return enthaelt(rest, m.nachname); });
+    const anderes = objekteRest.length && !objekteRest.some(function (o) { return o.id === regel.objekt; });
+    const andererMieter = mieterRest.length && !mieterRest.some(function (m) { return m.objekt === regel.objekt; });
+    if (anderes || andererMieter) {
+      const kandidaten = [regel.objekt].concat(objekteRest.map(function (o) { return o.id; }), mieterRest.map(function (m) { return m.objekt; }));
+      return { objekt: regel.objekt, einheit: einheit, art: art, sicher: false, grund: 'Ordner, aber der Name spricht für ein anderes Objekt',
+        kandidaten: kandidaten.filter(function (k, i) { return kandidaten.indexOf(k) === i; }) };
     }
     return { objekt: regel.objekt, einheit: einheit, art: art, sicher: true, grund: 'Ordner' };
   }
-
-  // 2. Mietername: legt Objekt und Wohnung fest — nur wenn der Name eindeutig ist
-  const mieterTreffer = wb.mieter.filter(function (m) { return enthaelt(ganz, m.nachname); });
-  const verschiedene = mieterTreffer.filter(function (m, i) { return mieterTreffer.findIndex(function (x) { return x.einheit === m.einheit; }) === i; });
-
-  // 3. Objekt an Adresse oder Kurzname
-  const objektTreffer = wb.objekte.filter(function (o) {
-    return o.merkmale.some(function (mk) { return mk.indexOf(' ') !== -1 ? ganz.indexOf(' ' + mk + ' ') !== -1 : enthaelt(ganz, mk); });
-  });
 
   if (verschiedene.length === 1) {
     const m = verschiedene[0];
@@ -140,8 +156,7 @@ function zuordnen(pfad, name, wb, regeln, mime) {
   if (objektTreffer.length === 1) {
     const o = objektTreffer[0];
     // Wohnung innerhalb des Objekts: „eg links“, „1 og rechts“ …
-    const w = wb.einheiten.filter(function (e) { return e.objekt === o.id && ganz.indexOf(' ' + e.merkmal + ' ') !== -1; })
-      .sort(function (a, b) { return b.merkmal.length - a.merkmal.length; })[0];
+    const w = wohnungIm(o.id);
     return { objekt: o.id, einheit: w ? w.id : '', art: art, sicher: verschiedene.length === 0, grund: 'Objekt ' + o.name.split(',')[0] };
   }
   if (objektTreffer.length > 1 || verschiedene.length > 1) {

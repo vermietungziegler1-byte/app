@@ -83,3 +83,15 @@ test('Google-Dokumente ohne Endung kommen in Frage, Systemdateien nicht', functi
   assert.equal(kommtInFrage('/Firma', '.DS_Store', 'application/octet-stream'), false);
   assert.equal(kommtInFrage('/Vermietung – Sicherungen', 'vermietung-2026-11-10.db', 'application/octet-stream'), false);
 });
+
+test('Fester Ordner gegen ausdrücklichen Namen: lieber nachfragen; Mietername liefert die Wohnung', function () {
+  const fest = [{ pfad: '/Firma/Bertha von Suttna', objekt: 'o1', einheit: '' }];
+  // Im Bertha-Ordner, aber der Name sagt Dahlienweg: Vorschlag Bertha, nicht sicher
+  const r = zuordnen('/Firma/Bertha von Suttna/03 Rechnungen', 'Rechnung Dahlienweg Dach.pdf', wb, fest);
+  assert.equal(kurz(r), 'o1||Rechnung|false');
+  assert.deepEqual(r.kandidaten.sort(), ['o1', 'o2']);
+  // Mieter einer anderen Adresse im Namen: ebenso
+  assert.equal(zuordnen('/Firma/Bertha von Suttna', 'Kaution Salatzki.pdf', wb, fest).sicher, false);
+  // Mieter dieses Objekts: Wohnung aus dem Namen, sicher
+  assert.equal(kurz(zuordnen('/Firma/Bertha von Suttna/04 Verträge', 'Mietvertrag Quattelbaum.pdf', wb, fest)), 'o1|u3|Mietvertrag|true');
+});

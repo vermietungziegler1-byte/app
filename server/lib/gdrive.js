@@ -54,7 +54,8 @@ db.exec(`
     lauf      INTEGER
   );
   CREATE INDEX IF NOT EXISTS dok_dateien_objekt ON dok_dateien (objekt);
-  CREATE TABLE IF NOT EXISTS dok_regeln (pfad TEXT PRIMARY KEY, objekt TEXT, einheit TEXT);
+  -- Gelernte Ordner hängen an der Ordner-ID: Umbenennen oder Verschieben ändert nichts an der Regel
+  CREATE TABLE IF NOT EXISTS dok_regeln (ordner TEXT PRIMARY KEY, pfad TEXT, objekt TEXT, einheit TEXT);
   -- Der erste Versuch lief über OneDrive und kam nie zustande (Microsoft verlangte ein Firmenverzeichnis): aufräumen
   DROP TABLE IF EXISTS od_dateien;
   DROP TABLE IF EXISTS od_regeln;
@@ -133,12 +134,13 @@ function ordnerPfad(id, k) {
   return p;
 }
 // Darf die App in diesen Ordner schauen? Der nächste Ordner nach oben, für den Louis etwas gewählt hat, entscheidet.
+// „Meine Ablage“ selbst gilt nur für die losen Dateien darin — nie für Ordner, die später oben dazukommen.
 function erlaubt(id, k, a) {
   let x = id;
   for (let tiefe = 0; x && tiefe < 60; tiefe++) {
+    if (x === k.wurzel) return x === id && a.ein.has(x);
     if (a.aus.has(x)) return false;
     if (a.ein.has(x)) return true;
-    if (x === k.wurzel) return false;
     const o = k.ordner.get(x);
     if (!o) return false;
     x = o.eltern;
@@ -165,8 +167,9 @@ function dateiMerken(f, k, a, lauf, erstmals) {
     geaendert: Date.parse(f.modifiedTime || '') || 0, url: f.webViewLink || ('https://drive.google.com/file/d/' + f.id + '/view'), lauf: lauf };
   const alt = dateiHolen.get(f.id);
   if (!alt) { dateiNeu.run(Object.assign({ erstmals: erstmals }, zeile)); return true; }
-  // Umbenannt oder verschoben: neu zuordnen — außer Louis hat selbst entschieden
-  if ((alt.name !== zeile.name || alt.pfad !== zeile.pfad) && alt.quelle !== 'louis') dateiZuruecksetzen.run(zeile);
+  // Die Datei selbst umbenannt oder in einen anderen Ordner gelegt: neu zuordnen — außer Louis hat selbst entschieden.
+  // Hat sich nur der Name eines Ordners weiter oben geändert, bleibt die Zuordnung; der Pfad zieht einfach nach.
+  if ((alt.name !== zeile.name || alt.eltern !== zeile.eltern) && alt.quelle !== 'louis') dateiZuruecksetzen.run(zeile);
   else dateiAuffrischen.run(zeile);
   return false;
 }
@@ -183,7 +186,9 @@ async function allesEinlesen(a) {
   const wurzel = (await drive('/files/root?fields=id')).id;
   einstellungSetzen('dok_wurzel', wurzel);
   const ordner = await alleSeiten('/files?pageSize=1000&spaces=drive&fields=' + q('nextPageToken,files(id,name,parents)')
-    + '&q=' + q("mimeType = '" + ORDNER_TYP + "' and trashed = false and 'me' in owners"));
+    // Ohne Filter auf den Besitzer: Was andere in Louis' Ordner legen, gehört auch dazu (die Änderungen melden es ebenso).
+    // Was nur mit ihm geteilt ist und nicht in „Meine Ablage“ hängt, fällt beim Pfad heraus.
+    + '&q=' + q("mimeType = '" + ORDNER_TYP + "' and trashed = false"));
   db.transaction(function () {
     ordner.forEach(function (o) { ordnerMerken.run(ordnerZeile(o, lauf)); });
     db.prepare('DELETE FROM dok_ordner WHERE lauf < ?').run(lauf);
@@ -191,7 +196,7 @@ async function allesEinlesen(a) {
   if (!a) return;
   const dateien = await alleSeiten('/files?pageSize=1000&spaces=drive&fields='
     + q('nextPageToken,files(id,name,mimeType,parents,modifiedTime,size,webViewLink)')
-    + '&q=' + q("mimeType != '" + ORDNER_TYP + "' and trashed = false and 'me' in owners"));
+    + '&q=' + q("mimeType != '" + ORDNER_TYP + "' and trashed = false"));
   if (auswahlGeaendert(auswahlVorher)) return;
   // Beim allerersten Einlesen ist nichts „neu“ — sonst stünde an jeder Datei zwei Tage lang NEU
   const erstesMal = !db.prepare('SELECT 1 FROM dok_dateien LIMIT 1').get();
@@ -281,8 +286,11 @@ function auswahlGeaendert(vorher) {
 // Stufe 1: am Pfad und Namen — für alles, was neu ist oder dessen Zuordnung nicht von Louis stammt
 function festeOrdner() {
   // Gelernte Ordner zuerst: bei gleich langem Pfad gewinnt, was Louis selbst gesagt hat
-  const liste = db.prepare('SELECT pfad, objekt, einheit FROM dok_regeln').all();
   const k = karte();
+  // Der Pfad kommt aus der Ordner-ID — so überlebt die Regel ein Umbenennen oder Verschieben
+  const liste = db.prepare('SELECT ordner, pfad, objekt, einheit FROM dok_regeln').all().map(function (r) {
+    return { pfad: ordnerPfad(r.ordner, k) || r.pfad, objekt: r.objekt, einheit: r.einheit };
+  });
   const s = standInhalt() || {};
   (s.objects || []).forEach(function (o) {
     if (!o.ordnerId) return;
@@ -339,7 +347,13 @@ async function assistentAnwenden() {
     }).join('\n');
   }).join('\n');
   const { claude } = require('./assistent');
+  const auswahlVorher = einstellung('dok_auswahl');
   for (const d of offen) {
+    // Jede Datei kostet ein paar Sekunden: hat Louis inzwischen die Auswahl geändert, zurückgesetzt oder selbst
+    // zugeordnet, geht nichts mehr an Claude
+    if (einstellung('dok_auswahl') !== auswahlVorher || stand.nochmal) break;
+    const jetzt = dateiHolen.get(d.id);
+    if (!jetzt || jetzt.status !== 'offen') continue;
     let r = null;
     try {
       const antwort = await fetch(DRIVE + '/files/' + q(d.id) + '?alt=media', {
@@ -490,12 +504,14 @@ app.put('/api/dokumente/dateien/:id', nurAngemeldet, nurVerwalter, function (req
     if (einheit && !(o.units || []).some(function (x) { return x.id === einheit; })) einheit = '';
     const art = ARTEN.indexOf(String(b.art || '')) !== -1 ? String(b.art) : (d.art || 'Sonstiges');
     db.prepare("UPDATE dok_dateien SET objekt = ?, einheit = ?, art = ?, quelle = 'louis', status = 'zugeordnet' WHERE id = ?").run(objekt, einheit, art, d.id);
-    // Lernen: nicht in Sammelordnern wie „Scans“ oder „Dokumente“ — sonst landete dort alles beim selben Objekt
-    const letzter = regeln.normal(d.pfad.split('/').filter(Boolean).pop() || '').trim();
-    if (b.merken !== false && d.pfad && d.pfad !== '/' && letzter && !SAMMELORDNER.test(letzter)) {
-      db.prepare('INSERT OR REPLACE INTO dok_regeln (pfad, objekt, einheit) VALUES (?, ?, ?)').run(d.pfad, objekt, b.ordnerMitWohnung ? einheit : '');
+    // Lernen — aber nicht in Sammelordnern wie „Scans“ oder „03 Rechnungen“ (sonst landete dort alles beim selben Objekt)
+    // und nicht, wenn der Ordner selbst schon ein anderes Objekt nennt (dann war nur diese eine Datei falsch abgelegt)
+    const letzter = regeln.normal(d.pfad.split('/').filter(Boolean).pop() || '').trim().replace(/^\d+\s+/, '');
+    const ordnerSagt = regeln.zuordnen(d.pfad, '', regeln.woerterbuch(s), []).objekt;
+    if (b.merken !== false && d.eltern && d.pfad !== '/' && letzter && !SAMMELORDNER.test(letzter) && (!ordnerSagt || ordnerSagt === objekt)) {
+      db.prepare('INSERT OR REPLACE INTO dok_regeln (ordner, pfad, objekt, einheit) VALUES (?, ?, ?, ?)').run(d.eltern, d.pfad, objekt, b.ordnerMitWohnung ? einheit : '');
       // Was im selben Ordner noch offen ist, gleich mitnehmen
-      db.prepare("UPDATE dok_dateien SET status = 'neu' WHERE pfad = ? AND status IN ('offen', 'unklar', 'pruefen') AND id <> ?").run(d.pfad, d.id);
+      db.prepare("UPDATE dok_dateien SET status = 'neu' WHERE eltern = ? AND status IN ('offen', 'unklar', 'pruefen') AND id <> ?").run(d.eltern, d.id);
       regelnAnwenden();
     }
   }
