@@ -1,6 +1,6 @@
 'use strict';
 
-// Dateien aus OneDrive am Pfad und Namen zuordnen — ohne OneDrive.
+// Dateien aus Google Drive am Pfad und Namen zuordnen — ohne Google.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -51,4 +51,35 @@ test('Art und Auswahl der Dateien', function () {
   assert.equal(kommtInFrage('/Dokumente', 'Vertrag.pdf'), true);
   assert.equal(kommtInFrage('/Bilder/Camera Roll', 'IMG_1.jpg'), false);
   assert.equal(kommtInFrage('/Desktop/update', 'app.js'), false);
+});
+
+test('So wie Louis Google Drive sortiert hat: Objektordner, Wohnungsordner, Sachordner', function () {
+  const stand = { objects: STAND.objects.concat([
+    { id: 'o4', name: 'Maybachstraße', units: [] },
+    { id: 'o5', name: 'Heinkelstraße 7, Berglen', units: [{ id: 'u9', name: 'Wohnung Blessing', tenant: 'Anna Blessing' }] }
+  ]) };
+  const w = woerterbuch(stand);
+  // Tippfehler im Ordnernamen („Suttna“): der Kurzname „Bertha“ reicht
+  assert.equal(kurz(zuordnen('/Firma/Bertha von Suttna/01 Mieteinheiten/1.OG Rechts', 'Scan 0815.pdf', w)), 'o1|u2|Sonstiges|true');
+  // Die Art steht oft nur am Ordner
+  assert.equal(kurz(zuordnen('/Firma/Bertha von Suttna/03 Rechnungen', 'Scan 0816.pdf', w)), 'o1||Rechnung|true');
+  assert.equal(kurz(zuordnen('/Firma/Bertha von Suttna/04 Verträge/PV Verträge', 'Syna 2024.pdf', w)), 'o1||Vertrag|true');
+  assert.equal(kurz(zuordnen('/Firma/Heinkelstraße 7/06 Steuer/2021', 'Bescheid.pdf', w)), 'o5||Steuer|true');
+  // „Maybachstr.“ im Ordner, „Maybachstraße“ in der App
+  assert.equal(kurz(zuordnen('/Firma/Maybachstr.', 'Grundriss EG.pdf', w)), 'o4||Plan|true');
+  // Ein Mietvertrag im Wohnungsordner ist trotzdem ein Mietvertrag
+  assert.equal(artVon('Mietvertrag.pdf', '', '/Firma/Bertha von Suttna/04 Verträge'), 'Mietvertrag');
+});
+
+test('Fester Ordner (Beleg-Ordner beim Objekt): tiefer liegende Wohnungsordner zählen trotzdem', function () {
+  const fest = [{ pfad: '/Firma/Belege', objekt: 'o1', einheit: '' }];
+  assert.equal(kurz(zuordnen('/Firma/Belege/EG Links', 'Wasserzähler.pdf', wb, fest)), 'o1|u1|Rechnung|true', 'Art kommt hier vom Ordner „Belege“');
+  assert.equal(kurz(zuordnen('/Firma/Belege-Alt', 'X.pdf', wb, fest)), '||Rechnung|false', 'nur der Ordner selbst und seine Unterordner');
+});
+
+test('Google-Dokumente ohne Endung kommen in Frage, Systemdateien nicht', function () {
+  assert.equal(kommtInFrage('/Firma', 'Übergabeprotokoll EG', 'application/vnd.google-apps.document'), true);
+  assert.equal(kommtInFrage('/Firma', 'Scan vom Montag', 'application/pdf'), true);
+  assert.equal(kommtInFrage('/Firma', '.DS_Store', 'application/octet-stream'), false);
+  assert.equal(kommtInFrage('/Vermietung – Sicherungen', 'vermietung-2026-11-10.db', 'application/octet-stream'), false);
 });

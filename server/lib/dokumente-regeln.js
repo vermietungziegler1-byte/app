@@ -1,7 +1,7 @@
 'use strict';
 
 // -------------------------------------------------------------
-//  Dateien aus OneDrive Objekten, Wohnungen und Mietern zuordnen — am Pfad und Dateinamen.
+//  Dateien aus Google Drive Objekten, Wohnungen und Mietern zuordnen — am Pfad und Dateinamen.
 //  Ohne Abhängigkeiten, einzeln testbar. Was hier nicht sicher zugeordnet wird, liest später der Assistent.
 // -------------------------------------------------------------
 
@@ -18,6 +18,14 @@ const ALLGEMEIN = ['am', 'an', 'im', 'in', 'zum', 'zur', 'der', 'die', 'das', 'u
   'herr', 'frau', 'familie', 'eg', 'og', 'dg', 'ug', 'links', 'rechts', 'mitte', 'wohnung', 'garage', 'stellplatz',
   'waiblingen', 'stuttgart', 'gmbh', 'co', 'kg'];
 
+// „Maybachstraße“ steht in Ordnern oft als „Maybachstr.“ — und umgekehrt
+function strassenVarianten(merkmal) {
+  const v = [];
+  if (/strasse( |$)/.test(merkmal)) v.push(merkmal.replace(/strasse( |$)/g, 'str$1'));
+  else if (/str( |$)/.test(merkmal)) v.push(merkmal.replace(/str( |$)/g, 'strasse$1'));
+  return v;
+}
+
 // Aus dem Datenstand: Objekte mit Erkennungsmerkmalen, Wohnungen, Mieter
 function woerterbuch(stand) {
   const objekte = [], einheiten = [], mieter = [];
@@ -32,6 +40,9 @@ function woerterbuch(stand) {
     if (erstes.length >= 5 && ALLGEMEIN.indexOf(erstes) === -1) merkmale.push(erstes);   // „bertha“, „dahlienweg“
     // zusammengeschrieben: „berthavonsuttnerweg“
     if (strasse.indexOf(' ') !== -1) merkmale.push(strasse.replace(/ /g, ''));
+    merkmale.slice().forEach(function (mk) {
+      strassenVarianten(mk).forEach(function (v) { if (v.length >= 5 && merkmale.indexOf(v) === -1) merkmale.push(v); });
+    });
     objekte.push({ id: o.id, name: name, merkmale: merkmale });
     (o.units || []).forEach(function (x) {
       const n = normal(x.name).trim();
@@ -46,7 +57,7 @@ function woerterbuch(stand) {
   return { objekte: objekte, einheiten: einheiten, mieter: mieter };
 }
 
-// Art des Dokuments am Namen erkennen
+// Art des Dokuments — erst am Namen, sonst am nächsten Ordner, der etwas verrät („03 Rechnungen“, „04 Verträge“)
 const ARTEN = [
   ['Mietvertrag', ['mietvertrag', 'mietvertraege', 'mv']],
   ['Nebenkosten', ['nebenkosten', 'nebenkostenabrechnung', 'betriebskosten', 'betriebskostenabrechnung', 'nka', 'bka', 'heizkosten', 'heizkostenabrechnung', 'ista', 'techem', 'brunata']],
@@ -54,42 +65,62 @@ const ARTEN = [
   ['Kündigung', ['kuendigung', 'kuendigungsbestaetigung']],
   ['Übergabeprotokoll', ['uebergabeprotokoll', 'uebergabe', 'abnahmeprotokoll', 'wohnungsuebergabe']],
   ['Selbstauskunft', ['selbstauskunft', 'mieterselbstauskunft', 'schufa', 'gehaltsnachweis', 'lohnabrechnung', 'einkommensnachweis', 'gehaltsabrechnung']],
-  ['Versicherung', ['versicherung', 'police', 'versicherungsschein', 'gebaeudeversicherung']],
+  ['Versicherung', ['versicherung', 'police', 'versicherungsschein', 'gebaeudeversicherung', 'wohngebaeudeversicherung']],
   ['Plan', ['grundriss', 'grundrisse', 'plan', 'plaene', 'energieausweis', 'flaechenberechnung', 'wohnflaechenberechnung', 'teilungserklaerung', 'grundbuch']],
   ['Angebot', ['angebot', 'kostenvoranschlag', 'kva']],
-  ['Rechnung', ['rechnung', 'rechnungen', 'invoice', 'gutschrift', 'quittung', 'beleg']],
+  ['Rechnung', ['rechnung', 'rechnungen', 'invoice', 'gutschrift', 'quittung', 'beleg', 'belege']],
   ['Protokoll', ['protokoll', 'eigentuemerversammlung', 'wartungsprotokoll', 'pruefbericht']],
   ['Schriftverkehr', ['schreiben', 'brief', 'mahnung', 'mieterhoehung', 'anschreiben']],
-  ['Kontoauszug', ['kontoauszug', 'kontoauszuege']]
+  ['Kontoauszug', ['kontoauszug', 'kontoauszuege']],
+  ['Vertrag', ['vertrag', 'vertraege', 'kaufvertrag', 'wartungsvertrag', 'stromvertrag', 'liefervertrag']],
+  ['Steuer', ['steuer', 'steuern', 'grundsteuer', 'steuerbescheid', 'steuererklaerung', 'grundsteuerbescheid']]
 ];
 const BILD = /\.(jpe?g|png|heic|heif|gif|webp)$/i;
-function artVon(name, mime) {
-  const n = normal(String(name || '').replace(/\.[a-z0-9]+$/i, ''));
+function artAusText(text) {
+  const n = normal(text);
   for (const a of ARTEN) { if (a[1].some(function (w) { return enthaelt(n, w) || (w.length >= 8 && n.indexOf(w) !== -1); })) return a[0]; }
+  return '';
+}
+function artVon(name, mime, pfad) {
+  const ausName = artAusText(String(name || '').replace(/\.[a-z0-9]+$/i, ''));
+  if (ausName) return ausName;
   if (BILD.test(name || '') || /^image\//.test(mime || '')) return 'Foto';
+  const ordner = String(pfad || '').split('/').filter(Boolean).reverse();
+  for (const o of ordner) { const a = artAusText(o); if (a) return a; }
   return 'Sonstiges';
 }
 // Diese Arten gehören zum Mieter, die übrigen zur Wohnung bzw. zum Objekt
 const MIETER_ARTEN = ['Mietvertrag', 'Kaution', 'Kündigung', 'Übergabeprotokoll', 'Selbstauskunft', 'Schriftverkehr'];
 
-// Welche Dateien überhaupt in Frage kommen: Dokumente und Fotos, nicht in Ordnern, die erkennbar privat oder technisch sind
+// Welche Dateien überhaupt in Frage kommen: Dokumente und Fotos, nicht in Ordnern, die erkennbar privat oder technisch sind.
+// Google-Dokumente und -Tabellen haben keine Endung — die erkennt man am Typ.
 const TYPEN = /\.(pdf|docx?|odt|rtf|xlsx?|ods|txt|jpe?g|png|heic|heif)$/i;
+const TYP_OHNE_ENDUNG = /^(application\/pdf|application\/vnd\.google-apps\.(document|spreadsheet)|image\/(jpeg|png|heic|heif))$/;
 const AUSSEN_VOR = /(^|\/)(camera roll|eigene aufnahmen|screenshots|whatsapp( images)?|node_modules|\.git|appdata|programme|program files|\.trash|papierkorb)(\/|$)/i;
-function kommtInFrage(pfad, name) {
-  return TYPEN.test(String(name || '')) && !AUSSEN_VOR.test(String(pfad || '') + '/');
+function kommtInFrage(pfad, name, mime) {
+  return (TYPEN.test(String(name || '')) || TYP_OHNE_ENDUNG.test(String(mime || ''))) && !AUSSEN_VOR.test(String(pfad || '') + '/');
 }
 
 // Zuordnung am Pfad + Namen. regeln: gelernte Ordner (pfad → objekt/einheit), längster passender Pfad gewinnt.
 // Liefert { objekt, einheit, art, sicher, grund } — objekt/einheit leer, wenn nichts passt.
-function zuordnen(pfad, name, wb, regeln) {
-  const art = artVon(name);
+function zuordnen(pfad, name, wb, regeln, mime) {
+  const art = artVon(name, mime, pfad);
   const ganz = normal(String(pfad || '') + ' ' + String(name || '').replace(/\.[a-z0-9]+$/i, ''));
 
-  // 1. Selbst gelernt: Ordner, in denen Louis schon zugeordnet hat
+  // 1. Feste Ordner: von Louis gelernt oder beim Objekt als Beleg-Ordner hinterlegt
   const p = String(pfad || '').toLowerCase();
-  const regel = (regeln || []).filter(function (r) { return p === r.pfad.toLowerCase() || p.indexOf(r.pfad.toLowerCase() + '/') === 0; })
+  const regel = (regeln || []).filter(function (r) { return r.pfad && (p === r.pfad.toLowerCase() || p.indexOf(r.pfad.toLowerCase() + '/') === 0); })
     .sort(function (a, b) { return b.pfad.length - a.pfad.length; })[0];
-  if (regel && regel.objekt) return { objekt: regel.objekt, einheit: regel.einheit || '', art: art, sicher: true, grund: 'Ordner' };
+  if (regel && regel.objekt) {
+    // Liegt die Datei tiefer, darf der Pfad noch die Wohnung verraten
+    let einheit = regel.einheit || '';
+    if (!einheit) {
+      const w = wb.einheiten.filter(function (e) { return e.objekt === regel.objekt && ganz.indexOf(' ' + e.merkmal + ' ') !== -1; })
+        .sort(function (a, b) { return b.merkmal.length - a.merkmal.length; })[0];
+      if (w) einheit = w.id;
+    }
+    return { objekt: regel.objekt, einheit: einheit, art: art, sicher: true, grund: 'Ordner' };
+  }
 
   // 2. Mietername: legt Objekt und Wohnung fest — nur wenn der Name eindeutig ist
   const mieterTreffer = wb.mieter.filter(function (m) { return enthaelt(ganz, m.nachname); });

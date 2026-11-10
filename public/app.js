@@ -632,6 +632,10 @@
     }
     render();
     zuletztAufgefrischt = Date.now();
+    // Zurück von Google (Recht für Google Drive erteilt): das Fenster für die Ordnerwahl gleich wieder öffnen
+    let nachGoogle = null;
+    try { nachGoogle = window.sessionStorage.getItem('vermietung:nachGoogle'); window.sessionStorage.removeItem('vermietung:nachGoogle'); } catch (e) { /* egal */ }
+    if (nachGoogle === 'dokumente' && phase === 'app' && nutzerRolle === 'verwalter') handle('od-einrichten', null);
     if (phase === 'app' && todoist.verbunden) {
       planLaden().then(function () {
         if (planWunsch) { planWunsch = false; modal = { kind: 'plan' }; }
@@ -1084,11 +1088,12 @@
   }
 
   // =================================================================
-  // OneDrive: Dateien bei Objekten, Wohnungen und Mietern — die App liest nur und kopiert nichts.
+  // Dokumente aus Google Drive bei Objekten, Wohnungen und Mietern — die App liest nur und kopiert nichts.
   // Der Server gleicht alle fünf Minuten ab und ordnet zu; hier wird angezeigt, gefiltert und korrigiert.
+  // („od“ = Online-Dokumente; der erste Anlauf über OneDrive scheiterte an Microsofts Firmenverzeichnis.)
   // =================================================================
   const OD_ARTEN = ['Mietvertrag', 'Nebenkosten', 'Kaution', 'Kündigung', 'Übergabeprotokoll', 'Selbstauskunft', 'Versicherung', 'Plan',
-    'Angebot', 'Rechnung', 'Protokoll', 'Schriftverkehr', 'Kontoauszug', 'Foto', 'Sonstiges'];
+    'Angebot', 'Rechnung', 'Protokoll', 'Schriftverkehr', 'Kontoauszug', 'Vertrag', 'Steuer', 'Foto', 'Sonstiges'];
   const OD_MIETER = ['Mietvertrag', 'Kaution', 'Kündigung', 'Übergabeprotokoll', 'Selbstauskunft', 'Schriftverkehr'];
   let od = { status: null, dateien: null, laedt: false, statusLaedt: false, geholt: 0, filter: {}, art: {}, suche: {} };
 
@@ -1096,14 +1101,14 @@
   function odStatusLaden() {
     if (od.statusLaedt) return Promise.resolve();
     od.statusLaedt = true;
-    return apiRoh('onedrive').then(function (s) { od.status = s; })
-      .catch(function () { od.status = { eingerichtet: false, verbunden: false }; })
+    return apiRoh('dokumente').then(function (s) { od.status = s; })
+      .catch(function () { od.status = { google: false, recht: false, gewaehlt: false, verbunden: false }; })
       .then(function () { od.statusLaedt = false; });
   }
   function odLaden() {
     if (od.laedt) return Promise.resolve();
     od.laedt = true;
-    return apiRoh('onedrive/dateien').then(function (r) { od.dateien = r.dateien || []; od.info = r; od.geholt = Date.now(); })
+    return apiRoh('dokumente/dateien').then(function (r) { od.dateien = r.dateien || []; od.info = r; od.geholt = Date.now(); })
       .catch(function (e) { od.fehler = e.message; if (!od.dateien) od.dateien = []; })
       .then(function () { od.laedt = false; });
   }
@@ -1115,7 +1120,7 @@
     if (laeuft.length) Promise.all(laeuft).then(function () {
       if (odBereit() && !od.dateien && !od.laedt) return odLaden();
     }).then(function () {
-      // Im Fenster einer Wohnung nur den OneDrive-Teil auffrischen — sonst ginge Eingetipptes verloren
+      // Im Fenster einer Wohnung nur den Dokumente-Teil auffrischen — sonst ginge Eingetipptes verloren
       if (modal && modal.kind === 'unit') {
         const feld = root.querySelector('.od-einheit-feld');
         if (feld) {
@@ -1132,9 +1137,11 @@
   }
   function odEndung(name) { const m = /\.([a-z0-9]+)$/i.exec(name || ''); return m ? m[1].toLowerCase() : ''; }
   function odSymbol(d) {
-    const e = odEndung(d.name);
-    const art = /^(jpe?g|png|heic|heif|gif|webp)$/.test(e) ? ['od-bild', e === 'png' ? 'PNG' : 'JPG']
-      : /^(docx?|odt|rtf|txt)$/.test(e) ? ['od-text', 'DOC'] : /^(xlsx?|ods)$/.test(e) ? ['od-tabelle', 'XLS'] : ['od-pdf', 'PDF'];
+    const e = odEndung(d.name), m = String(d.mime || '');
+    // Google-Dokumente und -Tabellen haben keine Endung — dann zählt der Typ
+    const art = /^(jpe?g|png|heic|heif|gif|webp)$/.test(e) || /^image\//.test(m) ? ['od-bild', e === 'png' ? 'PNG' : 'JPG']
+      : /^(docx?|odt|rtf|txt)$/.test(e) || /google-apps\.document$/.test(m) ? ['od-text', 'DOC']
+      : /^(xlsx?|ods)$/.test(e) || /google-apps\.spreadsheet$/.test(m) ? ['od-tabelle', 'XLS'] : ['od-pdf', 'PDF'];
     return '<span class="od-ic ' + art[0] + '">' + art[1] + '</span>';
   }
   function odEinheitName(objektId, einheitId) {
@@ -1147,7 +1154,7 @@
     return d.geaendert ? new Date(d.geaendert).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
   }
   function odNeu(d) { return d.gesehen && Date.now() - d.gesehen < 2 * 86400000; }
-  // Eine Zeile: Antippen öffnet die Datei in OneDrive, „Ändern“ ordnet neu zu
+  // Eine Zeile: Antippen öffnet die Datei in Google Drive, „Ändern“ ordnet neu zu
   function odZeileHtml(d, mitWo) {
     const wo = odEinheitName(d.objekt, d.einheit);
     return '<div class="od-zeile">'
@@ -1176,9 +1183,9 @@
     odSicherstellen();
     if (!od.status) return '<div class="empty-note">wird geladen …</div>';
     if (!odBereit()) {
-      return '<div class="od-leer">Verbinde dein OneDrive, dann stehen hier von selbst alle Unterlagen zu diesem Objekt, '
+      return '<div class="od-leer">Verbinde Google Drive, dann stehen hier von selbst alle Unterlagen zu diesem Objekt, '
         + 'seinen Wohnungen und Mietern — und jede neue Datei kommt automatisch dazu.'
-        + (nutzerRolle === 'verwalter' ? '<button class="tiny primary" data-act="od-einrichten">OneDrive verbinden</button>' : '') + '</div>';
+        + (nutzerRolle === 'verwalter' ? '<button class="tiny primary" data-act="od-einrichten">Google Drive verbinden</button>' : '') + '</div>';
     }
     if (!od.dateien) return '<div class="empty-note">Dateien werden geladen …</div>';
     const alle = od.dateien.filter(function (d) { return d.objekt === o.id && d.status === 'zugeordnet'; });
@@ -1198,7 +1205,7 @@
     };
     let h = '';
     if (neu || pruefen.length) {
-      h += '<div class="od-banner">☁︎ <span>' + (neu ? '<b>' + neu + (neu === 1 ? ' neue Datei' : ' neue Dateien') + '</b> aus OneDrive in den letzten zwei Tagen' : '')
+      h += '<div class="od-banner">☁︎ <span>' + (neu ? '<b>' + neu + (neu === 1 ? ' neue Datei' : ' neue Dateien') + '</b> aus Google Drive in den letzten zwei Tagen' : '')
         + (neu && pruefen.length ? ' · ' : '') + (pruefen.length ? pruefen.length + ' bitte kurz prüfen' : '') + '</span></div>';
     }
     h += '<div class="od-leiste"><input type="search" id="od-q-' + o.id + '" data-od-suche="' + o.id + '" placeholder="In Dokumenten suchen" value="' + esc(od.suche[o.id] || '') + '" autocomplete="off">'
@@ -1211,7 +1218,7 @@
             + esc(k || 'Alle Arten') + '<span>' + (k ? arten[k] : imFilter.length) + '</span></button>';
         }).join('') + '</div>'
       + '<div class="od-liste">' + (liste.length ? liste.map(function (d) { return odZeileHtml(d, true); }).join('')
-          : '<div class="empty-note">' + (alle.length ? 'Keine Datei passt zu diesem Filter.' : 'Noch keine Datei diesem Objekt zugeordnet. Neue Dateien in OneDrive tauchen hier nach ein paar Minuten auf.') + '</div>')
+          : '<div class="empty-note">' + (alle.length ? 'Keine Datei passt zu diesem Filter.' : 'Noch keine Datei diesem Objekt zugeordnet. Neue Dateien in Google Drive tauchen hier nach ein paar Minuten auf.') + '</div>')
       + '</div>'
       + (pruefen.length ? '<div class="od-pruefen"><h4>Bitte kurz prüfen</h4><div class="od-hinweis">Hier war sich die App nicht sicher. '
           + 'Ein Tipp genügt — sie merkt sich das für den Ordner.</div>' + pruefen.slice(0, 12).map(odVorschlagHtml).join('') + '</div>' : '')
@@ -1219,17 +1226,82 @@
     return h;
   }
 
+  // ---- Ordnerwahl: welche Ordner in Google Drive die App ansehen darf ----
+  // Gewählt wird ausdrücklich (ein/aus); was nicht gewählt ist, erbt vom Ordner darüber — ganz oben ist „aus“ die Vorgabe.
+  function odWahlLaden(frisch) {
+    modal.wahl = { laedt: true };
+    render();
+    apiRoh('dokumente/ordner' + (frisch ? '?frisch=1' : '')).then(function (r) {
+      const w = { wurzel: r.wurzel, ordner: r.ordner || [], nachId: {}, ein: {}, aus: {}, verborgen: { ein: [], aus: [] } };
+      w.ordner.forEach(function (z) { w.nachId[z.id] = z; });
+      (r.ein || []).forEach(function (id) { if (w.nachId[id] || id === w.wurzel) w.ein[id] = true; else w.verborgen.ein.push(id); });
+      (r.aus || []).forEach(function (id) { if (w.nachId[id] || id === w.wurzel) w.aus[id] = true; else w.verborgen.aus.push(id); });
+      if (modal && modal.kind === 'od-einrichten') { modal.wahl = w; render(); }
+    }).catch(function (e) {
+      if (modal && modal.kind === 'od-einrichten') { modal.wahl = { fehler: e.message }; render(); }
+    });
+  }
+  function odWahlAn(id) {
+    const w = modal.wahl;
+    if (w.ein[id]) return true;
+    if (w.aus[id]) return false;
+    if (id === w.wurzel) return false;
+    const z = w.nachId[id];
+    return z && z.ebene === 2 ? odWahlAn(z.eltern) : odWahlAn(w.wurzel);
+  }
+  function odWahlSetzen(id, an) {
+    const w = modal.wahl;
+    if (id === w.wurzel) {
+      // „Lose Dateien“ soll nicht alle obersten Ordner mitziehen: deren jetzigen Stand festhalten
+      w.ordner.filter(function (z) { return z.ebene === 1; }).forEach(function (z) {
+        const jetzt = odWahlAn(z.id);
+        delete w.ein[z.id]; delete w.aus[z.id];
+        if (jetzt !== an) (jetzt ? w.ein : w.aus)[z.id] = true;
+      });
+      delete w.ein[id]; delete w.aus[id];
+      if (an) w.ein[id] = true;
+      return;
+    }
+    delete w.ein[id]; delete w.aus[id];
+    const z = w.nachId[id];
+    const erbt = z && z.ebene === 2 ? odWahlAn(z.eltern) : odWahlAn(w.wurzel);
+    if (an !== erbt) (an ? w.ein : w.aus)[id] = true;
+  }
+  function odOrdnerWahlHtml() {
+    const w = modal.wahl;
+    // Noch nicht geholt (z. B. Fenster neu aufgebaut): einmal nachladen, nicht während des Aufbaus
+    if (!w) { modal.wahl = { laedt: true }; setTimeout(function () { if (modal && modal.kind === 'od-einrichten') odWahlLaden(false); }, 0); }
+    if (!w || w.laedt) return '<div class="empty-note">Ordner werden gelesen …</div>';
+    if (w.fehler) return '<div class="hintbox"><b>Das hat nicht geklappt:</b> ' + esc(w.fehler) + '</div>';
+    const zeile = function (id, name, ebene, klein, extra) {
+      const an = odWahlAn(id);
+      return '<label class="od-wahl-zeile e' + ebene + (an ? ' an' : '') + (extra || '') + '"><input type="checkbox" data-act="od-wahl" data-id="' + esc(id) + '"' + (an ? ' checked' : '') + '>'
+        + '<span class="od-wahl-name">' + esc(name) + '</span>' + (klein ? '<small>' + esc(klein) + '</small>' : '') + '</label>';
+    };
+    const gewaehlt = w.ordner.filter(function (z) { return odWahlAn(z.id); }).length;
+    return '<div class="hint">Hake die Ordner an, in denen Unterlagen zur Vermietung liegen. Nur dort schaut die App hinein — alles andere sieht sie nicht. '
+      + 'Unterordner gehören automatisch dazu; einzelne, zum Beispiel private, kannst du wieder abwählen.</div>'
+      + (w.ordner.length ? '<div class="od-wahl">'
+        + w.ordner.map(function (z) {
+            return zeile(z.id, z.name, z.ebene, z.ebene === 1 && z.unterordner ? z.unterordner + ' Unterordner' : '');
+          }).join('')
+        + zeile(w.wurzel, 'Lose Dateien direkt in „Meine Ablage“', 1, '', ' lose')
+        + '</div><div class="legal">' + (gewaehlt ? gewaehlt + ' von ' + w.ordner.length + ' Ordnern gewählt.' : 'Noch kein Ordner gewählt.')
+        + ' <button class="tiny ghost" data-act="od-wahl-neu">Ordnerliste neu lesen</button></div>'
+        : '<div class="empty-note">In deinem Google Drive gibt es noch keine Ordner.</div>');
+  }
+
   // In der Wohnung: Unterlagen des Mieters und der Wohnung
   function odEinheitHtml(objektId, einheitId) {
     odSicherstellen();
     if (!od.status) return '';
     if (!odBereit()) {
-      return nutzerRolle === 'verwalter' ? '<div class="od-klein">OneDrive ist nicht verbunden — dann stehen hier Mietvertrag, Protokolle und Rechnungen '
+      return nutzerRolle === 'verwalter' ? '<div class="od-klein">Google Drive ist nicht verbunden — dann stehen hier Mietvertrag, Protokolle und Rechnungen '
         + 'von selbst. <button class="tiny ghost" data-act="od-einrichten">Verbinden</button></div>' : '';
     }
     if (!od.dateien) return '<div class="od-klein">Dateien werden geladen …</div>';
     const hier = od.dateien.filter(function (d) { return d.objekt === objektId && d.einheit === einheitId && d.status === 'zugeordnet'; });
-    if (!hier.length) return '<div class="od-klein">Noch keine Datei aus OneDrive bei dieser Wohnung.</div>';
+    if (!hier.length) return '<div class="od-klein">Noch keine Datei aus Google Drive bei dieser Wohnung.</div>';
     const mieter = hier.filter(function (d) { return OD_MIETER.indexOf(d.art) !== -1; });
     const wohnung = hier.filter(function (d) { return OD_MIETER.indexOf(d.art) === -1; });
     return (mieter.length ? '<div class="od-gruppe">Mieter</div><div class="od-liste klein">' + mieter.map(function (d) { return odZeileHtml(d, false); }).join('') + '</div>' : '')
@@ -4352,7 +4424,7 @@
         + eintrag('todoist', 'Todoist', todoist.verbunden ? 'verbunden' : 'offen')
         + eintrag('google', 'Postfach', google.verbunden ? 'verbunden' : 'offen')
         + (nutzerRolle === 'verwalter' ? eintrag('pf-einrichten', 'Mailkonto mzer.de', pfBereit() ? 'verbunden' : 'offen') : '')
-        + (nutzerRolle === 'verwalter' ? eintrag('od-einrichten', 'OneDrive', od.status ? (odBereit() ? 'verbunden' : 'offen') : '') : '')
+        + (nutzerRolle === 'verwalter' ? eintrag('od-einrichten', 'Google Drive', od.status ? (odBereit() ? 'verbunden' : 'offen') : '') : '')
         + eintrag('gkal', 'Kalender', gkal.eingerichtet ? 'verbunden' : 'offen')
         + eintrag('push', 'Mitteilungen', pushAbo ? 'aktiv' : 'aus')
         + eintrag('stimme', 'Vorlesestimme', stimme.verbunden ? 'verbunden' : 'Gerät')
@@ -5040,7 +5112,7 @@
           }
         }
 
-        // ---- Reiter: Dokumente aus OneDrive ----
+        // ---- Reiter: Dokumente aus Google Drive ----
         if (tab === 'dokumente') html += odObjektHtml(o);
 
         if (o.note) html += '<div class="unit-type" style="margin-top:10px">' + esc(o.note) + '</div>';
@@ -7631,7 +7703,7 @@
       .map(function (m) { return { typ: 'post', id: m.id, titel: m.betreff, unten: String(m.von || '').replace(/<.*>/, '').replace(/"/g, '').trim() }; }));
     gruppe('Abrechnungen', ((rg && rg.liste) || []).filter(function (e) { return passt(e.nummer, e.objekt); })
       .map(function (e) { return { typ: 'rechnung', id: e.id, titel: e.nummer, unten: e.objekt || '' }; }));
-    // Dateien aus OneDrive: nach Name, Titel, Art, Objekt, Wohnung und Mieter
+    // Dateien aus Google Drive: nach Name, Titel, Art, Objekt, Wohnung und Mieter
     gruppe('Dokumente', (od.dateien || []).filter(function (d) {
       if (d.status !== 'zugeordnet') return false;
       const wo = odEinheitName(d.objekt, d.einheit);
@@ -7760,34 +7832,31 @@
     } else if (modal.kind === 'od-einrichten') {
       const s = od.status || {};
       const z = s.zahlen || {};
-      const rueck = location.origin + '/api/onedrive/zurueck';
-      body = '<h2>OneDrive</h2>';
-      if (!s.eingerichtet) {
-        body += '<div class="hint">Damit die App deine Dateien lesen darf, wird sie einmal bei Microsoft eingetragen — ähnlich wie damals bei Google. '
-          + 'Das dauert etwa zehn Minuten. Die App bekommt nur Lesezugriff und kopiert keine Dateien.</div>'
+      body = '<h2>Google Drive</h2>';
+      if (!od.status) {
+        body += '<div class="empty-note">wird geladen …</div>';
+      } else if (!s.recht) {
+        // Die Google-Verbindung fürs Postfach gibt es schon — ihr fehlt nur das Recht, Dateien zu lesen
+        body += '<div class="hint">Die App soll deine Unterlagen aus Google Drive bei den Objekten, Wohnungen und Mietern zeigen. '
+          + 'Dafür meldest du Google einmal neu an und erlaubst zusätzlich, <b>Dateien anzusehen</b>. '
+          + 'Die App liest nur — sie ändert, verschiebt und löscht nichts in deinem Google Drive.</div>'
           + '<ol class="od-schritte">'
-          + '<li><b>entra.microsoft.com</b> öffnen und mit deinem Microsoft-Konto anmelden (dasselbe wie für OneDrive).</li>'
-          + '<li>Links „Anwendungen“ → „App-Registrierungen“ → „Neue Registrierung“. Name: <b>Ziegler Verwaltung</b>. '
-          + 'Bei den Kontotypen: <b>„Konten in einem beliebigen Organisationsverzeichnis und persönliche Microsoft-Konten“</b>.</li>'
-          + '<li>Umleitungs-URI: Plattform <b>Web</b>, Adresse:<div class="od-kopie"><code>' + esc(rueck) + '</code>'
-          + '<button class="tiny" data-act="od-kopieren" data-wert="' + esc(rueck) + '">Kopieren</button></div> Dann „Registrieren“.</li>'
-          + '<li>Auf der Übersicht steht die <b>Anwendungs-ID (Client)</b> — kopieren und unten einfügen.</li>'
-          + '<li>Links „Zertifikate &amp; Geheimnisse“ → „Neuer geheimer Clientschlüssel“ → Ablauf 24 Monate → hinzufügen. '
-          + 'Den <b>Wert</b> (nicht die ID) kopieren und unten einfügen.</li>'
+          + '<li>Unten auf <b>Google neu verbinden</b> tippen und dein Google-Konto wählen.</li>'
+          + '<li>Zeigt Google „App nicht überprüft“: auf <b>Erweitert</b> und dann <b>Weiter zu Ziegler Verwaltung</b> — das ist deine eigene App.</li>'
+          + '<li>Bei den Rechten das Häkchen bei <b>Google Drive-Dateien ansehen und herunterladen</b> setzen und bestätigen.</li>'
+          + '<li>Danach kommst du hierher zurück und wählst die Ordner aus.</li>'
           + '</ol>'
-          + f('Anwendungs-ID (Client)', '<input type="text" id="od-client-id" autocomplete="off" placeholder="z. B. 1a2b3c4d-…">')
-          + f('Geheimer Clientschlüssel (Wert)', '<input type="password" id="od-client-secret" autocomplete="off">')
+          + (s.google && s.fehler ? '<div class="legal">' + esc(s.fehler) + '</div>' : '')
           + '<div class="modal-actions"><div class="spacer"></div><button data-act="close">Abbrechen</button>'
-          + '<button class="primary" data-act="od-speichern">Speichern</button></div>';
-      } else if (!s.verbunden) {
-        body += '<div class="hint">Fast fertig: Melde dich jetzt bei Microsoft an und erlaube der App, deine Dateien zu lesen. '
-          + 'Danach liest sie dein OneDrive ein und ordnet zu — das läuft im Hintergrund.</div>'
-          + '<div class="modal-actions" style="justify-content:flex-start"><a class="od-anmelden" href="/api/onedrive/start">Mit Microsoft anmelden</a></div>'
-          + '<div class="legal">Klappt die Anmeldung nicht, stimmt meist die Umleitungs-URI nicht: <code>' + esc(rueck) + '</code></div>'
-          + '<div class="modal-actions"><button class="danger" data-act="od-trennen">Zugangsdaten löschen</button><div class="spacer"></div><button data-act="close">Schließen</button></div>';
+          + '<button class="primary" data-act="od-google">Google neu verbinden</button></div>';
+      } else if (!s.gewaehlt || modal.waehlen) {
+        body += odOrdnerWahlHtml()
+          + '<div class="modal-actions">' + (s.gewaehlt ? '<button data-act="od-wahl-zurueck">Zurück</button>' : '') + '<div class="spacer"></div>'
+          + '<button data-act="close">Abbrechen</button>'
+          + '<button class="primary" data-act="od-wahl-speichern"' + (modal.wahl && modal.wahl.ordner ? '' : ' disabled') + '>Übernehmen</button></div>';
       } else {
-        const unklar = (od.dateien || []).filter(function (d) { return d.status === 'unklar' || (d.status === 'pruefen' && !d.objekt); });
-        body += '<div class="hintbox">Verbunden' + (s.konto ? ' mit <b>' + esc(s.konto) + '</b>' : '') + '. Die App schaut alle fünf Minuten nach neuen Dateien.'
+        const unklar = (od.dateien || []).filter(function (d) { return d.status === 'unklar' || d.status === 'offen' || (d.status === 'pruefen' && !d.objekt); });
+        body += '<div class="hintbox">Verbunden. Die App schaut alle fünf Minuten in den gewählten Ordnern nach neuen Dateien.'
           + (s.laeuft ? ' Gerade läuft ein Abgleich …' : (s.zuletzt ? ' Zuletzt: ' + new Date(s.zuletzt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) + ' Uhr.' : ''))
           + (s.fehler ? '<br><b>Fehler:</b> ' + esc(s.fehler) : '') + '</div>'
           + '<div class="od-zahlen">'
@@ -7800,7 +7869,8 @@
           + 'Er liest nur PDFs, die am Namen nicht zu erkennen sind.</div>'
           + (unklar.length ? '<div class="od-gruppe">Keinem Objekt zugeordnet (' + unklar.length + ')</div><div class="od-unklar">'
               + unklar.slice(0, 40).map(odVorschlagHtml).join('') + '</div>' : '')
-          + '<div class="modal-actions"><button class="danger" data-act="od-trennen">Trennen</button><div class="spacer"></div>'
+          + '<div class="modal-actions"><button class="danger" data-act="od-trennen">Zurücksetzen</button><div class="spacer"></div>'
+          + '<button data-act="od-ordner">Ordner ändern</button>'
           + '<button data-act="od-abgleich">Jetzt abgleichen</button><button data-act="close">Schließen</button></div>';
       }
     } else if (modal.kind === 'od-zuordnen') {
@@ -7891,8 +7961,8 @@
         + '<div class="sum-line plain"><span>Gesamt inkl. Nebenkosten</span><span class="num">' + money(brutto(x)) + '</span></div>'
         + '<div class="sum-line plain"><span>Kaution' + (x.deposit == null ? ' (2 Kaltmieten)' : ' (abweichend)') + '</span><span class="num">' + money(kaution(x)) + '</span></div>'
         + '<div class="divider"></div>'
-        // Aus OneDrive: von selbst zugeordnet, getrennt nach Mieter und Wohnung
-        + (modal.isNew ? '' : '<div class="field"><label>Unterlagen aus OneDrive</label><div class="od-einheit-feld">' + odEinheitHtml(modal.oid, x.id) + '</div></div>')
+        // Aus Google Drive: von selbst zugeordnet, getrennt nach Mieter und Wohnung
+        + (modal.isNew ? '' : '<div class="field"><label>Unterlagen aus Google Drive</label><div class="od-einheit-feld">' + odEinheitHtml(modal.oid, x.id) + '</div></div>')
         + '<div class="field"><label>Dokumente</label><div class="doclist">'
         + (x.docs && x.docs.length ? x.docs.map(function (d, i) {
             return '<div class="docrow"><div class="grow"><a href="' + esc(d.url) + '" target="_blank" rel="noopener">' + esc(d.name) + '</a></div>'
@@ -8928,7 +8998,7 @@
       kauf: 'Durchgerechnet', 'kauf-neu': 'Angebot eintragen', 'kauf-annahmen': 'Annahmen',
       anfrage: 'Anfrage', 'anf-kriterien': 'Kriterien',
       'pf-schreiben': 'Mail', 'pf-mail': 'Mail', 'pf-ziel': 'Verschieben', 'pf-einrichten': 'Mailkonto',
-      'od-einrichten': 'OneDrive', 'od-zuordnen': 'Zuordnen'
+      'od-einrichten': 'Google Drive', 'od-zuordnen': 'Zuordnen'
     }[modal.kind] || '';
 
 
@@ -9736,42 +9806,70 @@
             .catch(function (e) { toast(e.message); });
         });
     }
-    // ---- OneDrive ----
+    // ---- Dokumente aus Google Drive ----
     else if (act === 'od-filter') { od.filter[el.getAttribute('data-id')] = el.getAttribute('data-wert') || ''; od.art[el.getAttribute('data-id')] = ''; render(); }
     else if (act === 'od-art') { od.art[el.getAttribute('data-id')] = el.getAttribute('data-wert') || ''; render(); }
     else if (act === 'od-einrichten') {
       seiteOffen = false;
       modal = { kind: 'od-einrichten' }; render();
-      odStatusLaden().then(function () { return odBereit() ? odLaden() : null; })
-        .then(function () { if (modal && modal.kind === 'od-einrichten') render(); });
+      od.status = null;
+      odStatusLaden().then(function () {
+        if (!modal || modal.kind !== 'od-einrichten') return null;
+        // Rechte da, aber noch nichts gewählt: gleich die Ordner zeigen
+        if (od.status.recht && !od.status.gewaehlt) { odWahlLaden(false); return null; }
+        return odBereit() ? odLaden() : null;
+      }).then(function () { if (modal && modal.kind === 'od-einrichten') render(); });
     }
-    else if (act === 'od-kopieren') {
-      const wert = el.getAttribute('data-wert');
-      (navigator.clipboard ? navigator.clipboard.writeText(wert) : Promise.reject())
-        .then(function () { toast('Kopiert'); }).catch(function () { toast(wert); });
+    else if (act === 'od-google') {
+      // Nach der Rückkehr von Google dieses Fenster wieder öffnen
+      try { window.sessionStorage.setItem('vermietung:nachGoogle', 'dokumente'); } catch (e) { /* egal */ }
+      window.location.href = '/api/google/start';
     }
-    else if (act === 'od-speichern') {
-      const koerper = { clientId: val('od-client-id'), clientSecret: val('od-client-secret') };
-      if (!koerper.clientId || !koerper.clientSecret) { toast('Bitte Anwendungs-ID und Schlüssel einfügen'); return; }
-      api('onedrive', { method: 'PUT', body: koerper })
-        .then(function () { return odStatusLaden(); })
-        .then(function () { toast('Gespeichert — jetzt bei Microsoft anmelden'); render(); })
-        .catch(function (e) { toast(e.message); });
+    else if (act === 'od-ordner') { modal.waehlen = true; odWahlLaden(false); }
+    else if (act === 'od-wahl-neu') { odWahlLaden(true); }
+    else if (act === 'od-wahl-zurueck') { modal.waehlen = false; modal.wahl = null; render(); }
+    else if (act === 'od-wahl') {
+      if (!modal || !modal.wahl || !modal.wahl.ordner) return;
+      odWahlSetzen(el.getAttribute('data-id'), !!el.checked);
+      render();
+    }
+    else if (act === 'od-wahl-speichern') {
+      const w = modal.wahl;
+      if (!w || !w.ordner) return;
+      const ein = Object.keys(w.ein).concat(w.verborgen.ein), aus = Object.keys(w.aus).concat(w.verborgen.aus);
+      if (!ein.length) { toast('Bitte mindestens einen Ordner anhaken'); return; }
+      api('dokumente/ordner', { method: 'PUT', body: { ein: ein, aus: aus } }).then(function (r) {
+        od.status = r.status; od.dateien = null;
+        modal.waehlen = false; modal.wahl = null;
+        toast('Gespeichert — die App liest jetzt die Dateien ein');
+        render();
+        // Einlesen läuft im Hintergrund: ein paar Mal nachsehen, bis es fertig ist
+        let runden = 0;
+        const nachsehen = function () {
+          runden++;
+          odStatusLaden().then(function () { return odLaden(); }).then(function () {
+            if (modal && modal.kind === 'od-einrichten') render();
+            if (od.status && od.status.laeuft && runden < 20) setTimeout(nachsehen, 3000);
+          });
+        };
+        setTimeout(nachsehen, 2500);
+      }).catch(function (e) { toast(e.message); });
     }
     else if (act === 'od-abgleich') {
-      api('onedrive/abgleich', { method: 'POST' }).then(function () {
-        toast('Abgleich läuft — neue Dateien erscheinen in ein, zwei Minuten');
-        setTimeout(function () { odStatusLaden().then(odLaden).then(function () { if (modal && modal.kind === 'od-einrichten') render(); }); }, 20000);
+      api('dokumente/abgleich', { method: 'POST' }).then(function () {
+        toast('Abgleich läuft — neue Dateien erscheinen gleich');
+        setTimeout(function () { odStatusLaden().then(odLaden).then(function () { if (modal && modal.kind === 'od-einrichten') render(); }); }, 8000);
       }).catch(function (e) { toast(e.message); });
     }
     else if (act === 'od-trennen') {
-      dialog({ titel: 'OneDrive trennen?', text: 'Die App vergisst den Zugang und alle Zuordnungen. Deine Dateien in OneDrive bleiben, wie sie sind.',
-        knoepfe: [{ label: 'Abbrechen', wert: false }, { label: 'Trennen', wert: true, art: 'primaer' }] })
+      dialog({ titel: 'Dokumente zurücksetzen?', text: 'Die App vergisst die Ordnerauswahl und alle Zuordnungen. Deine Dateien in Google Drive bleiben, wie sie sind; '
+          + 'Postfach und Sicherungen über Google laufen weiter.',
+        knoepfe: [{ label: 'Abbrechen', wert: false }, { label: 'Zurücksetzen', wert: true, art: 'primaer' }] })
         .then(function (r) {
           if (!r.wert) return;
-          api('onedrive', { method: 'DELETE' }).then(function () {
+          api('dokumente', { method: 'DELETE' }).then(function () {
             od = { status: null, dateien: null, laedt: false, statusLaedt: false, geholt: 0, filter: {}, art: {}, suche: {} };
-            modal = null; toast('OneDrive getrennt'); render();
+            modal = null; toast('Zurückgesetzt'); render();
           }).catch(function (e) { toast(e.message); });
         });
     }
@@ -9792,7 +9890,7 @@
         if (!koerper.objekt) { toast('Bitte ein Objekt wählen'); return; }
       }
       const zurueck = modal && modal.zurueck;
-      api('onedrive/dateien/' + encodeURIComponent(id), { method: 'PUT', body: koerper })
+      api('dokumente/dateien/' + encodeURIComponent(id), { method: 'PUT', body: koerper })
         .then(function (r) {
           if (koerper.ignorieren) od.dateien = od.dateien.filter(function (x) { return x.id !== id; });
           else Object.assign(d, r.datei);

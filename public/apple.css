@@ -994,7 +994,7 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 #app .fpunkt.istat-besichtigt { background: #ff9f0a; }
 
 /* ==================================================================
-   Dokumente aus OneDrive (Reihe E): beim Objekt als Reiter, in der Wohnung
+   Dokumente aus Google Drive (Reihe E): beim Objekt als Reiter, in der Wohnung
    getrennt nach Mieter und Wohnung, „Bitte prüfen“ für unsichere Zuordnungen.
    ================================================================== */
 #app .od-leer { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 14px 0; color: var(--muted); font-size: 14px; max-width: 560px; }
@@ -1039,6 +1039,8 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 #app .od-art-nebenkosten { background: rgba(48, 209, 88, .18); color: #28a745; }
 #app .od-art-rechnung, #app .od-art-angebot { background: rgba(255, 159, 10, .18); color: #e08600; }
 #app .od-art-versicherung, #app .od-art-plan, #app .od-art-protokoll, #app .od-art-bergabeprotokoll, #app .od-art-foto { background: rgba(10, 132, 255, .16); color: var(--messing); }
+#app .od-art-vertrag { background: rgba(94, 92, 230, .18); color: #5e5ce6; }
+#app .od-art-steuer { background: rgba(255, 69, 58, .14); color: #e5392c; }
 #app .od-neu { margin-left: 6px; padding: 0 6px; border-radius: 5px; background: var(--td-rot); color: #fff; font-size: 10px; font-weight: 700; vertical-align: 1px; }
 #app .od-wo { flex: none; text-align: right; font-size: 12.5px; color: var(--ink); white-space: nowrap; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
 #app .od-wo small { display: block; color: var(--muted); font-size: 11.5px; }
@@ -1059,9 +1061,21 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 #app .od-liste.klein .od-ic { width: 26px; height: 31px; font-size: 7px; }
 #app .od-schritte { margin: 8px 0 14px; padding-left: 20px; font-size: 14px; line-height: 1.55; }
 #app .od-schritte li { margin-bottom: 8px; }
-#app .od-kopie { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
-#app .od-kopie code { flex: 1; min-width: 0; overflow-wrap: anywhere; padding: 6px 9px; border-radius: 8px; background: var(--fuellung); font-size: 12.5px; }
-#app a.od-anmelden { display: inline-block; padding: 11px 18px; border-radius: 11px; background: var(--messing); color: #fff; font-weight: 600; text-decoration: none; }
+/* Ordnerwahl: eine gruppierte Liste mit Häkchen, Unterordner eingerückt */
+#app .od-wahl { margin: 12px 0 8px; border-radius: 14px; background: var(--fuellung); max-height: 46vh; overflow-y: auto; }
+#app .od-wahl-zeile { display: flex; align-items: center; gap: 11px; padding: 10px 14px; border-bottom: 1px solid var(--line-soft); cursor: pointer; font-size: 14.5px; }
+#app .od-wahl-zeile:last-child { border-bottom: 0; }
+#app .od-wahl-zeile input { width: 20px; height: 20px; margin: 0; flex: none; accent-color: var(--messing); }
+#app .od-wahl-zeile.e1 .od-wahl-name { font-weight: 600; }
+#app .od-wahl-zeile.e2 { padding-left: 46px; font-size: 14px; }
+#app .od-wahl-zeile .od-wahl-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#app .od-wahl-zeile .od-wahl-name::before { content: ''; display: inline-block; width: 16px; height: 12px; margin-right: 8px; vertical-align: -1px; border-radius: 2px 3px 3px 3px;
+  background: linear-gradient(180deg, #7fb6ff, #4f8cff); opacity: .9; }
+#app .od-wahl-zeile:not(.an) .od-wahl-name { color: var(--muted); }
+#app .od-wahl-zeile:not(.an) .od-wahl-name::before { opacity: .35; }
+#app .od-wahl-zeile.lose .od-wahl-name::before { display: none; }
+#app .od-wahl-zeile.lose .od-wahl-name { font-weight: 500; }
+#app .od-wahl-zeile small { flex: none; color: var(--muted); font-size: 12px; }
 #app .od-zahlen { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 12px 0; }
 #app .od-zahlen div { background: var(--fuellung); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; }
 #app .od-zahlen b { font-size: 22px; font-weight: 700; }

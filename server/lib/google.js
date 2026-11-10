@@ -11,9 +11,11 @@ const GMAIL_BASIS = process.env.GMAIL_BASIS || 'https://gmail.googleapis.com';
 // ---------------- Google Mail ----------------
 //  OAuth: Der Server kennt nur ein widerrufbares Zugriffsrecht, kein Passwort.
 
-// Kalender: nur Kalender, die die App selbst anlegt (der Kalender „Aufgaben“) — nie deine anderen Termine
+// Kalender: nur Kalender, die die App selbst anlegt (der Kalender „Aufgaben“) — nie deine anderen Termine.
+// Drive: Dateien anlegen (Sicherungen, Belege) und lesen (Unterlagen bei den Objekten, lib/gdrive.js) — nie ändern oder löschen.
 const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly'
   + ' https://www.googleapis.com/auth/drive.file'
+  + ' https://www.googleapis.com/auth/drive.readonly'
   + ' https://www.googleapis.com/auth/calendar.app.created';
 
 function googleEinstellungen() {
@@ -180,9 +182,9 @@ app.get('/api/google/zurueck', nurAngemeldet, nurVerwalter, async function (req,
       if (profil.emailAddress) einstellungSetzen('google_adresse', profil.emailAddress);
     } catch (e) { /* nicht schlimm */ }
 
-    res.send('<meta charset="utf-8"><body style="font-family:sans-serif;background:#14181e;color:#e8eaed;padding:40px">'
-      + '<h2>Postfach verbunden</h2><p>Du kannst dieses Fenster schließen.</p>'
-      + '<script>setTimeout(function(){ location.href = "/"; }, 1500)</script></body>');
+    // Zurück zur App ohne eingebettetes Skript — das würde die Sicherheitsregel der Seite (script-src 'self') ohnehin blockieren
+    res.send('<meta charset="utf-8"><meta http-equiv="refresh" content="2;url=/"><body style="font-family:sans-serif;background:#14181e;color:#e8eaed;padding:40px">'
+      + '<h2>Google verbunden</h2><p>Einen Moment, es geht gleich zurück zur App.</p></body>');
   } catch (e) {
     res.status(502).send('<meta charset="utf-8">Fehlgeschlagen: ' + htmlSicher(e.message));
   }
@@ -501,4 +503,4 @@ app.get('/api/post', nurAngemeldet, async function (req, res) {
 // Suchbegriffe hängen an Mietern und Objekten — nach jedem Speichern neu holen
 beiDatenAenderung(function () { postCache.clear(); });
 
-module.exports = { router: app, googleEinstellungen, googleToken, gmail, MAIL_KOPF };
+module.exports = { router: app, googleEinstellungen, googleToken, googleZugriffVergessen, gmail, MAIL_KOPF };
