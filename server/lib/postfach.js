@@ -595,7 +595,9 @@ app.get('/api/postfach/suche', nurAngemeldet, nurVerwalter, mitFehler(async func
   treffer.sort(function (a, b2) { return new Date(b2.datum || 0) - new Date(a.datum || 0); });
   res.json({
     q: q, schlau: schlau, gesamt: gesamt, mails: treffer.slice(0, 80),
-    textGrenze: textGrenze && gruppen.length > 0, abgebrochen: abgebrochen,
+    // Die Jahresgrenze für Mailtexte gilt nur, wenn zuerst nach Begriffen gesucht wurde — nach einem Absender
+    // werden dessen Mails ohne Grenze geprüft
+    textGrenze: textGrenze && gruppen.length > 0 && !absender.length && !empfaenger.length, abgebrochen: abgebrochen,
     erklaerung: k.erklaerung || ('Mails ' + [
       gruppen.length ? 'mit ' + gruppen.map(function (g) { return '„' + g[0] + '“'; }).join(' und ') : '',
       absender.length ? 'von ' + absender[0] : ''
