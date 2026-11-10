@@ -92,14 +92,16 @@
       ev.preventDefault(); tdSchnell();
     }
     // Mailkonto am PC: Pfeiltasten wählen, Entf löscht — wie in Apple Mail und Outlook
-    if (!imFeld && ansicht === 'post' && pf.pfad && root.querySelector('.post2') && pf.listen[pf.pfad]) {
-      const mails = pf.listen[pf.pfad].mails;
+    const pfSuchliste = pf.pfad === '#suche' && pf.suche && pf.suche.ergebnis ? pf.suche.ergebnis.mails : null;
+    if (!imFeld && ansicht === 'post' && pf.pfad && root.querySelector('.post2') && (pfSuchliste || pf.listen[pf.pfad])) {
+      const mails = pfSuchliste || pf.listen[pf.pfad].mails;
       if ((ev.key === 'ArrowDown' || ev.key === 'ArrowUp') && mails.length) {
         ev.preventDefault();
-        let i = mails.findIndex(function (m) { return m.uid === pf.gewaehlt; });
+        let i = mails.findIndex(function (m) { return m.uid === pf.gewaehlt && (!pfSuchliste || m.ordner === pf.gewaehltOrdner); });
         i = Math.max(0, Math.min(mails.length - 1, i + (ev.key === 'ArrowDown' ? 1 : -1)));
         pf.gewaehlt = mails[i].uid;
-        pfMailLaden(pf.pfad, pf.gewaehlt);
+        pf.gewaehltOrdner = pfSuchliste ? mails[i].ordner : null;
+        pfMailLaden(pfOrt(), pf.gewaehlt);
         render();
         const zeile = root.querySelector('.p2-mail.an');
         if (zeile) zeile.scrollIntoView({ block: 'nearest' });
@@ -855,6 +857,38 @@
       .catch(function (e) { pf.listen[pfad] = { mails: (alt && alt.mails) || [], fehler: e.message, laedt: false, wann: Date.now() }; });
   }
   function pfZeile(pfad, uid) { const l = pf.listen[pfad]; return l ? l.mails.find(function (m) { return m.uid === uid; }) : null; }
+  // Der Ordner der gewählten Mail — bei Suchtreffern der Ordner, aus dem der Treffer stammt
+  function pfOrt() { return pf.pfad === '#suche' ? pf.gewaehltOrdner : pf.pfad; }
+  // Alle Zeilen, die für eine Mail stehen (Ordnerliste und Suchtreffer) — damit beide gleich nachziehen
+  function pfZeilen(ort, uid) {
+    const z = [];
+    const l = pfZeile(ort, uid); if (l) z.push(l);
+    const s = pf.suche && pf.suche.ergebnis ? pf.suche.ergebnis.mails.find(function (m) { return m.uid === uid && m.ordner === ort; }) : null;
+    if (s) z.push(s);
+    return z;
+  }
+  function pfSignatur() {
+    if (pf.signatur !== undefined) return Promise.resolve(pf.signatur);
+    return api('postfach/signatur').then(function (r) { pf.signatur = r.signatur || ''; return pf.signatur; })
+      .catch(function () { return ''; });
+  }
+  function pfSuchen(q) {
+    q = String(q || '').trim();
+    if (q.length < 2) { toast('Bitte mindestens zwei Zeichen eingeben'); return; }
+    if (pf.pfad !== '#suche') pf.vorSuche = pf.pfad;
+    pf.pfad = '#suche'; pf.gewaehlt = null; pf.gewaehltOrdner = null; pf.suchText = q;
+    pf.suche = { q: q, laedt: true };
+    render();
+    api('postfach/suche?q=' + encodeURIComponent(q))
+      .then(function (r) { if (pf.suche && pf.suche.q === q) pf.suche = { q: q, ergebnis: r }; })
+      .catch(function (e) { if (pf.suche && pf.suche.q === q) pf.suche = { q: q, fehler: e.message }; })
+      .then(function () { if (ansicht === 'post') render(); });
+  }
+  function pfSucheEnde() {
+    pf.pfad = pf.vorSuche || pfSpezialPfad('eingang') || 'INBOX';
+    pf.suche = null; pf.suchText = ''; pf.gewaehlt = null; pf.gewaehltOrdner = null;
+    render();
+  }
   function pfOrdnerVon(pfad) { return (pf.ordner || []).find(function (o) { return o.pfad === pfad; }) || null; }
   function pfSpezialPfad(art) { const o = (pf.ordner || []).find(function (x) { return x.spezial === art; }); return o ? o.pfad : null; }
   function pfMailLaden(pfad, uid) {
@@ -864,8 +898,9 @@
     api('postfach/mail?ordner=' + encodeURIComponent(pfad) + '&uid=' + uid)
       .then(function (m) {
         pf.mails[k] = m;
-        const z = pfZeile(pfad, uid), o = pfOrdnerVon(pfad);
-        if (z && !z.gelesen) { z.gelesen = true; if (o && o.ungelesen) o.ungelesen--; }
+        const zeilen = pfZeilen(pfad, uid), o = pfOrdnerVon(pfad);
+        if (zeilen.some(function (z) { return !z.gelesen; }) && o && o.ungelesen) o.ungelesen--;
+        zeilen.forEach(function (z) { z.gelesen = true; });
       })
       .catch(function (e) { pf.mails[k] = { fehler: e.message }; })
       .then(function () { if (ansicht === 'post') render(); });
@@ -882,28 +917,35 @@
     return api('postfach/ordner').then(function (l) { pf.ordner = l; pf.fehler = null; })
       .catch(function (e) { pf.fehler = e.message; })
       .then(function () {
-        const l = pf.pfad ? pf.listen[pf.pfad] : null;
-        if (pf.pfad && (!l || l.mails.length <= 50)) return pfListeLaden(pf.pfad);
+        if (!pf.pfad || pf.pfad === '#suche') return;   // Suchtreffer bleiben stehen, bis neu gesucht wird
+        const l = pf.listen[pf.pfad];
+        if (!l || l.mails.length <= 50) return pfListeLaden(pf.pfad);
       });
   }
 
   // Löschen, verschieben, ungelesen, markieren — für die gewählte Mail
   function pfAktion(aktion, ziel) {
-    const pfad = pf.pfad, uid = pf.gewaehlt;
+    const pfad = pfOrt(), uid = pf.gewaehlt;
     if (!pfad || !uid) return;
     const o = pfOrdnerVon(pfad);
     function ausfuehren() {
       api('postfach/aktion', { method: 'POST', body: { ordner: pfad, uids: [uid], aktion: aktion, ziel: ziel } })
         .then(function (r) {
-          const z = pfZeile(pfad, uid);
-          const l = pf.listen[pfad];
+          const zeilen = pfZeilen(pfad, uid);
+          const z = zeilen[0] || null;
           if (aktion === 'loeschen' || aktion === 'verschieben') {
-            const i = l ? l.mails.findIndex(function (m) { return m.uid === uid; }) : -1;
+            // aus Ordnerliste und Suchtreffern nehmen, die nächste Mail der sichtbaren Liste wählen
+            const imSuchen = pf.pfad === '#suche' && pf.suche && pf.suche.ergebnis;
+            const sichtbar = imSuchen ? pf.suche.ergebnis.mails : (pf.listen[pfad] || { mails: [] }).mails;
+            const i = sichtbar.findIndex(function (m) { return m.uid === uid && (!imSuchen || m.ordner === pfad); });
             if (z && !z.gelesen && o && o.ungelesen) o.ungelesen--;
-            if (i >= 0) { l.mails.splice(i, 1); if (l.gesamt) l.gesamt--; }
-            const naechste = l && (l.mails[i] || l.mails[i - 1]);
+            const l = pf.listen[pfad];
+            if (l) { const j = l.mails.findIndex(function (m) { return m.uid === uid; }); if (j >= 0) { l.mails.splice(j, 1); if (l.gesamt) l.gesamt--; } }
+            if (imSuchen) { const j = pf.suche.ergebnis.mails.findIndex(function (m) { return m.uid === uid && m.ordner === pfad; }); if (j >= 0) pf.suche.ergebnis.mails.splice(j, 1); }
+            const naechste = i >= 0 ? (sichtbar[i] || sichtbar[i - 1]) : null;
             pf.gewaehlt = (!mobil && window.innerWidth >= 901 && naechste) ? naechste.uid : null;
-            if (pf.gewaehlt) pfMailLaden(pfad, pf.gewaehlt);
+            if (imSuchen) pf.gewaehltOrdner = pf.gewaehlt ? naechste.ordner : null;
+            if (pf.gewaehlt) pfMailLaden(pfOrt(), pf.gewaehlt);
             if (modal && (modal.kind === 'pf-mail' || modal.kind === 'pf-ziel')) modal = null;
             const wohin = ziel || pfSpezialPfad('papierkorb');
             if (wohin) delete pf.listen[wohin];
@@ -911,15 +953,18 @@
             if (zo && z && !z.gelesen && !r.endgueltig) zo.ungelesen++;
             toast(aktion === 'verschieben' ? 'Verschoben nach „' + ((pfOrdnerVon(ziel) || {}).name || ziel) + '“'
               : (r.endgueltig ? 'Endgültig gelöscht' : 'In den Papierkorb gelegt'));
-          } else if (z) {
+          } else if (zeilen.length) {
             if (aktion === 'ungelesen') {
-              z.gelesen = false; if (o) o.ungelesen++;
+              if (o) o.ungelesen++;
               delete pf.mails[pfad + '\n' + uid];
               pf.gewaehlt = null;
               if (modal && modal.kind === 'pf-mail') modal = null;
             }
-            if (aktion === 'markieren') z.markiert = true;
-            if (aktion === 'entmarkieren') z.markiert = false;
+            zeilen.forEach(function (x) {
+              if (aktion === 'ungelesen') x.gelesen = false;
+              if (aktion === 'markieren') x.markiert = true;
+              if (aktion === 'entmarkieren') x.markiert = false;
+            });
           }
           render();
         })
@@ -936,15 +981,21 @@
 
   // Schreiben: neu, antworten, allen antworten, weiterleiten — vorbefüllt wie in Outlook
   function pfSchreiben(art) {
-    const m = art === 'neu' ? null : pf.mails[pf.pfad + '\n' + pf.gewaehlt];
+    const ort = pfOrt(), uid = pf.gewaehlt;
+    const m = art === 'neu' ? null : pf.mails[ort + '\n' + uid];
     if (art !== 'neu' && (!m || m.laedt || m.fehler)) return;
+    // Erst die Signatur holen (beim ersten Mal aus den gesendeten Mails gelesen), dann das Fenster öffnen
+    pfSignatur().then(function (sig) { pfSchreibenOeffnen(art, m, ort, uid, sig); });
+  }
+  function pfSchreibenOeffnen(art, m, ort, uid, sig) {
     const ich = String((pf.status && pf.status.benutzer) || '').toLowerCase();
-    const e = { an: '', cc: '', betreff: '', text: '' };
+    const unten = sig ? '\n\n' + sig : '';
+    const e = { an: '', cc: '', betreff: '', text: '\n' + unten };
     if (m) {
       const datum = m.datum ? new Date(m.datum).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' }) : '';
       if (art === 'weiter') {
         e.betreff = /^(wg|fwd?):/i.test(m.betreff) ? m.betreff : 'WG: ' + m.betreff;
-        e.text = '\n\n---------- Weitergeleitete Nachricht ----------\nVon: ' + pfAdresse(m.von) + '\nDatum: ' + datum
+        e.text = '\n' + unten + '\n\n---------- Weitergeleitete Nachricht ----------\nVon: ' + pfAdresse(m.von) + '\nDatum: ' + datum
           + '\nBetreff: ' + m.betreff + '\nAn: ' + m.an.map(pfAdresse).join(', ') + '\n\n' + (m.text || '');
       } else {
         // Eigene Mail (z. B. aus „Gesendet“) beantworten: an die damaligen Empfänger, nicht an sich selbst
@@ -957,11 +1008,11 @@
           }).map(pfAdresse).join(', ');
         }
         e.betreff = /^(aw|re):/i.test(m.betreff) ? m.betreff : 'AW: ' + m.betreff;
-        e.text = '\n\nAm ' + datum + ' schrieb ' + pfName(m.von) + ':\n'
+        e.text = '\n' + unten + '\n\nAm ' + datum + ' schrieb ' + pfName(m.von) + ':\n'
           + String(m.text || '').split('\n').map(function (z) { return '> ' + z; }).join('\n');
       }
     }
-    modal = { kind: 'pf-schreiben', art: art, bezug: m ? { ordner: pf.pfad, uid: pf.gewaehlt } : null,
+    modal = { kind: 'pf-schreiben', art: art, bezug: m ? { ordner: ort, uid: uid } : null,
       anhaenge: art === 'weiter' && m ? m.anhaenge.length : 0, entwurf: e };
     render();
     fensterGeoeffnet();
@@ -976,8 +1027,7 @@
     const war = modal;
     api('postfach/senden', { method: 'POST', body: { an: e.an, cc: e.cc, betreff: e.betreff, text: e.text, art: war.art, bezug: war.bezug } })
       .then(function (r) {
-        const z = war.bezug ? pfZeile(war.bezug.ordner, war.bezug.uid) : null;
-        if (z && war.art !== 'weiter') z.beantwortet = true;
+        if (war.bezug && war.art !== 'weiter') pfZeilen(war.bezug.ordner, war.bezug.uid).forEach(function (z) { z.beantwortet = true; });
         if (modal === war) modal = null;
         const g = pfSpezialPfad('gesendet');
         if (g) delete pf.listen[g];
@@ -1497,6 +1547,11 @@
     if (modal && modal.kind === 'pf-schreiben') {
       const an = root.querySelector('.modal[data-fenster="pf-schreiben"] #pf-an');
       if (an) modal.entwurf = { an: an.value, cc: val('pf-cc'), betreff: val('pf-betreff'), text: val('pf-text') };
+      return;
+    }
+    if (modal && modal.kind === 'pf-einrichten') {
+      const sig = root.querySelector('.modal[data-fenster="pf-einrichten"] #pf-signatur');
+      if (sig) modal.signatur = sig.value;
       return;
     }
     if (modal && modal.entwurf && modal.kind.indexOf('kauf') === 0) {
@@ -3731,10 +3786,10 @@
   //  Interessenten — Bewerber je Wohnung, vom ersten Kontakt bis zur Zusage
   // ---------------------------------------------------------------
   const ISTATUS = [
-    ['neu', 'Angefragt'], ['besichtigung', 'Besichtigung'],
+    ['neu', 'Angefragt'], ['besichtigung', 'Besichtigung'], ['besichtigt', 'Besichtigt, Antwort ausstehend'],
     ['auskunft', 'Selbstauskunft'], ['zusage', 'Zusage'], ['absage', 'Absage']
   ];
-  const IFOLGE = { neu: 'besichtigung', besichtigung: 'auskunft', auskunft: 'zusage' };
+  const IFOLGE = { neu: 'besichtigung', besichtigung: 'besichtigt', besichtigt: 'auskunft', auskunft: 'zusage' };
 
   function interessentNeu(v) {
     return Object.assign({
@@ -4842,10 +4897,15 @@
     const alterToast = root.querySelector('.toast');   // Hinweis unten überlebt den Neuaufbau
     const p2alt = root.querySelector('.p2-liste');       // Post am PC: Liste bleibt beim Neuaufbau an ihrer Stelle
     const p2Rolle = p2alt ? p2alt.scrollTop : 0;
+    const suchStelle = document.activeElement && document.activeElement.id === 'pf-q' ? (document.activeElement.selectionStart || 0) : -1;
     root.innerHTML = html;
     if (alterToast) root.appendChild(alterToast);
     const p2neu = root.querySelector('.p2-liste');
     if (p2neu && p2Rolle) p2neu.scrollTop = p2Rolle;
+    if (suchStelle >= 0) {   // wer gerade im Suchfeld tippt, tippt nach dem Neuaufbau einfach weiter
+      const sf = root.querySelector('#pf-q');
+      if (sf) { sf.focus(); try { sf.setSelectionRange(suchStelle, suchStelle); } catch (e) { /* egal */ } }
+    }
     fussVerblassen();
     scrollSperre(!!modal);
 
@@ -4919,7 +4979,7 @@
       };
       const aktive = alle.filter(function (i) { return i.status !== 'absage' && passtI(i); });
       const absagen = alle.filter(function (i) { return i.status === 'absage' && passtI(i); });
-      const reihen = { neu: 0, besichtigung: 1, auskunft: 2, zusage: 3, absage: 4 };
+      const reihen = { neu: 0, besichtigung: 1, besichtigt: 2, auskunft: 3, zusage: 4, absage: 5 };
       const sortiert = function (a, c) {
         if (reihen[a.status] !== reihen[c.status]) return reihen[a.status] - reihen[c.status];
         if (a.termin !== c.termin) return (a.termin || '9999') < (c.termin || '9999') ? -1 : 1;
@@ -4967,7 +5027,7 @@
         });
       } else {
         html += '<div class="ipipeline">';
-        ISTATUS.slice(0, 4).forEach(function (st) {
+        ISTATUS.filter(function (st) { return st[0] !== 'absage'; }).forEach(function (st) {
           const drin = aktive.filter(function (i) { return i.status === st[0]; }).sort(sortiert);
           html += '<div class="ispalte"><strong>' + st[1]
             + (drin.length ? ' <span class="anzahl">' + drin.length + '</span>' : '') + '</strong>'
@@ -5500,7 +5560,7 @@
   // Neue Anfragen, die passen oder vielleicht passen — eine je Person; Nachfragen und Unklares zählen nicht
   function anfNeuZahl() {
     if (!anfragen.daten) return 0;
-    return anfGruppen(anfragen.daten.anfragen).filter(function (g) { return g.haupt.status === 'neu' && anfInteressant(g.haupt); }).length;
+    return anfGruppen(anfragen.daten.anfragen).filter(function (g) { return g.haupt.status === 'neu' && anfInteressant(g.haupt) && !anfIstInteressent(g.haupt); }).length;
   }
   // Absender ohne die Weiterleitungsadresse des Portals: nur der Name, sonst der Teil vor dem @
   function anfAbsender(von) {
@@ -5538,12 +5598,24 @@
   // Farbe nach Urteil — ohne Bewertung ist etwas schiefgegangen
   function anfKlasse(a) { return a.bewertung ? (ANF_KLASSE[a.bewertung.urteil] || 'a-unklar') : 'a-fehler'; }
   function anfUrteil(a) { return a.bewertung ? (ANF_URTEIL[a.bewertung.urteil] || 'Unklar') : 'Nicht bewertet'; }
-  function anfOffen(a) { return a.status === 'neu' || a.status === 'gemerkt'; }
+  // Schon als Interessent übernommen? Dann gehört die Anfrage nicht mehr zu den offenen — erkannt an Mailadresse oder Name
+  function anfIstInteressent(a) {
+    const i = (a && a.inhalt) || {};
+    const mail = String(i.email || '').trim().toLowerCase();
+    const name = String(i.name || '').trim().toLowerCase();
+    if (!mail && !name) return false;
+    return (data && data.interessenten || []).some(function (x) {
+      if (x.status === 'absage') return false;
+      if (mail && String(x.kontakt || '').toLowerCase().indexOf(mail) !== -1) return true;
+      return name.length > 4 && String(x.name || '').trim().toLowerCase() === name;
+    });
+  }
+  function anfOffen(a) { return (a.status === 'neu' || a.status === 'gemerkt') && !anfIstInteressent(a); }
   function anfImFilter(a, f) {
     if (f === 'offen') return anfOffen(a);
     if (f === 'passt') return anfOffen(a) && !!a.bewertung && a.bewertung.urteil === 'passt';
-    if (f === 'gemerkt') return a.status === 'gemerkt';
-    return a.status === 'abgelehnt' || a.status === 'erledigt';
+    if (f === 'gemerkt') return a.status === 'gemerkt' && !anfIstInteressent(a);
+    return a.status === 'abgelehnt' || a.status === 'erledigt' || anfIstInteressent(a);
   }
   // Was die Person über sich sagt, in einer Zeile
   function anfProfil(i) {
@@ -5661,7 +5733,8 @@
       html += '<div class="anf-karte klickbar ' + anfKlasse(a) + '" data-act="anf-oeffnen" data-id="' + esc(a.id) + '">'
         + '<div class="anf-punkte">' + (b ? b.punkte : '?') + '<small>Punkte</small></div>'
         + '<div class="fgrow">'
-        + '<div class="anf-titel">' + esc(i.name || 'Ohne Namen') + ' <span class="anzahl">' + esc(a.status) + '</span></div>'
+        + '<div class="anf-titel">' + esc(i.name || 'Ohne Namen') + ' <span class="anzahl">'
+        + (anfIstInteressent(a) ? 'Interessent' : esc(a.status)) + '</span></div>'
         + '<div class="anf-meta">' + esc(meta) + '</div>'
         + (profil ? '<div class="anf-profil">' + esc(profil) + '</div>' : '')
         + (gruende ? '<div class="anf-gruende">' + esc(gruende) + '</div>' : '')
@@ -5900,8 +5973,11 @@
         const i = a.inhalt || {};
         const notiz = [anfProfil(i), a.bewertung ? 'Bewertung: ' + anfUrteil(a) + ' (' + a.bewertung.punkte + ' Punkte)' : '']
           .filter(Boolean).join('\n');
+        const gruppe = anfGruppeVon(a.id);
         modal = {
           kind: 'interessent', isNew: true,
+          // Beim Speichern werden alle Mails dieser Person erledigt — sie stehen dann nicht mehr bei den offenen
+          ausAnfragen: gruppe.length ? gruppe.map(function (x) { return x.id; }) : [a.id],
           i: interessentNeu({
             name: i.name || '', kontakt: i.email || i.telefon || '', einheitId: a.einheitId || '',
             quelle: 'Anfrage per Mail: ' + (a.betreff || ''), notiz: notiz
@@ -6853,33 +6929,60 @@
     return h + '</div>';
   }
 
+  // Suchfeld über der Liste: Enter sucht in allen Ordnern, Esc beendet die Suche
+  function pfSuchfeld() {
+    return '<div class="p2-suchzeile"><span class="p2-lupe">' + sym('suche', 14) + '</span>'
+      + '<input type="search" id="pf-q" autocomplete="off" enterkeyhint="search" placeholder="Suchen, z. B. Rechnung Stadtwerke Oktober" value="' + esc(pf.suchText || '') + '">'
+      + (pf.pfad === '#suche' ? '<button class="p2-suchende" data-act="pf-suche-ende" title="Suche beenden (Esc)" aria-label="Suche beenden">✕</button>' : '')
+      + '</div>';
+  }
+  function pfZeileHtml(m, anEmpfaenger, mitOrdner) {
+    const wer = anEmpfaenger ? 'An: ' + (m.an.map(pfName).join(', ') || '—') : (pfName(m.von) || '—');
+    const gewaehlt = m.uid === pf.gewaehlt && (!mitOrdner || m.ordner === pf.gewaehltOrdner);
+    return '<div class="p2-mail' + (gewaehlt ? ' an' : '') + (m.gelesen ? '' : ' neu') + '" data-act="pf-waehlen" data-uid="' + m.uid + '"'
+      + (mitOrdner ? ' data-ordner="' + esc(m.ordner) + '"' : '') + '>'
+      + '<div class="p2-o">' + (m.gelesen ? '' : '<i class="p2-punkt"></i>') + '<span class="p2-von">' + esc(wer) + '</span>'
+      + (m.markiert ? '<span class="p2-flagge" title="markiert">⚑</span>' : '')
+      + (m.anhang ? '<span class="p2-clip" title="mit Anhang">📎</span>' : '')
+      + '<span class="p2-wann num">' + pfZeit(m.datum) + '</span></div>'
+      + '<div class="p2-betreff">' + (m.beantwortet ? '<span class="p2-bea" title="beantwortet">↩</span>' : '') + esc(m.betreff) + '</div>'
+      + (mitOrdner ? '<span class="p2-chip">' + esc(m.ordnerName || m.ordner) + '</span>' : '')
+      + '</div>';
+  }
+  function pfSuchListeHtml() {
+    const s = pf.suche || {};
+    let h = '<div class="p2-kopf">' + pfSuchfeld() + '<h2>Suche</h2></div>';
+    if (s.laedt) return h + '<div class="p2-leer">Ich suche in allen Ordnern …</div>';
+    if (s.fehler) return h + '<div class="p2-leer">' + esc(s.fehler) + '</div>';
+    const r = s.ergebnis || { mails: [], gesamt: 0 };
+    h += '<div class="p2-erkl">' + (r.erklaerung ? esc(r.erklaerung) : '') + '<span>'
+      + (r.gesamt > r.mails.length ? 'die neuesten ' + r.mails.length + ' von ' + r.gesamt : r.mails.length + (r.mails.length === 1 ? ' Treffer' : ' Treffer'))
+      + (r.schlau ? '' : ' · nach den Wörtern gesucht') + '</span></div>';
+    if (!r.mails.length) return h + '<div class="p2-leer">Nichts gefunden. Anders formulieren oder weniger Wörter nehmen.</div>';
+    return h + r.mails.map(function (m) { return pfZeileHtml(m, pfOrdnerVon(m.ordner) && pfOrdnerVon(m.ordner).spezial === 'gesendet', true); }).join('');
+  }
+
   function pfListeHtml() {
+    if (pf.pfad === '#suche') return pfSuchListeHtml();
     const o = pfOrdnerVon(pf.pfad) || { name: pf.pfad, spezial: '' };
     const l = pf.listen[pf.pfad];
-    let h = '<div class="p2-kopf"><h2>' + esc(o.name) + (o.ungelesen ? ' <span class="p2-anzahl">' + o.ungelesen + ' ungelesen</span>' : '') + '</h2>'
+    let h = '<div class="p2-kopf">' + pfSuchfeld() + '<h2>' + esc(o.name) + (o.ungelesen ? ' <span class="p2-anzahl">' + o.ungelesen + ' ungelesen</span>' : '') + '</h2>'
       + '<div class="p2-zeit"><span class="p2-stand">' + (l && l.gesamt != null ? l.gesamt + (l.gesamt === 1 ? ' Mail' : ' Mails') : '') + '</span>'
       + '<button class="p2-frisch" data-act="pf-frisch" title="Neu abrufen">↻</button></div></div>';
     if (!l || (l.laedt && !l.mails.length)) return h + '<div class="p2-leer">wird geladen …</div>';
     if (l.fehler && !l.mails.length) return h + '<div class="p2-leer">' + esc(l.fehler) + '</div>';
     if (!l.mails.length) return h + '<div class="p2-leer">Keine Mails in diesem Ordner.</div>';
     const anEmpfaenger = o.spezial === 'gesendet' || o.spezial === 'entwuerfe';
-    h += l.mails.map(function (m) {
-      const wer = anEmpfaenger ? 'An: ' + (m.an.map(pfName).join(', ') || '—') : (pfName(m.von) || '—');
-      return '<div class="p2-mail' + (m.uid === pf.gewaehlt ? ' an' : '') + (m.gelesen ? '' : ' neu') + '" data-act="pf-waehlen" data-uid="' + m.uid + '">'
-        + '<div class="p2-o">' + (m.gelesen ? '' : '<i class="p2-punkt"></i>') + '<span class="p2-von">' + esc(wer) + '</span>'
-        + (m.markiert ? '<span class="p2-flagge" title="markiert">⚑</span>' : '')
-        + (m.anhang ? '<span class="p2-clip" title="mit Anhang">📎</span>' : '')
-        + '<span class="p2-wann num">' + pfZeit(m.datum) + '</span></div>'
-        + '<div class="p2-betreff">' + (m.beantwortet ? '<span class="p2-bea" title="beantwortet">↩</span>' : '') + esc(m.betreff) + '</div></div>';
-    }).join('');
+    h += l.mails.map(function (m) { return pfZeileHtml(m, anEmpfaenger, false); }).join('');
     if (l.aeltere) h += '<button class="p2-mehr" data-act="pf-mehr"' + (l.laedt ? ' disabled' : '') + '>' + (l.laedt ? 'wird geladen …' : 'Ältere Mails laden') + '</button>';
     return h;
   }
 
   function pfLeseHtml() {
     if (!pf.gewaehlt) return '<div class="p2-leer gross">' + pfSym('eingang', 40) + '<span>Keine Mail ausgewählt</span></div>';
-    const m = pf.mails[pf.pfad + '\n' + pf.gewaehlt];
-    const z = pfZeile(pf.pfad, pf.gewaehlt) || {};
+    const ort = pfOrt();
+    const m = pf.mails[ort + '\n' + pf.gewaehlt];
+    const z = pfZeilen(ort, pf.gewaehlt)[0] || {};
     const bereit = m && !m.laedt && !m.fehler;
     const leiste = '<div class="p2-leiste">'
       + '<button data-act="pf-antworten"' + (bereit ? '' : ' disabled') + ' title="Antworten">' + pfSym('antworten', 15) + '<span class="p2-kt">Antworten</span></button>'
@@ -6905,7 +7008,7 @@
       + '<div class="p2-adresse">An: ' + esc(m.an.map(pfName).join(', ') || '—') + (m.cc.length ? ' · Cc: ' + esc(m.cc.map(pfName).join(', ')) : '') + '</div></div>'
       + '<div class="p2-datum">' + esc(pfZeit(m.datum, true)) + '</div></div>'
       + (m.anhaenge.length ? '<div class="p2-anhaenge">' + m.anhaenge.map(function (a) {
-          return '<a class="p2-anhang" href="' + esc('/api/postfach/anhang?ordner=' + encodeURIComponent(pf.pfad) + '&uid=' + m.uid + '&nr=' + a.nr) + '" download="' + esc(a.name) + '">'
+          return '<a class="p2-anhang" href="' + esc('/api/postfach/anhang?ordner=' + encodeURIComponent(ort) + '&uid=' + m.uid + '&nr=' + a.nr) + '" download="' + esc(a.name) + '">'
             + '📎 <b>' + esc(a.name) + '</b> <span>' + pfGroesse(a.groesse) + '</span></a>';
         }).join('') + '</div>' : '')
       + (frist
@@ -7431,7 +7534,7 @@
       body = '<div class="pf-fenstermail">' + pfLeseHtml() + '</div>';
     } else if (modal.kind === 'pf-ziel') {
       body = '<h2>Verschieben nach …</h2><div class="pf-ziele">'
-        + (pf.ordner || []).filter(function (o) { return o.pfad !== pf.pfad; }).map(function (o) {
+        + (pf.ordner || []).filter(function (o) { return o.pfad !== pfOrt(); }).map(function (o) {
             return '<button class="pf-zielknopf" data-act="pf-verschieben" data-pfad="' + esc(o.pfad) + '"'
               + (o.ebene ? ' style="padding-left:' + (14 + o.ebene * 16) + 'px"' : '') + '>'
               + pfSym(o.spezial || 'ordner') + '<span>' + esc(o.name) + '</span></button>';
@@ -7451,6 +7554,16 @@
         + f('Absendername', '<input type="text" id="pf-name" value="' + esc(w.name || s.name || 'Louis Ziegler') + '">')
         + '</div>'
         + (s.pakete === false ? '<div class="hintbox">Auf dem Server fehlen noch die Pakete fürs Postfach — einmal „einspielen“ ausführen.</div>' : '')
+        // Signatur: steht unter jeder Mail aus der App; beim ersten Mal aus den gesendeten Mails gelesen
+        + (s.eingerichtet
+            ? '<div class="divider"></div><h3 class="pf-sig-titel">Signatur</h3>'
+              + '<div class="hint">Steht unter jeder neuen Mail, Antwort und Weiterleitung aus der App.</div>'
+              + '<textarea id="pf-signatur" class="pf-signatur" rows="7" placeholder="z. B. Beste Grüße, Louis Ziegler">'
+              + esc(modal.signatur !== undefined ? modal.signatur : (pf.signatur || '')) + '</textarea>'
+              + '<div class="pf-sig-knoepfe"><button data-act="pf-sig-holen">Aus gesendeten Mails holen</button>'
+              + '<button class="primary" data-act="pf-sig-speichern">Signatur speichern</button></div>'
+              + '<div class="divider"></div>'
+            : '')
         + '<div class="modal-actions">'
         + (s.eingerichtet ? '<button class="danger" data-act="pf-trennen">Trennen</button>' : '')
         + '<div class="spacer"></div><button data-act="close">Abbrechen</button>'
@@ -8593,6 +8706,15 @@
     nkBinden();
     stammBinden();
     sucheBinden();
+    // Suchfeld im Postfach: Enter sucht, Esc beendet; das Getippte übersteht jeden Neuaufbau
+    const pfq = root.querySelector('#pf-q');
+    if (pfq) {
+      pfq.addEventListener('input', function () { pf.suchText = pfq.value; });
+      pfq.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') { ev.preventDefault(); pfSuchen(pfq.value); }
+        else if (ev.key === 'Escape') { ev.preventDefault(); if (pf.pfad === '#suche') pfSucheEnde(); else { pfq.value = ''; pf.suchText = ''; pfq.blur(); } }
+      });
+    }
     // Stimme der Tagesmemo: Wahl merken und sofort kurz anhören
     const stimmwahl = root.querySelector('#memo-stimme');
     if (stimmwahl) {
@@ -9226,7 +9348,7 @@
     // ---- Mailkonto ----
     else if (act === 'pf-ordner') {
       const pfad = el.getAttribute('data-pfad') || '';
-      pf.pfad = pfad; pf.gewaehlt = null;
+      pf.pfad = pfad; pf.gewaehlt = null; pf.gewaehltOrdner = null; pf.suche = null; pf.suchText = '';
       render();
       if (!pfad) {
         if (postListe === null && google.verbunden) postLaden().then(function () { render(); });
@@ -9238,7 +9360,8 @@
     }
     else if (act === 'pf-waehlen') {
       pf.gewaehlt = Number(el.getAttribute('data-uid'));
-      pfMailLaden(pf.pfad, pf.gewaehlt);
+      pf.gewaehltOrdner = el.getAttribute('data-ordner') || null;
+      pfMailLaden(pfOrt(), pf.gewaehlt);
       if (mobil || window.innerWidth < 901) { modal = { kind: 'pf-mail' }; render(); fensterGeoeffnet(); }
       else render();
     }
@@ -9252,13 +9375,28 @@
     else if (act === 'pf-loeschen') { pfAktion('loeschen'); }
     else if (act === 'pf-ungelesen') { pfAktion('ungelesen'); }
     else if (act === 'pf-markieren') {
-      const z = pfZeile(pf.pfad, pf.gewaehlt);
+      const z = pfZeilen(pfOrt(), pf.gewaehlt)[0];
       pfAktion(z && z.markiert ? 'entmarkieren' : 'markieren');
+    }
+    else if (act === 'pf-suche-ende') { pfSucheEnde(); }
+    else if (act === 'pf-sig-holen') {
+      el.disabled = true;
+      api('postfach/signatur?neu=1').then(function (r) {
+        const feld = root.querySelector('#pf-signatur');
+        if (!r.signatur) { toast('In den letzten gesendeten Mails habe ich keine Signatur gefunden'); return; }
+        if (feld) feld.value = r.signatur;
+        toast('Aus deinen gesendeten Mails übernommen — mit „Signatur speichern“ behalten');
+      }).catch(function (e) { toast(e.message); }).then(function () { el.disabled = false; });
+    }
+    else if (act === 'pf-sig-speichern') {
+      api('postfach/signatur', { method: 'PUT', body: { signatur: val('pf-signatur') } })
+        .then(function (r) { pf.signatur = r.signatur; if (modal) modal.signatur = r.signatur; toast('Signatur gespeichert'); })
+        .catch(function (e) { toast(e.message); });
     }
     else if (act === 'pf-ziel') { modal = { kind: 'pf-ziel' }; render(); }
     else if (act === 'pf-verschieben') { pfAktion('verschieben', el.getAttribute('data-pfad')); }
     else if (act === 'pf-aufgabe') {
-      const m = pf.mails[pf.pfad + '\n' + pf.gewaehlt];
+      const m = pf.mails[pfOrt() + '\n' + pf.gewaehlt];
       if (!m || !m.betreff) return;
       const bis = el.getAttribute('data-faellig') || '';
       api('todoist/aufgabe', { method: 'POST', body: {
@@ -9273,6 +9411,14 @@
       seiteOffen = false;
       modal = { kind: 'pf-einrichten' }; render();
       if (!pf.status) { pfStart(); setTimeout(function () { if (modal && modal.kind === 'pf-einrichten') render(); }, 800); }
+      if (pfBereit() && pf.signatur === undefined) {
+        // Die Signatur kommt etwas später — ins Feld setzen, solange dort noch nichts getippt ist
+        pfSignatur().then(function (s) {
+          if (!modal || modal.kind !== 'pf-einrichten') return;
+          const feld = root.querySelector('#pf-signatur');
+          if (feld && !feld.value) { feld.value = s; modal.signatur = s; }
+        });
+      }
     }
     else if (act === 'pf-verbinden') {
       const koerper = { benutzer: val('pf-benutzer'), passwort: val('pf-passwort'), server: val('pf-server'), name: val('pf-name') };
@@ -9794,8 +9940,16 @@
     if (!inter.name) { toast('Bitte einen Namen eintragen'); return; }
     if (modal.isNew) data.interessenten.push(inter);
     const zusage = inter.status === 'zusage';
+    const ausAnfragen = modal.ausAnfragen || [];
     modal = null;
-    save(zusage ? 'Zusage — die Einheit dann auf „Vermietet" stellen' : 'Gespeichert');
+    save(zusage ? 'Zusage — die Einheit dann auf „Vermietet" stellen'
+      : (ausAnfragen.length ? 'Als Interessent übernommen — die Anfrage ist erledigt' : 'Gespeichert'));
+    // Aus einer Anfrage übernommen: deren Mails auf erledigt setzen, auch am Server (Zähler, Morgenmeldung)
+    ausAnfragen.forEach(function (id) {
+      const a = anfVon(id);
+      if (a) a.status = 'erledigt';
+      api('anfragen/' + encodeURIComponent(id), { method: 'PUT', body: { status: 'erledigt' } }).catch(function () { /* bleibt über den Interessenten erkannt */ });
+    });
     render();
   }
   function interessentAufgabe() {
@@ -10054,6 +10208,20 @@
   setInterval(function () {
     if (document.visibilityState === 'visible' && Date.now() - zuletztAufgefrischt > 10 * 60 * 1000) auffrischen();
   }, 60 * 1000);
+
+  // Neue Anfragen sofort sehen: jede Minute leise nachfragen, auf jeder Seite (der Server schaut alle zwei Minuten
+  // ins Postfach). Zähler in Leiste und Kachel ziehen nach; neu aufgebaut wird nur, wenn sich etwas geändert hat
+  function anfStille() {
+    if (phase !== 'app' || document.visibilityState !== 'visible' || !anfragen.daten || anfragen.laedt) return Promise.resolve();
+    const vorher = anfNeuZahl() + ':' + anfragen.daten.anfragen.length;
+    return anfLaden(false, true).then(function () {
+      if (!anfragen.daten || anfNeuZahl() + ':' + anfragen.daten.anfragen.length === vorher) return;
+      const tipptGerade = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].indexOf(document.activeElement.tagName) !== -1;
+      if (!modal && !tipptGerade && !document.getElementById('dialog')) render();
+    });
+  }
+  setInterval(anfStille, 60 * 1000);
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') anfStille(); });
 
   // Aus der Morgenmeldung geöffnet: das Memo hervorheben und die Stimmen wecken
   try {

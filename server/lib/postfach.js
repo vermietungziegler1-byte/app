@@ -11,8 +11,9 @@
 // -------------------------------------------------------------
 
 const express = require('express');
-const { crypto, path, fs, DATENORDNER, db, einstellung, einstellungSetzen, mitFehler } = require('./kern');
+const { crypto, path, fs, DATENORDNER, db, einstellung, einstellungSetzen, mitFehler, standInhalt } = require('./kern');
 const { nurAngemeldet, nurVerwalter } = require('./anmeldung');
+const { signaturAus, umlautVarianten, einfacheKriterien } = require('./postfach-text');
 
 let ImapFlow = null, nodemailer = null, MailComposer = null, simpleParser = null;
 try {
@@ -388,4 +389,189 @@ app.post('/api/postfach/senden', nurAngemeldet, nurVerwalter, mitFehler(async fu
   res.json({ ok: true, abgelegt: abgelegt });
 }));
 
-module.exports = { router: app, verschluesseln, entschluesseln };
+// ---------------- Signatur ----------------
+// Steht unter jeder neuen Mail, Antwort und Weiterleitung. Ist noch keine hinterlegt, wird sie einmal aus den zuletzt
+// gesendeten Mails gelesen: der Block ab dem letzten Gruß vor dem Zitat, so wie Outlook ihn anhängt.
+async function signaturVorschlag() {
+  const gesendet = await spezialOrdner('gesendet');
+  if (!gesendet) return '';
+  const texte = await imOrdner(gesendet, async function (c) {
+    const gesamt = c.mailbox.exists || 0;
+    if (!gesamt) return [];
+    const uids = [];
+    for await (const m of c.fetch(Math.max(1, gesamt - 7) + ':' + gesamt, { uid: true })) uids.push(m.uid);
+    const liste = [];
+    for (const uid of uids.reverse()) {
+      try { const g = await mailHolen(c, uid); liste.push(String(g.p.text || htmlZuText(g.p.html || ''))); } catch (e) { /* nächste */ }
+    }
+    return liste;
+  });
+  // Der Block, der in den meisten der letzten Mails steht
+  const zaehler = {};
+  texte.map(signaturAus).filter(Boolean).forEach(function (s) { zaehler[s] = (zaehler[s] || 0) + 1; });
+  return Object.keys(zaehler).sort(function (a, b) { return zaehler[b] - zaehler[a]; })[0] || '';
+}
+
+app.get('/api/postfach/signatur', nurAngemeldet, nurVerwalter, mitFehler(async function (req, res) {
+  const gespeichert = einstellung('postfach_signatur');
+  const neu = req.query.neu === '1';
+  if (gespeichert !== null && !neu) return res.json({ signatur: gespeichert });
+  let vorschlag = '';
+  try { vorschlag = await signaturVorschlag(); } catch (e) { vorschlag = ''; }
+  // Beim ersten Mal gleich übernehmen — unter Mehr → Mailkonto lässt sie sich ändern
+  if (gespeichert === null && !neu && vorschlag) einstellungSetzen('postfach_signatur', vorschlag);
+  res.json({ signatur: vorschlag, vorschlag: true });
+}));
+
+app.put('/api/postfach/signatur', nurAngemeldet, nurVerwalter, function (req, res) {
+  const s = String((req.body || {}).signatur || '').replace(/\r/g, '').slice(0, 3000);
+  einstellungSetzen('postfach_signatur', s);
+  res.json({ signatur: s });
+});
+
+// ---------------- Suche, die mitdenkt ----------------
+// Claude übersetzt die Suchanfrage in Kriterien — Synonyme und Schreibweisen, Absender (auch über die Namen der
+// Mieter), Zeitraum, Anhänge, Ordner. Der Mailserver sucht dann in allen Ordnern außer Papierkorb und Spam.
+// Ohne Assistent (oder wenn er gerade nicht kann) wird nach den einzelnen Wörtern gesucht, mit ä/ae-Schreibweisen.
+const SUCH_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  properties: {
+    begriffe: { type: 'array', items: { type: 'array', items: { type: 'string' } } },
+    absender: { type: 'array', items: { type: 'string' } },
+    empfaenger: { type: 'array', items: { type: 'string' } },
+    seit: { type: 'string' },
+    bis: { type: 'string' },
+    nurAnhang: { type: 'boolean' },
+    ordner: { type: 'string', enum: ['alle', 'eingang', 'gesendet'] },
+    erklaerung: { type: 'string' }
+  },
+  required: ['begriffe', 'absender', 'empfaenger', 'seit', 'bis', 'nurAnhang', 'ordner', 'erklaerung']
+};
+
+// Mieter, Interessenten und Objekte aus dem Datenstand — damit „Mail von der Mieterin im EG“ einen Namen bekommt
+function bekannte() {
+  const s = standInhalt() || {};
+  const personen = [];
+  (s.objects || []).forEach(function (o) {
+    (o.units || []).forEach(function (x) {
+      if (x.tenant) personen.push({ name: String(x.tenant), wo: (x.name || '') + ', ' + String(o.name || '').split(',')[0], kontakt: String(x.contact || '') });
+    });
+  });
+  (s.interessenten || []).forEach(function (i) { if (i.name) personen.push({ name: String(i.name), wo: 'Interessent', kontakt: String(i.kontakt || '') }); });
+  return { objekte: (s.objects || []).map(function (o) { return String(o.name || ''); }).filter(Boolean), personen: personen };
+}
+
+async function kriterienVonClaude(q, b) {
+  const { claude } = require('./assistent');
+  const heute = new Date();
+  const system = 'Du hilfst Louis Ziegler, einem privaten Vermieter, in seinem E-Mail-Postfach zu suchen. Übersetze seine Suchanfrage '
+    + 'in Suchkriterien für einen Mailserver, der nur nach Teilwörtern sucht (Groß- und Kleinschreibung egal).\n'
+    + '- begriffe: Gruppen von Wörtern. Jede Gruppe muss in der Mail vorkommen (Betreff, Absender oder Text). In einer Gruppe stehen '
+    + 'gleichwertige Schreibweisen und naheliegende Synonyme, z. B. ["Rechnung", "Abrechnung", "Invoice"] oder ["Heizung", "Therme", "Heizkörper"]. '
+    + 'Nimm Wortstämme ("Rechnung" findet auch "Rechnungen"). Höchstens 3 Gruppen mit je höchstens 5 Wörtern. Füllwörter, Zeitangaben '
+    + 'und Absendernamen gehören nicht hierher. Steht nur ein Name in der Anfrage, bleibt begriffe leer.\n'
+    + '- absender / empfaenger: Namen, Firmen oder Adressen; leer, wenn nicht gemeint. Passt die Anfrage auf eine der bekannten Personen '
+    + 'unten (z. B. "Mieterin im EG der Bertha"), nimm deren Namen.\n'
+    + '- seit / bis: Datum JJJJ-MM-TT, wenn ein Zeitraum gemeint ist ("letzte Woche", "im Oktober", "seit dem Sommer"), sonst leer. '
+    + 'Heute ist ' + heute.toLocaleDateString('de-DE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Europe/Berlin' })
+    + ' (' + heute.toISOString().slice(0, 10) + ').\n'
+    + '- nurAnhang: true, wenn nach Anhängen, PDFs, Dateien oder Fotos gefragt ist.\n'
+    + '- ordner: "gesendet" für Mails, die Louis selbst geschrieben hat ("meine Mail an …", "was ich … geschickt habe"), '
+    + '"eingang" für "neue Mails", sonst "alle".\n'
+    + '- erklaerung: ein kurzer deutscher Satz, wonach jetzt gesucht wird.\n\n'
+    + 'Objekte: ' + (b.objekte.join(' | ') || '—') + '\n'
+    + 'Bekannte Personen: ' + (b.personen.slice(0, 120).map(function (p) { return p.name + ' (' + p.wo + ')'; }).join('; ') || '—');
+  const antwort = await claude({
+    model: 'claude-opus-5-5', max_tokens: 4000, system: system,
+    messages: [{ role: 'user', content: String(q).slice(0, 300) }],
+    output_config: { effort: 'low', format: { type: 'json_schema', schema: SUCH_SCHEMA } }
+  }, null, 25000);
+  const block = (antwort.content || []).find(function (x) { return x.type === 'text'; });
+  return JSON.parse(block.text);
+}
+
+function oder(liste) { return liste.length === 1 ? liste[0] : { or: liste }; }
+
+app.get('/api/postfach/suche', nurAngemeldet, nurVerwalter, mitFehler(async function (req, res) {
+  const q = String(req.query.q || '').trim();
+  if (q.length < 2) throw fehler('Bitte mindestens zwei Zeichen eingeben', 400);
+  const b = bekannte();
+  let k = null, schlau = false;
+  if (req.query.schlau !== '0' && einstellung('anthropic_token')) {
+    try { k = await kriterienVonClaude(q, b); schlau = true; } catch (e) { k = null; }
+  }
+  if (!k) k = einfacheKriterien(q);
+
+  // Gruppen säubern, ä/ae ergänzen; Absender um die Adressen bekannter Personen erweitern
+  const gruppen = (k.begriffe || []).map(function (g) {
+    const v = [];
+    (g || []).slice(0, 6).forEach(function (w) { umlautVarianten(w).forEach(function (x) { if (x.length >= 2 && v.indexOf(x) === -1) v.push(x); }); });
+    return v;
+  }).filter(function (g) { return g.length; }).slice(0, 4);
+  const absender = [];
+  (k.absender || []).forEach(function (a) {
+    umlautVarianten(a).forEach(function (x) { if (absender.indexOf(x) === -1) absender.push(x); });
+    b.personen.forEach(function (p) {
+      if (p.name.toLowerCase().indexOf(String(a).toLowerCase()) === -1) return;
+      const adr = (p.kontakt.match(/[^\s<>,;"]+@[^\s<>,;"]+/) || [])[0];
+      if (adr && absender.indexOf(adr) === -1) absender.push(adr);
+    });
+  });
+  const empfaenger = (k.empfaenger || []).filter(Boolean).slice(0, 6);
+  if (!gruppen.length && !absender.length && !empfaenger.length) {
+    return res.json({ q: q, erklaerung: k.erklaerung || '', schlau: schlau, mails: [], gesamt: 0 });
+  }
+
+  // Ordner: alle außer Papierkorb, Spam und Entwürfe — oder nur Eingang bzw. Gesendet
+  const ordner = (await ordnerListe(false)).filter(function (o) {
+    if (k.ordner === 'eingang') return o.spezial === 'eingang';
+    if (k.ordner === 'gesendet') return o.spezial === 'gesendet';
+    return ['papierkorb', 'spam', 'entwuerfe'].indexOf(o.spezial) === -1;
+  });
+  const zeit = {};
+  if (/^\d{4}-\d{2}-\d{2}$/.test(k.seit || '')) zeit.since = new Date(k.seit + 'T00:00:00');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(k.bis || '')) { const d = new Date(k.bis + 'T00:00:00'); d.setDate(d.getDate() + 1); zeit.before = d; }
+  // Erst das schärfste Kriterium, dann der Rest — und nur in Ordnern, in denen das erste etwas fand
+  const schritte = [];
+  if (absender.length) schritte.push(oder(absender.map(function (a) { return { from: a }; })));
+  if (empfaenger.length) schritte.push(oder([].concat.apply([], empfaenger.map(function (a) { return [{ to: a }, { cc: a }]; }))));
+  gruppen.forEach(function (g) {
+    schritte.push(oder([].concat.apply([], g.map(function (w) { return [{ subject: w }, { from: w }, { body: w }]; }))));
+  });
+
+  const treffer = [];
+  let gesamt = 0;
+  for (const o of ordner) {
+    await imOrdner(o.pfad, async function (c) {
+      if (!c.mailbox.exists) return;
+      let uids = null;
+      for (const s of schritte) {
+        const gefunden = await c.search(Object.assign({}, zeit, s), { uid: true }) || [];
+        uids = uids === null ? gefunden : uids.filter(function (u) { return gefunden.indexOf(u) !== -1; });
+        if (!uids.length) return;
+      }
+      gesamt += uids.length;
+      const neueste = uids.sort(function (a, b2) { return b2 - a; }).slice(0, 40);
+      for await (const m of c.fetch(neueste.join(','), { uid: true, flags: true, envelope: true, bodyStructure: true }, { uid: true })) {
+        if (k.nurAnhang && !hatAnhang(m.bodyStructure)) continue;
+        const e = m.envelope || {};
+        treffer.push({
+          uid: m.uid, ordner: o.pfad, ordnerName: o.name, betreff: e.subject || '(ohne Betreff)',
+          von: adressen(e.from)[0] || null, an: adressen(e.to), datum: e.date || null,
+          gelesen: m.flags.has('\\Seen'), markiert: m.flags.has('\\Flagged'), beantwortet: m.flags.has('\\Answered'),
+          anhang: hatAnhang(m.bodyStructure)
+        });
+      }
+    }).catch(function () { /* ein Ordner, der sich nicht öffnen lässt, hält die Suche nicht auf */ });
+  }
+  treffer.sort(function (a, b2) { return new Date(b2.datum || 0) - new Date(a.datum || 0); });
+  res.json({
+    q: q, schlau: schlau, gesamt: gesamt, mails: treffer.slice(0, 80),
+    erklaerung: k.erklaerung || ('Mails ' + [
+      gruppen.length ? 'mit ' + gruppen.map(function (g) { return '„' + g[0] + '“'; }).join(' und ') : '',
+      absender.length ? 'von ' + absender[0] : ''
+    ].filter(Boolean).join(', '))
+  });
+}));
+
+module.exports = { router: app, verschluesseln, entschluesseln, signaturAus };

@@ -953,3 +953,29 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 }
 #app button.pf-zielknopf svg { color: var(--messing); flex: none; }
 #app button.pf-zielknopf:hover { background: var(--fuellung); color: var(--ink); }
+
+/* Suchfeld über der Mailliste und Erklärung der Suche */
+#app .p2-suchzeile { position: relative; display: flex; align-items: center; margin-bottom: 12px; }
+#app .p2-suchzeile .p2-lupe { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--muted); display: flex; pointer-events: none; }
+#app .p2-suchzeile input[type="search"] {
+  flex: 1; min-width: 0; padding: 8px 32px 8px 32px; border-radius: 10px; border: 1px solid transparent;
+  background: var(--fuellung); color: var(--ink); font-size: 14px;
+}
+#app .p2-suchzeile input[type="search"]::-webkit-search-cancel-button { display: none; }
+#app .p2-suchzeile button.p2-suchende {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%); padding: 3px 8px; min-height: 0;
+  background: transparent; color: var(--muted); font-size: 13px;
+}
+#app .p2-erkl { display: flex; flex-direction: column; gap: 2px; margin: 0 18px 8px; padding: 10px 12px; border-radius: 10px; background: var(--glas); font-size: 13px; color: var(--ink); }
+#app .p2-erkl span { color: var(--muted); font-size: 12px; }
+#app .pf-handyliste .p2-erkl { margin: 0 0 8px; }
+#app .pf-handyliste .p2-chip { display: inline-block; margin-top: 4px; padding: 1px 7px; border-radius: 5px; background: var(--fuellung); color: var(--muted); font-size: 11px; }
+
+/* Signatur im Fenster „Mailkonto“ */
+#app .pf-sig-titel { margin: 4px 0 2px; font-size: 17px; font-weight: 700; }
+#app .modal textarea.pf-signatur { width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; line-height: 1.5; padding: 10px 12px; resize: vertical; }
+#app .pf-sig-knoepfe { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+
+/* Interessenten: fünf Spalten mit „Besichtigt, Antwort ausstehend“ */
+@media (min-width: 981px) { #app .ipipeline { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+#app .fpunkt.istat-besichtigt { background: #ff9f0a; }

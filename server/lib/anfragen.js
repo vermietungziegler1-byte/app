@@ -687,7 +687,10 @@ async function imHintergrund() {
   try { await abgleichen(); } catch (e) { /* beim nächsten Mal */ }
 }
 setTimeout(imHintergrund, 90 * 1000).unref();
-setInterval(imHintergrund, 10 * 60 * 1000).unref();   // alle 10 Minuten, damit die Sofortmeldung ihren Namen verdient
+// Alle 2 Minuten ins Postfach schauen, damit neue Anfragen gleich in der App stehen und die Sofortmeldung
+// ihren Namen verdient. Kostet nur einen Listenabruf bei Google; bewertet wird jede Mail genau einmal
+const TAKT_MS = 2 * 60 * 1000;
+setInterval(imHintergrund, TAKT_MS).unref();
 setInterval(function () {
   melden(berlinJetzt()).catch(function (e) { console.log('Anfragen-Meldung fehlgeschlagen:', e.message); });
 }, Number(process.env.PUSH_TAKT_MS) || 60000).unref();
@@ -717,7 +720,7 @@ app.get('/api/anfragen', nurAngemeldet, mitFehler(async function (req, res) {
         new Promise(function (ok) { uhr = setTimeout(ok, KURZ_WARTEN_MS); })
       ]);
       clearTimeout(uhr);
-    } else if (Date.now() - letzterAbgleich > 10 * 60 * 1000) {
+    } else if (Date.now() - letzterAbgleich > TAKT_MS) {
       // Normaler Seitenaufruf: nur anstoßen und den Stand sofort liefern — bis zu 15 Bewertungen hinter dem
       // Proxy abzuwarten, hieße ein Gateway-Zeitlimit statt einer Seite
       abgleichen().catch(function () { /* steht in letzterFehler */ });
