@@ -299,17 +299,24 @@ function festeOrdner() {
   });
   return liste;
 }
+// Der Name des Vermieters steht auf fast jedem Dokument — er sagt nichts über Objekt oder Wohnung
+function woerterbuchJetzt(s) {
+  const eigentuemer = String(einstellung('dok_eigentuemer') || 'Louis Ziegler').split(',').map(function (n) { return n.trim(); }).filter(Boolean);
+  return regeln.woerterbuch(s || standInhalt() || {}, eigentuemer);
+}
 function regelnAnwenden() {
-  const wb = regeln.woerterbuch(standInhalt() || {});
+  const wb = woerterbuchJetzt();
   const fest = festeOrdner();
   const setzen = db.prepare('UPDATE dok_dateien SET objekt = ?, einheit = ?, art = ?, quelle = ?, status = ? WHERE id = ?');
   db.transaction(function () {
-    // Neue immer; offene und unklare nur, wenn jetzt eine Regel greift (z. B. nach einem neuen Mieter oder gelernten Ordner)
-    db.prepare("SELECT id, name, pfad, mime, status FROM dok_dateien WHERE status IN ('neu', 'offen', 'unklar')").all().forEach(function (d) {
-      const r = regeln.zuordnen(d.pfad, d.name, wb, fest, d.mime);
-      if (r.objekt) setzen.run(r.objekt, r.einheit || '', r.art, 'regel', r.sicher ? 'zugeordnet' : 'pruefen', d.id);
-      else if (d.status === 'neu') setzen.run('', '', r.art, 'regel', r.kandidaten && r.kandidaten.length ? 'pruefen' : 'offen', d.id);
-    });
+    // Neue immer; offene, unklare und von den Regeln selbst vorgeschlagene nur, wenn jetzt eine Regel greift
+    // (z. B. nach einem neuen Mieter, einem gelernten Ordner oder besseren Regeln). Was dabei leer bleibt, bleibt, wie es ist.
+    db.prepare("SELECT id, name, pfad, mime, status FROM dok_dateien WHERE status IN ('neu', 'offen', 'unklar') OR (status = 'pruefen' AND quelle = 'regel')")
+      .all().forEach(function (d) {
+        const r = regeln.zuordnen(d.pfad, d.name, wb, fest, d.mime);
+        if (r.objekt) setzen.run(r.objekt, r.einheit || '', r.art, 'regel', r.sicher ? 'zugeordnet' : 'pruefen', d.id);
+        else if (d.status === 'neu') setzen.run('', '', r.art, 'regel', r.kandidaten && r.kandidaten.length ? 'pruefen' : 'offen', d.id);
+      });
   })();
 }
 
@@ -507,7 +514,7 @@ app.put('/api/dokumente/dateien/:id', nurAngemeldet, nurVerwalter, function (req
     // Lernen — aber nicht in Sammelordnern wie „Scans“ oder „03 Rechnungen“ (sonst landete dort alles beim selben Objekt)
     // und nicht, wenn der Ordner selbst schon ein anderes Objekt nennt (dann war nur diese eine Datei falsch abgelegt)
     const letzter = regeln.normal(d.pfad.split('/').filter(Boolean).pop() || '').trim().replace(/^\d+\s+/, '');
-    const ordnerSagt = regeln.zuordnen(d.pfad, '', regeln.woerterbuch(s), []).objekt;
+    const ordnerSagt = regeln.zuordnen(d.pfad, '', woerterbuchJetzt(s), []).objekt;
     if (b.merken !== false && d.eltern && d.pfad !== '/' && letzter && !SAMMELORDNER.test(letzter) && (!ordnerSagt || ordnerSagt === objekt)) {
       db.prepare('INSERT OR REPLACE INTO dok_regeln (ordner, pfad, objekt, einheit) VALUES (?, ?, ?, ?)').run(d.eltern, d.pfad, objekt, b.ordnerMitWohnung ? einheit : '');
       // Was im selben Ordner noch offen ist, gleich mitnehmen

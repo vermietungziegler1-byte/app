@@ -26,9 +26,13 @@ function strassenVarianten(merkmal) {
   return v;
 }
 
-// Aus dem Datenstand: Objekte mit Erkennungsmerkmalen, Wohnungen, Mieter
-function woerterbuch(stand) {
+// Aus dem Datenstand: Objekte mit Erkennungsmerkmalen, Wohnungen, Mieter.
+// eigentuemer: Namen des Vermieters („Louis Ziegler“) — sein Name steht auf fast jedem Dokument und sagt nichts über die
+// Wohnung. Ist er selbst irgendwo Mieter, zählt das nicht; Mieter mit seinem Nachnamen zählen nur mit Vornamen.
+function woerterbuch(stand, eigentuemer) {
   const objekte = [], einheiten = [], mieter = [];
+  const eigene = (eigentuemer || []).map(function (n) { return normal(n).trim(); }).filter(Boolean);
+  const eigeneNachnamen = eigene.map(function (n) { return n.split(' ').pop(); });
   ((stand && stand.objects) || []).forEach(function (o) {
     const name = String(o.name || '');
     const strasse = normal(name.split(',')[0].replace(/\d.*$/, '')).trim();      // „bertha von suttner weg“
@@ -48,9 +52,15 @@ function woerterbuch(stand) {
       const n = normal(x.name).trim();
       if (n) einheiten.push({ id: x.id, objekt: o.id, name: x.name || '', merkmal: n });
       String(x.tenant || '').split(/\s*(?:,|&|\/|\bund\b|\+)\s*/).forEach(function (person) {
-        const teile = normal(person).trim().split(' ').filter(function (t) { return t.length >= 4 && ALLGEMEIN.indexOf(t) === -1; });
+        const voll = normal(person).trim();
+        if (!voll || eigene.indexOf(voll) !== -1) return;
+        const teile = voll.split(' ').filter(function (t) { return t.length >= 4 && ALLGEMEIN.indexOf(t) === -1; });
         const nachname = teile[teile.length - 1];
-        if (nachname) mieter.push({ name: person.trim(), nachname: nachname, objekt: o.id, einheit: x.id });
+        if (!nachname) return;
+        // Gleicher Nachname wie der Vermieter: nur der volle Name ist ein Hinweis
+        const nurVoll = eigeneNachnamen.indexOf(nachname) !== -1;
+        if (nurVoll && voll.indexOf(' ') === -1) return;
+        mieter.push({ name: person.trim(), nachname: nachname, voll: nurVoll ? voll : '', objekt: o.id, einheit: x.id });
       });
     });
   });
@@ -60,7 +70,7 @@ function woerterbuch(stand) {
 // Art des Dokuments — erst am Namen, sonst am nächsten Ordner, der etwas verrät („03 Rechnungen“, „04 Verträge“)
 const ARTEN = [
   ['Mietvertrag', ['mietvertrag', 'mietvertraege', 'mv']],
-  ['Nebenkosten', ['nebenkosten', 'nebenkostenabrechnung', 'betriebskosten', 'betriebskostenabrechnung', 'nka', 'bka', 'heizkosten', 'heizkostenabrechnung', 'ista', 'techem', 'brunata']],
+  ['Nebenkosten', ['nebenkosten', 'nebenkostenabrechnung', 'betriebskosten', 'betriebskostenabrechnung', 'nka', 'bka', 'heizkosten', 'heizkostenabrechnung', 'einzelabrechnung', 'ista', 'techem', 'brunata']],
   ['Kaution', ['kaution', 'mietkaution', 'kautionsbescheinigung', 'kautionskonto']],
   ['Kündigung', ['kuendigung', 'kuendigungsbestaetigung']],
   ['Übergabeprotokoll', ['uebergabeprotokoll', 'uebergabe', 'abnahmeprotokoll', 'wohnungsuebergabe']],
@@ -108,14 +118,26 @@ function zuordnen(pfad, name, wb, regeln, mime) {
   const ganz = normal(String(pfad || '') + ' ' + String(name || '').replace(/\.[a-z0-9]+$/i, ''));
 
   // Hinweise aus Pfad und Namen: Mieternamen (nur eindeutig je Wohnung) und Objekte an Adresse oder Kurzname
-  const mieterTreffer = wb.mieter.filter(function (m) { return enthaelt(ganz, m.nachname); });
+  const mieterIn = function (text) {
+    return wb.mieter.filter(function (m) { return m.voll ? text.indexOf(' ' + m.voll + ' ') !== -1 : enthaelt(text, m.nachname); });
+  };
+  const mieterTreffer = mieterIn(ganz);
   const verschiedene = mieterTreffer.filter(function (m, i) { return mieterTreffer.findIndex(function (x) { return x.einheit === m.einheit; }) === i; });
   const objektTreffer = wb.objekte.filter(function (o) {
     return o.merkmale.some(function (mk) { return mk.indexOf(' ') !== -1 ? ganz.indexOf(' ' + mk + ' ') !== -1 : enthaelt(ganz, mk); });
   });
+  // Wohnung im Objekt: der Name wörtlich („eg links“) — sonst alle seine Wörter in beliebiger Reihenfolge, wenn eines davon
+  // unverwechselbar ist („Werkstatt Kalhamer“ in „Nebenkosten Frank Kalhamer Werkstatt“) und nur eine Wohnung so passt
   const wohnungIm = function (objektId) {
-    return wb.einheiten.filter(function (e) { return e.objekt === objektId && ganz.indexOf(' ' + e.merkmal + ' ') !== -1; })
+    const hier = wb.einheiten.filter(function (e) { return e.objekt === objektId; });
+    const genau = hier.filter(function (e) { return ganz.indexOf(' ' + e.merkmal + ' ') !== -1; })
       .sort(function (a, b) { return b.merkmal.length - a.merkmal.length; })[0];
+    if (genau) return genau;
+    const lose = hier.filter(function (e) {
+      const w = e.merkmal.split(' ');
+      return w.some(function (t) { return t.length >= 5 && ALLGEMEIN.indexOf(t) === -1; }) && w.every(function (t) { return enthaelt(ganz, t); });
+    });
+    return lose.length === 1 ? lose[0] : null;
   };
 
   // 1. Feste Ordner: von Louis gelernt oder beim Objekt als Beleg-Ordner hinterlegt
@@ -136,7 +158,7 @@ function zuordnen(pfad, name, wb, regeln, mime) {
     const objekteRest = wb.objekte.filter(function (o) {
       return o.merkmale.some(function (mk) { return mk.indexOf(' ') !== -1 ? rest.indexOf(' ' + mk + ' ') !== -1 : enthaelt(rest, mk); });
     });
-    const mieterRest = wb.mieter.filter(function (m) { return enthaelt(rest, m.nachname); });
+    const mieterRest = mieterIn(rest);
     const anderes = objekteRest.length && !objekteRest.some(function (o) { return o.id === regel.objekt; });
     const andererMieter = mieterRest.length && !mieterRest.some(function (m) { return m.objekt === regel.objekt; });
     if (anderes || andererMieter) {
@@ -157,7 +179,13 @@ function zuordnen(pfad, name, wb, regeln, mime) {
     const o = objektTreffer[0];
     // Wohnung innerhalb des Objekts: „eg links“, „1 og rechts“ …
     const w = wohnungIm(o.id);
-    return { objekt: o.id, einheit: w ? w.id : '', art: art, sicher: verschiedene.length === 0, grund: 'Objekt ' + o.name.split(',')[0] };
+    // Mehrere Mieter genannt, aber alle aus diesem Objekt (z. B. ein Mieter mit Wohnung und Gewerbe): das Objekt ist sicher
+    const alleHier = verschiedene.every(function (m) { return m.objekt === o.id; });
+    return { objekt: o.id, einheit: w ? w.id : '', art: art, sicher: alleHier, grund: 'Objekt ' + o.name.split(',')[0] };
+  }
+  if (!objektTreffer.length && verschiedene.length > 1 && verschiedene.every(function (m) { return m.objekt === verschiedene[0].objekt; })) {
+    const w = wohnungIm(verschiedene[0].objekt);
+    return { objekt: verschiedene[0].objekt, einheit: w ? w.id : '', art: art, sicher: true, grund: 'Mieter ' + verschiedene[0].name };
   }
   if (objektTreffer.length > 1 || verschiedene.length > 1) {
     const kandidaten = objektTreffer.map(function (o) { return o.id; }).concat(verschiedene.map(function (m) { return m.objekt; }));

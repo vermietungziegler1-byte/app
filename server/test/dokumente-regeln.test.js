@@ -95,3 +95,23 @@ test('Fester Ordner gegen ausdrücklichen Namen: lieber nachfragen; Mietername l
   // Mieter dieses Objekts: Wohnung aus dem Namen, sicher
   assert.equal(kurz(zuordnen('/Firma/Bertha von Suttna/04 Verträge', 'Mietvertrag Quattelbaum.pdf', wb, fest)), 'o1|u3|Mietvertrag|true');
 });
+
+test('Der eigene Name zählt nicht als Mieter; gleicher Nachname nur mit Vornamen; Wohnung auch in anderer Wortfolge', function () {
+  const stand = { objects: [
+    { id: 't', name: 'Tribergle 22, 71409 Schwaikheim', units: [{ id: 'teg', name: 'EG Wohnung', tenant: 'Louis Ziegler' }] },
+    { id: 'h', name: 'Heinkelstraße 7, Berglen', units: [
+      { id: 'hgb', name: 'Gewerbe Blessing', tenant: 'Jürgen Blessing' }, { id: 'hwb', name: 'Wohnung Blessing', tenant: 'Jürgen Blessing' },
+      { id: 'hwk', name: 'Werkstatt Kalhamer', tenant: 'Frank Kalhamer' }, { id: 'hpk', name: 'Wohnung Kalhamer', tenant: 'Frank Kalhamer' },
+      { id: 'hbz', name: 'Büro Ziegler', tenant: 'Michael Ziegler' }
+    ] },
+    { id: 'b', name: 'Bertha-von-Suttner-Weg 4, 71334 Waiblingen', units: [{ id: 'b2r', name: '2.OG Rechts', tenant: 'Anna Muster' }] }
+  ] };
+  const w = woerterbuch(stand, ['Louis Ziegler']);
+  assert.equal(kurz(zuordnen('/Firma/Tribergle/02 Nebenkosten', 'Nebenkostenabrechnung Louis Ziegler 2022.docx', w)), 't||Nebenkosten|true');
+  assert.equal(kurz(zuordnen('/Firma/Bertha von Suttna/01 Mieteinheiten/2.OG Rechts', 'Einzelabrechnung_2024_Ziegler.pdf', w)), 'b|b2r|Nebenkosten|true');
+  assert.equal(kurz(zuordnen('/Firma/Heinkelstraße 7/02 Nebenkosten/2022', 'Nebenkosten Heinkelstrasse 7 Michael Ziegler 2022.docx', w)), 'h|hbz|Nebenkosten|true');
+  assert.equal(kurz(zuordnen('/Firma/Heinkelstraße 7/02 Nebenkosten/2022', 'Nebenkosten Frank Kalhamer Werkstatt 2022.docx', w)), 'h|hwk|Nebenkosten|true');
+  assert.equal(kurz(zuordnen('/Firma/Heinkelstraße 7/02 Nebenkosten/2022', 'Nebenkosten Jürgen Blessing Geschäft 2022.docx', w)), 'h||Nebenkosten|true');
+  assert.equal(kurz(zuordnen('/Scans', 'Nebenkosten Jürgen Blessing 2021.docx', w)), 'h||Nebenkosten|true', 'beide Wohnungen des Mieters im selben Objekt');
+  assert.equal(zuordnen('/Firma/Louis Ziegler', 'Einladung Spreen.pdf', w).objekt, '', 'eigener Ordner sagt nichts');
+});
