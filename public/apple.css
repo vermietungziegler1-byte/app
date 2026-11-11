@@ -1076,6 +1076,71 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 #app .od-wahl-zeile.lose .od-wahl-name::before { display: none; }
 #app .od-wahl-zeile.lose .od-wahl-name { font-weight: 500; }
 #app .od-wahl-zeile small { flex: none; color: var(--muted); font-size: 12px; }
+
+/* ==================================================================
+   Namen aufräumen (Reihe F): Schalter fürs Umbenennen, Vorschläge mit Häkchen, alt grau, neu änderbar
+   ================================================================== */
+#app .odn-eintrag { display: flex; align-items: center; gap: 12px; margin: 12px 0; padding: 12px 14px; border-radius: 12px; background: var(--fuellung); }
+#app .odn-eintrag > div { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+#app .odn-eintrag span { font-size: 12.5px; color: var(--muted); }
+#app .gruen { color: #30d158; }
+#app .odn-kopf { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+#app .odn-kopf h2 { margin: 0; }
+#app .odn-kopf > span { color: var(--muted); font-size: 13px; }
+#app .odn-schalter { display: flex; align-items: center; gap: 14px; margin: 14px 0 0; padding: 12px 16px; border-radius: 12px; background: var(--fuellung); }
+#app .odn-st { flex: 1; min-width: 0; }
+#app .odn-st b { font-size: 15px; font-weight: 600; }
+#app .odn-st div { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+/* iOS-Schalter aus einer Checkbox */
+#app .odn-sw { position: relative; width: 51px; height: 31px; flex: none; cursor: pointer; }
+#app .odn-sw input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+#app .odn-sw span { position: absolute; inset: 0; border-radius: 16px; background: #39393d; transition: background .2s; pointer-events: none; }
+#app .odn-sw span::after { content: ''; position: absolute; left: 2px; top: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, .3); transition: transform .2s; }
+#app .odn-sw input:checked + span { background: #30d158; }
+#app .odn-sw input:checked + span::after { transform: translateX(20px); }
+#app .odn-leiste { display: flex; align-items: center; gap: 10px; margin: 14px 0 6px; flex-wrap: wrap; }
+#app .odn-seg { display: flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--fuellung); overflow-x: auto; max-width: 100%; scrollbar-width: none; }
+#app .odn-seg::-webkit-scrollbar { display: none; }
+#app .odn-seg button { flex: none; padding: 5px 11px; border-radius: 7px; background: transparent; color: var(--ink); font-size: 12.5px; font-weight: 500; min-height: 0; white-space: nowrap; }
+#app .odn-seg button span { color: var(--muted); }
+#app .odn-seg button.an { background: var(--surface); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, .15); }
+#app .odn-leiste input[type="search"] { margin-left: auto; flex: 0 1 220px; padding: 7px 11px; border-radius: 9px; border: 1px solid transparent; background: var(--fuellung); color: var(--ink); font-size: 13px; }
+#app .odn-liste { margin-top: 8px; border-radius: 12px; background: var(--fuellung); max-height: 52vh; overflow-y: auto; }
+#app .odn-obj { position: sticky; top: 0; z-index: 1; padding: 7px 14px 5px; font-size: 11.5px; font-weight: 700; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .03em; background: var(--surface); border-bottom: 1px solid var(--line-soft); }
+#app .odn-z { display: flex; align-items: center; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--line-soft); }
+#app .odn-z:last-child { border-bottom: 0; }
+#app .odn-z > input[type="checkbox"] { width: 20px; height: 20px; margin: 0; flex: none; accent-color: var(--messing); }
+#app .odn-cb-leer { width: 20px; flex: none; }
+#app .odn-z .od-ic { width: 28px; height: 33px; font-size: 7.5px; padding-bottom: 3px; }
+#app .odn-namen { flex: 1; min-width: 0; }
+#app .odn-alt { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#app .odn-alt span { opacity: .7; margin-right: 4px; }
+#app input.odn-neu { width: 100%; box-sizing: border-box; margin-top: 3px; padding: 5px 8px; border-radius: 7px; border: 1px solid var(--line-soft);
+  background: var(--surface); color: var(--ink); font-size: 13.5px; font-weight: 600; }
+#app .odn-z.ab input.odn-neu { opacity: .45; font-weight: 500; }
+#app .odn-z.ab .od-ic { opacity: .45; }
+#app .odn-klein { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+#app .odn-hinweis { font-size: 13px; margin-top: 3px; }
+#app .odn-hinweis a { color: var(--messing); font-weight: 600; margin-left: 4px; text-decoration: none; }
+#app .odn-warum { flex: none; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 5px; white-space: nowrap; }
+#app .odn-warum.w-foto { background: rgba(48, 209, 88, .16); color: #28a745; }
+#app .odn-warum.w-code { background: rgba(255, 159, 10, .16); color: #e08600; }
+#app .odn-warum.w-klein { background: var(--fuellung-stark); color: var(--ink); }
+#app .odn-warum.w-dop { background: rgba(255, 69, 58, .14); color: #e5392c; }
+#app .odn-wo { flex: none; width: 140px; text-align: right; font-size: 12px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#app .odn-wo small { display: block; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+#app .odn-fuss { align-items: center; flex-wrap: wrap; }
+#app .odn-info { font-size: 13px; color: var(--muted); margin-right: 6px; }
+@media (max-width: 700px) {
+  #app .odn-wo { display: none; }
+  #app .odn-z { gap: 9px; padding: 9px 10px; align-items: flex-start; }
+  #app .odn-z .od-ic { display: none; }
+  #app .odn-warum { font-size: 10px; padding: 1px 6px; margin-top: 2px; }
+  #app .odn-leiste input[type="search"] { margin-left: 0; flex: 1 1 100%; }
+  #app .odn-liste { max-height: none; }
+}
 #app .od-zahlen { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 12px 0; }
 #app .od-zahlen div { background: var(--fuellung); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; }
 #app .od-zahlen b { font-size: 22px; font-weight: 700; }

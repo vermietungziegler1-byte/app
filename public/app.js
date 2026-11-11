@@ -636,6 +636,7 @@
     let nachGoogle = null;
     try { nachGoogle = window.sessionStorage.getItem('vermietung:nachGoogle'); window.sessionStorage.removeItem('vermietung:nachGoogle'); } catch (e) { /* egal */ }
     if (nachGoogle === 'dokumente' && phase === 'app' && nutzerRolle === 'verwalter') handle('od-einrichten', null);
+    if (nachGoogle === 'namen' && phase === 'app' && nutzerRolle === 'verwalter') handle('odn-oeffnen', null);
     if (phase === 'app' && todoist.verbunden) {
       planLaden().then(function () {
         if (planWunsch) { planWunsch = false; modal = { kind: 'plan' }; }
@@ -1278,6 +1279,107 @@
         + '</div><div class="legal">' + (gewaehlt ? gewaehlt + ' von ' + w.ordner.length + ' Ordnern gewählt.' : 'Noch kein Ordner gewählt.')
         + ' <button class="tiny ghost" data-act="od-wahl-neu">Ordnerliste neu lesen</button></div>'
         : '<div class="empty-note">In deinem Google Drive gibt es noch keine Ordner.</div>');
+  }
+
+  // ---- Namen aufräumen: Vorschläge ansehen, ändern, bestätigen — umbenannt wird nur bei eingeschaltetem Schalter ----
+  let odn = { daten: null, laedt: false, ab: {}, namen: {}, filter: '', suche: '', arbeit: '' };
+  const ODN_FILTER = [['', 'Alle'], ['foto', 'Fotos'], ['code', 'Codes & Scans'], ['doppelt', 'Doppelt?'], ['klein', 'Kleinigkeiten']];
+  function odnGruppe(z) {
+    return z.grund === 'doppelt' ? 'doppelt' : z.grund === 'Handyfoto' ? 'foto'
+      : (['Code', 'Scan', 'am Inhalt erkannt', 'Umlaute'].indexOf(z.grund) !== -1 ? 'code' : 'klein');
+  }
+  function odnLaden() {
+    odn.laedt = true;
+    return apiRoh('dokumente/namen').then(function (r) {
+      odn.daten = r;
+      // Was es nicht mehr gibt, aus der Abwahl und den Änderungen streichen
+      const da = {};
+      (r.liste || []).forEach(function (z) { da[z.id] = true; });
+      Object.keys(odn.ab).forEach(function (id) { if (!da[id]) delete odn.ab[id]; });
+      Object.keys(odn.namen).forEach(function (id) { if (!da[id]) delete odn.namen[id]; });
+    }).catch(function (e) { odn.daten = { fehler: e.message, liste: [] }; })
+      .then(function () { odn.laedt = false; });
+  }
+  function odnSichtbar() {
+    const q = odn.suche.toLowerCase().trim();
+    return ((odn.daten && odn.daten.liste) || []).filter(function (z) {
+      return (!odn.filter || odnGruppe(z) === odn.filter)
+        && (!q || (z.alt + ' ' + (odn.namen[z.id] || z.vorschlag || '') + ' ' + z.ort + ' ' + z.pfad).toLowerCase().indexOf(q) !== -1);
+    });
+  }
+  function odnName(z) { return odn.namen[z.id] !== undefined ? odn.namen[z.id] : (z.vorschlag || ''); }
+  // Neu aufbauen, ohne dass die lange Liste nach oben springt
+  function odnNeuZeichnen() {
+    const l = root.querySelector('.odn-liste'), oben = l ? l.scrollTop : 0;
+    render();
+    const n = root.querySelector('.odn-liste');
+    if (n) n.scrollTop = oben;
+  }
+  function odnGewaehlt() {
+    return odnSichtbar().filter(function (z) { return z.grund !== 'doppelt' && !odn.ab[z.id] && odnName(z).trim() && odnName(z) !== z.alt; });
+  }
+  function odnHtml() {
+    const d = odn.daten;
+    if (!d || odn.laedt && !d.liste) return '<div class="empty-note">Vorschläge werden zusammengestellt …</div>';
+    if (d.fehler) return '<div class="hintbox"><b>Das hat nicht geklappt:</b> ' + esc(d.fehler) + '</div>';
+    const an = !!d.bearbeiten;
+    const alle = d.liste || [];
+    const zahl = {};
+    alle.forEach(function (z) { const g = odnGruppe(z); zahl[g] = (zahl[g] || 0) + 1; });
+    const sichtbar = odnSichtbar();
+    const gewaehlt = odnGewaehlt();
+    const wartet = alle.filter(function (z) { return z.wartet; }).length;
+    let h = '<div class="odn-schalter"><div class="odn-st"><b>Umbenennen erlauben</b><div>'
+      + (an ? 'An: Die App darf Dateinamen in deinem Google Drive ändern — aber nur, wenn du unten auf „Umbenennen“ tippst. Aus: Sie gibt das Recht an Google zurück und liest nur noch.'
+            : 'Aus: Die App liest nur. Vorschläge ansehen geht trotzdem. Einschalten: Google fragt einmal nach dem Recht, Dateien zu bearbeiten.')
+      + '</div></div><label class="odn-sw"><input type="checkbox" data-act="odn-schalter"' + (an ? ' checked' : '') + '><span></span></label></div>';
+    h += '<div class="odn-leiste"><div class="odn-seg">' + ODN_FILTER.map(function (f) {
+        const n = f[0] ? (zahl[f[0]] || 0) : alle.length;
+        return '<button class="' + (odn.filter === f[0] ? 'an' : '') + '" data-act="odn-filter" data-wert="' + f[0] + '">' + esc(f[1]) + ' <span>' + n + '</span></button>';
+      }).join('') + '</div>'
+      + '<input type="search" id="odn-q" placeholder="Suchen" value="' + esc(odn.suche) + '" autocomplete="off"></div>';
+    if (wartet) h += '<div class="legal">Bei ' + wartet + ' Dateien verbessert der Assistent den Vorschlag noch — das läuft im Hintergrund, alle fünf Minuten ein Stück.</div>';
+    if (!sichtbar.length) {
+      h += '<div class="empty-note">' + (alle.length ? 'Nichts passt zu diesem Filter.' : 'Alle Dateinamen sind in Ordnung — hier gibt es nichts aufzuräumen.') + '</div>';
+    } else {
+      const gruppen = {};
+      const reihe = [];
+      sichtbar.forEach(function (z) {
+        const g = z.objekt ? (odEinheitName(z.objekt, '').objekt || 'Ohne Objekt') : 'Ohne Objekt';
+        if (!gruppen[g]) { gruppen[g] = []; reihe.push(g); }
+        gruppen[g].push(z);
+      });
+      h += '<div class="odn-liste">' + reihe.map(function (g) {
+        return '<div class="odn-obj">' + esc(g) + '</div>' + gruppen[g].slice(0, 400).map(function (z) {
+          const wo = odEinheitName(z.objekt, z.einheit);
+          const ordner = String(z.pfad || '').split('/').filter(Boolean).slice(-2).join(' › ');
+          const kopf = '<div class="odn-alt"><span>vorher</span> ' + esc(z.alt) + '</div>';
+          if (z.grund === 'doppelt') {
+            return '<div class="odn-z dop"><span class="odn-cb-leer"></span>' + odSymbol({ name: z.alt, mime: z.mime })
+              + '<div class="odn-namen">' + kopf + '<div class="odn-hinweis">' + (z.gruppe || 2) + ' fast gleiche Dateien im Ordner. Die App löscht nichts — schau sie dir selbst an. '
+              + '<a href="https://drive.google.com/drive/folders/' + encodeURIComponent(z.eltern) + '" target="_blank" rel="noopener">Ordner öffnen</a></div></div>'
+              + '<span class="odn-warum w-dop">doppelt?</span><div class="odn-wo">' + esc(wo.einheit || (z.objekt ? 'ganzes Objekt' : '')) + '<small>' + esc(ordner) + '</small></div></div>';
+          }
+          const ein = !odn.ab[z.id];
+          return '<div class="odn-z' + (ein ? '' : ' ab') + '"><input type="checkbox" data-act="odn-an" data-id="' + esc(z.id) + '"' + (ein ? ' checked' : '') + '>'
+            + odSymbol({ name: z.alt, mime: z.mime })
+            + '<div class="odn-namen">' + kopf + '<input class="odn-neu" type="text" data-odn-name="' + esc(z.id) + '" value="' + esc(odnName(z)) + '" spellcheck="false">'
+            + (z.wartet ? '<div class="odn-klein">vorläufig — der Assistent schlägt noch etwas Besseres vor</div>' : '') + '</div>'
+            + '<span class="odn-warum w-' + odnGruppe(z) + '">' + esc(z.grund) + '</span>'
+            + '<div class="odn-wo">' + esc(wo.einheit || (z.objekt ? 'ganzes Objekt' : '')) + '<small>' + esc(ordner) + '</small></div></div>';
+        }).join('');
+      }).join('') + '</div>';
+    }
+    const letzte = d.letzte;
+    h += '<div class="modal-actions odn-fuss">'
+      + '<span class="odn-info">' + (odn.arbeit ? esc(odn.arbeit) : gewaehlt.length + ' von ' + sichtbar.filter(function (z) { return z.grund !== 'doppelt'; }).length + ' ausgewählt') + '</span>'
+      + '<button class="ghost" data-act="odn-alle">Alle</button><button class="ghost" data-act="odn-keine">Keine</button>'
+      + '<div class="spacer"></div>'
+      + (letzte && letzte.anzahl ? '<button data-act="odn-rueck"' + (an && !odn.arbeit ? '' : ' disabled') + ' title="' + (an ? '' : 'Dafür muss der Schalter an sein') + '">Rückgängig ('
+          + letzte.anzahl + ')</button>' : '')
+      + '<button class="primary" data-act="odn-umbenennen"' + (an && gewaehlt.length && !odn.arbeit ? '' : ' disabled') + '>'
+      + (an ? gewaehlt.length + (gewaehlt.length === 1 ? ' Datei' : ' Dateien') + ' umbenennen' : 'Erst Schalter einschalten') + '</button></div>';
+    return h;
   }
 
   // In der Wohnung: Unterlagen des Mieters und der Wohnung
@@ -5154,7 +5256,7 @@
     const p2alt = root.querySelector('.p2-liste');       // Post am PC: Liste bleibt beim Neuaufbau an ihrer Stelle
     const p2Rolle = p2alt ? p2alt.scrollTop : 0;
     // Wer gerade in einem Suchfeld tippt (Postfach, Dokumente), tippt nach dem Neuaufbau einfach weiter
-    const suchFeldId = document.activeElement && /^(pf-q|od-q-)/.test(document.activeElement.id || '') ? document.activeElement.id : '';
+    const suchFeldId = document.activeElement && /^(pf-q|od-q-|odn-q)/.test(document.activeElement.id || '') ? document.activeElement.id : '';
     const suchStelle = suchFeldId ? (document.activeElement.selectionStart || 0) : -1;
     root.innerHTML = html;
     if (alterToast) root.appendChild(alterToast);
@@ -7856,6 +7958,8 @@
           + '</div>'
           + '<div class="legal">Der Assistent hat heute ' + (s.assistentHeute || 0) + ' Dateien gelesen (höchstens 300 am Tag, etwa 1 Cent je Datei). '
           + 'Er liest nur PDFs, die am Namen nicht zu erkennen sind.</div>'
+          + '<div class="odn-eintrag"><div><b>Namen aufräumen</b><span>Bessere Dateinamen vorschlagen lassen und bestätigen · Umbenennen ist '
+          + (s.bearbeiten ? '<b class="gruen">an</b>' : 'aus') + '</span></div><button data-act="odn-oeffnen">Öffnen ›</button></div>'
           + (unklar.length ? '<div class="od-gruppe">Keinem Objekt zugeordnet (' + unklar.length + ')</div><div class="od-unklar">'
               + unklar.slice(0, 40).map(odVorschlagHtml).join('') + '</div>' : '')
           + '<div class="modal-actions"><button class="danger" data-act="od-trennen">Zurücksetzen</button><div class="spacer"></div>'
@@ -7881,6 +7985,9 @@
         + (o ? '<label class="od-merken"><input type="checkbox" id="od-mit-wohnung"> Der ganze Ordner gehört zur gewählten Wohnung, nicht nur zum Objekt</label>' : '')
         + '<div class="modal-actions"><button class="ghost" data-act="od-weg" data-id="' + esc(d.id || '') + '">Gehört zu keinem</button><div class="spacer"></div>'
         + '<button data-act="close">Abbrechen</button><button class="primary" data-act="od-zuordnen-speichern">Speichern</button></div>';
+    } else if (modal.kind === 'od-namen') {
+      body = '<div class="odn-kopf"><button class="tiny ghost" data-act="od-einrichten">‹ Google Drive</button><h2>Namen aufräumen</h2>'
+        + (odn.daten && odn.daten.liste ? '<span>' + odn.daten.liste.length + ' Vorschläge</span>' : '') + '</div>' + odnHtml();
     } else if (modal.kind === 'pf-mail') {
       body = '<div class="pf-fenstermail">' + pfLeseHtml() + '</div>';
     } else if (modal.kind === 'pf-ziel') {
@@ -8977,7 +9084,7 @@
         + '<button class="primary" data-act="save-object">Speichern</button></div>';
     }
     const breit = (modal.kind === 'strom' || modal.kind === 'konto' || modal.kind === 'wartung'
-      || modal.kind === 'nk' || modal.kind === 'auszug' || modal.kind === 'kauf' || modal.kind === 'anfrage') ? ' breit'
+      || modal.kind === 'nk' || modal.kind === 'auszug' || modal.kind === 'kauf' || modal.kind === 'anfrage' || modal.kind === 'od-namen') ? ' breit'
       : (modal.kind === 'aufgabe' ? ' mittel' : (modal.kind === 'pf-schreiben' || modal.kind === 'pf-mail' ? ' mailfenster' : ''));
 
     const titel = {
@@ -8989,7 +9096,7 @@
       kauf: 'Durchgerechnet', 'kauf-neu': 'Angebot eintragen', 'kauf-annahmen': 'Annahmen',
       anfrage: 'Anfrage', 'anf-kriterien': 'Kriterien',
       'pf-schreiben': 'Mail', 'pf-mail': 'Mail', 'pf-ziel': 'Verschieben', 'pf-einrichten': 'Mailkonto',
-      'od-einrichten': 'Google Drive', 'od-zuordnen': 'Zuordnen'
+      'od-einrichten': 'Google Drive', 'od-zuordnen': 'Zuordnen', 'od-namen': 'Namen aufräumen'
     }[modal.kind] || '';
 
 
@@ -9066,6 +9173,12 @@
     });
     const odo = root.querySelector('#od-objekt');
     if (odo) odo.addEventListener('change', function () { modal.objekt = odo.value; modal.einheit = ''; modal.art = val('od-art'); render(); });
+    // Namen aufräumen: Geändertes merken, ohne neu aufzubauen (sonst ginge beim Tippen der Fokus verloren); Suche beim Tippen
+    root.querySelectorAll('[data-odn-name]').forEach(function (feld) {
+      feld.addEventListener('input', function () { odn.namen[feld.getAttribute('data-odn-name')] = feld.value; });
+    });
+    const odnq = root.querySelector('#odn-q');
+    if (odnq) odnq.addEventListener('input', function () { odn.suche = odnq.value; odnNeuZeichnen(); });
     // Suchfeld im Postfach: Enter sucht, Esc beendet; das Getippte übersteht jeden Neuaufbau
     const pfq = root.querySelector('#pf-q');
     if (pfq) {
@@ -9866,6 +9979,104 @@
             od = { status: null, dateien: null, laedt: false, statusLaedt: false, geholt: 0, filter: {}, art: {}, suche: {} };
             modal = null; toast('Zurückgesetzt'); render();
           }).catch(function (e) { toast(e.message); });
+        });
+    }
+    // ---- Namen aufräumen ----
+    else if (act === 'odn-oeffnen') {
+      seiteOffen = false;
+      modal = { kind: 'od-namen' };
+      render();
+      odnLaden().then(function () { if (modal && modal.kind === 'od-namen') odnNeuZeichnen(); });
+    }
+    else if (act === 'odn-filter') { odn.filter = el.getAttribute('data-wert') || ''; render(); }
+    else if (act === 'odn-an') {
+      const id = el.getAttribute('data-id');
+      if (el.checked) delete odn.ab[id]; else odn.ab[id] = true;
+      odnNeuZeichnen();
+    }
+    else if (act === 'odn-alle' || act === 'odn-keine') {
+      odnSichtbar().forEach(function (z) { if (act === 'odn-alle') delete odn.ab[z.id]; else odn.ab[z.id] = true; });
+      odnNeuZeichnen();
+    }
+    else if (act === 'odn-schalter') {
+      const einschalten = !!el.checked;
+      odnNeuZeichnen();   // Der Schalter zeigt weiter den echten Stand, bis Google geantwortet hat
+      if (einschalten) {
+        dialog({ titel: 'Umbenennen erlauben?', text: 'Google fragt jetzt nach dem Recht, Dateien in deinem Google Drive zu bearbeiten. Google nennt das '
+            + '„Dateien sehen, bearbeiten, erstellen und löschen“ — die App benennt trotzdem nur um, wenn du bestätigst, und löscht nie etwas. '
+            + 'Mit dem Schalter gibst du das Recht jederzeit zurück.',
+          knoepfe: [{ label: 'Abbrechen', wert: false }, { label: 'Weiter zu Google', wert: true, art: 'primaer' }] })
+          .then(function (r) {
+            if (!r.wert) return;
+            try { window.sessionStorage.setItem('vermietung:nachGoogle', 'namen'); } catch (e) { /* egal */ }
+            window.location.href = '/api/google/start?bearbeiten=1';
+          });
+      } else {
+        dialog({ titel: 'Recht zurückgeben?', text: 'Die App gibt das Recht zum Bearbeiten bei Google zurück. Google kennt dabei nur „alles oder nichts“ — '
+            + 'deshalb meldest du Google gleich danach mit einem Klick wieder an, nur zum Lesen. Postfach, Sicherungen und Dokumente laufen dann weiter wie bisher.',
+          knoepfe: [{ label: 'Abbrechen', wert: false }, { label: 'Zurückgeben', wert: true, art: 'primaer' }] })
+          .then(function (r) {
+            if (!r.wert) return;
+            api('dokumente/bearbeiten/aus', { method: 'POST' }).then(function () {
+              try { window.sessionStorage.setItem('vermietung:nachGoogle', 'namen'); } catch (e) { /* egal */ }
+              toast('Recht zurückgegeben — jetzt Google wieder verbinden, nur zum Lesen');
+              window.location.href = '/api/google/start';
+            }).catch(function (e) { toast(e.message); });
+          });
+      }
+    }
+    else if (act === 'odn-umbenennen') {
+      const liste = odnGewaehlt().map(function (z) { return { id: z.id, name: odnName(z).trim() }; });
+      if (!liste.length) return;
+      dialog({ titel: liste.length + (liste.length === 1 ? ' Datei' : ' Dateien') + ' umbenennen?',
+        text: 'Die App ändert die Namen in deinem Google Drive. Inhalt, Ordner und Links bleiben, und „Rückgängig“ holt die alten Namen zurück.',
+        knoepfe: [{ label: 'Abbrechen', wert: false }, { label: 'Umbenennen', wert: true, art: 'primaer' }] })
+        .then(async function (r) {
+          if (!r.wert) return;
+          const stapel = String(Date.now());
+          let fertig = 0;
+          const fehler = [];
+          for (let i = 0; i < liste.length; i += 25) {
+            odn.arbeit = 'Benenne um … ' + i + ' von ' + liste.length;
+            if (modal && modal.kind === 'od-namen') odnNeuZeichnen();
+            try {
+              const a = await api('dokumente/namen', { method: 'PUT', body: { stapel: stapel, dateien: liste.slice(i, i + 25) } });
+              fertig += a.umbenannt || 0;
+              (a.fehler || []).forEach(function (f) { fehler.push(f); });
+              if ((a.fehler || []).some(function (f) { return /Google erlaubt/.test(f.grund || ''); })) break;
+            } catch (e) { fehler.push({ grund: e.message }); break; }
+          }
+          odn.arbeit = '';
+          liste.forEach(function (z) { delete odn.namen[z.id]; });
+          await odnLaden();
+          od.dateien = null;   // Die Dokumentlisten holen die neuen Namen beim nächsten Anzeigen
+          toast(fertig + ' umbenannt' + (fehler.length ? ' · ' + fehler.length + ' nicht: ' + (fehler[0].grund || '') : ''));
+          if (modal && modal.kind === 'od-namen') odnNeuZeichnen();
+        });
+    }
+    else if (act === 'odn-rueck') {
+      const l = odn.daten && odn.daten.letzte;
+      if (!l) return;
+      dialog({ titel: 'Rückgängig machen?', text: 'Die ' + l.anzahl + ' zuletzt umbenannten Dateien bekommen ihre alten Namen zurück.',
+        knoepfe: [{ label: 'Abbrechen', wert: false }, { label: 'Rückgängig', wert: true, art: 'primaer' }] })
+        .then(async function (r) {
+          if (!r.wert) return;
+          let rest = l.anzahl, fehler = '';
+          for (let runde = 0; rest > 0 && runde < 60; runde++) {
+            odn.arbeit = 'Stelle alte Namen wieder her … noch ' + rest;
+            if (modal && modal.kind === 'od-namen') odnNeuZeichnen();
+            try {
+              const a = await api('dokumente/namen/rueckgaengig', { method: 'POST', body: { stapel: l.stapel } });
+              if (a.fehler && a.fehler.length) { fehler = a.fehler[0].grund; break; }
+              if (a.rest >= rest) break;
+              rest = a.rest;
+            } catch (e) { fehler = e.message; break; }
+          }
+          odn.arbeit = '';
+          await odnLaden();
+          od.dateien = null;
+          toast(fehler ? 'Nicht alles zurück: ' + fehler : 'Alte Namen wiederhergestellt');
+          if (modal && modal.kind === 'od-namen') odnNeuZeichnen();
         });
     }
     else if (act === 'od-aendern') {

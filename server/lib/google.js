@@ -3,6 +3,7 @@
 const express = require('express');
 const { db, crypto, holen, htmlSicher, einstellung, einstellungSetzen, beiDatenAenderung } = require('./kern');
 const { nurAngemeldet, nurVerwalter } = require('./anmeldung');
+const geheim = require('./geheim');
 
 const app = express.Router();
 const TOKEN_URL = process.env.GOOGLE_TOKEN_URL || 'https://oauth2.googleapis.com/token';
@@ -18,11 +19,27 @@ const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly'
   + ' https://www.googleapis.com/auth/drive.readonly'
   + ' https://www.googleapis.com/auth/calendar.app.created';
 
+// Drive bearbeiten: nur, solange Louis in der App „Umbenennen erlauben“ eingeschaltet hat (lib/gdrive.js)
+const BEARBEITEN = 'https://www.googleapis.com/auth/drive';
+const REVOKE_URL = process.env.GOOGLE_REVOKE_URL || 'https://oauth2.googleapis.com/revoke';
+
+// Das dauerhafte Zugriffsrecht liegt verschlüsselt in der Datenbank (wie das Passwort des Mailkontos).
+// Ein älterer, unverschlüsselt gespeicherter Wert wird beim ersten Lesen gleich verschlüsselt.
+function refreshLesen() {
+  const roh = einstellung('google_refresh');
+  if (!roh) return null;
+  if (String(roh).indexOf('v1:') === 0) {
+    try { return geheim.entschluesseln(roh); } catch (e) { return null; }
+  }
+  try { einstellungSetzen('google_refresh', geheim.verschluesseln(roh)); } catch (e) { /* bleibt, wie es ist */ }
+  return roh;
+}
+
 function googleEinstellungen() {
   return {
     clientId: einstellung('google_client_id'),
     clientSecret: einstellung('google_client_secret'),
-    refresh: einstellung('google_refresh'),
+    refresh: refreshLesen(),
     adresse: einstellung('google_adresse')
   };
 }
@@ -136,11 +153,12 @@ app.get('/api/google/start', nurAngemeldet, nurVerwalter, function (req, res) {
   googleVorgaenge.forEach(function (v, k) { if (v.zeit < grenze) googleVorgaenge.delete(k); });
   const state = crypto.randomBytes(24).toString('hex');
   googleVorgaenge.set(state, { nutzer: req.nutzer, zeit: Date.now() });
+  // ?bearbeiten=1: zusätzlich das Recht, Dateien in Drive zu bearbeiten (Schalter „Umbenennen erlauben“)
   const url = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
     client_id: g.clientId,
     redirect_uri: googleRueckweg(req),
     response_type: 'code',
-    scope: GOOGLE_SCOPE,
+    scope: GOOGLE_SCOPE + (req.query.bearbeiten === '1' ? ' ' + BEARBEITEN : ''),
     access_type: 'offline',
     prompt: 'consent',
     state: state
@@ -171,7 +189,7 @@ app.get('/api/google/zurueck', nurAngemeldet, nurVerwalter, async function (req,
     });
     const daten = await antwort.json();
     if (!daten.refresh_token) throw new Error(daten.error_description || 'Kein dauerhaftes Zugriffsrecht erhalten');
-    einstellungSetzen('google_refresh', daten.refresh_token);
+    einstellungSetzen('google_refresh', geheim.verschluesseln(daten.refresh_token));
     einstellungSetzen('google_scope', String(daten.scope || ''));
     googleZugriffVergessen();
     postCache.clear();
@@ -503,4 +521,26 @@ app.get('/api/post', nurAngemeldet, async function (req, res) {
 // Suchbegriffe hängen an Mietern und Objekten — nach jedem Speichern neu holen
 beiDatenAenderung(function () { postCache.clear(); });
 
-module.exports = { router: app, googleEinstellungen, googleToken, googleZugriffVergessen, gmail, MAIL_KOPF };
+// Darf die App Dateien in Drive bearbeiten (nicht nur lesen)?
+function darfBearbeiten() {
+  return String(einstellung('google_scope') || '').split(/\s+/).indexOf(BEARBEITEN) !== -1;
+}
+
+// Das ganze Recht bei Google zurückgeben. Google kennt kein „nur das Bearbeiten zurück“ — danach verbindet
+// die Oberfläche gleich wieder neu, nur zum Lesen (ein Klick bei Google).
+async function zugangZurueckgeben() {
+  const g = googleEinstellungen();
+  if (g.refresh) {
+    const antwort = await holen(REVOKE_URL, {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token: g.refresh })
+    });
+    // 400 heißt meist: schon ungültig — dann ist das Ziel ohnehin erreicht
+    if (!antwort.ok && antwort.status !== 400) throw new Error('Google nimmt das Recht gerade nicht zurück (' + antwort.status + ') — bitte später noch einmal');
+  }
+  ['google_refresh', 'google_scope'].forEach(function (k) { db.prepare('DELETE FROM einstellungen WHERE schluessel = ?').run(k); });
+  googleZugriffVergessen();
+  postCache.clear();
+}
+
+module.exports = { router: app, googleEinstellungen, googleToken, googleZugriffVergessen, gmail, MAIL_KOPF, darfBearbeiten, zugangZurueckgeben };

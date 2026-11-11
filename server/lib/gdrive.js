@@ -61,6 +61,11 @@ db.exec(`
   DROP TABLE IF EXISTS od_regeln;
 `);
 db.prepare("DELETE FROM einstellungen WHERE schluessel IN ('od_client_id', 'od_client_secret', 'od_refresh', 'od_konto', 'od_delta', 'od_assistent_tag')").run();
+// Aufnahmezeit von Fotos (für Namensvorschläge). Kommt die Spalte neu dazu, einmal alles neu einlesen, damit sie gefüllt wird.
+try {
+  db.exec('ALTER TABLE dok_dateien ADD COLUMN aufnahme TEXT');
+  db.prepare("DELETE FROM einstellungen WHERE schluessel = 'dok_seite'").run();
+} catch (e) { /* gibt es schon */ }
 // status: neu (noch nicht angesehen) · zugeordnet · pruefen (Vorschlag, unsicher) · offen (keine Ahnung, wartet auf den
 // Assistenten) · unklar (auch der Assistent weiß es nicht) · fremd (hat nichts mit der Vermietung zu tun) · ignoriert (Louis: keins)
 
@@ -151,12 +156,12 @@ function erlaubt(id, k, a) {
 // ---------------- Dateien merken ----------------
 const dateiHolen = db.prepare('SELECT * FROM dok_dateien WHERE id = ?');
 const dateiLoeschen = db.prepare('DELETE FROM dok_dateien WHERE id = ?');
-const dateiNeu = db.prepare(`INSERT INTO dok_dateien (id, name, pfad, eltern, mime, groesse, geaendert, url, status, erstmals, lauf)
-  VALUES (@id, @name, @pfad, @eltern, @mime, @groesse, @geaendert, @url, 'neu', @erstmals, @lauf)`);
+const dateiNeu = db.prepare(`INSERT INTO dok_dateien (id, name, pfad, eltern, mime, groesse, geaendert, url, aufnahme, status, erstmals, lauf)
+  VALUES (@id, @name, @pfad, @eltern, @mime, @groesse, @geaendert, @url, @aufnahme, 'neu', @erstmals, @lauf)`);
 const dateiAuffrischen = db.prepare(`UPDATE dok_dateien SET name = @name, pfad = @pfad, eltern = @eltern, mime = @mime, groesse = @groesse,
-  geaendert = @geaendert, url = @url, lauf = @lauf WHERE id = @id`);
+  geaendert = @geaendert, url = @url, aufnahme = @aufnahme, lauf = @lauf WHERE id = @id`);
 const dateiZuruecksetzen = db.prepare(`UPDATE dok_dateien SET name = @name, pfad = @pfad, eltern = @eltern, mime = @mime, groesse = @groesse,
-  geaendert = @geaendert, url = @url, lauf = @lauf, status = 'neu', objekt = '', einheit = '', art = '', titel = '', datum = '', quelle = '' WHERE id = @id`);
+  geaendert = @geaendert, url = @url, aufnahme = @aufnahme, lauf = @lauf, status = 'neu', objekt = '', einheit = '', art = '', titel = '', datum = '', quelle = '' WHERE id = @id`);
 
 // Eine Datei aus Google übernehmen — oder vergessen, wenn sie nicht (mehr) in einem gewählten Ordner liegt
 function dateiMerken(f, k, a, lauf, erstmals) {
@@ -164,7 +169,8 @@ function dateiMerken(f, k, a, lauf, erstmals) {
   const pfad = eltern ? ordnerPfad(eltern, k) : null;
   if (pfad === null || !erlaubt(eltern, k, a) || !regeln.kommtInFrage(pfad, f.name, f.mimeType)) { dateiLoeschen.run(f.id); return false; }
   const zeile = { id: f.id, name: String(f.name || ''), pfad: pfad || '/', eltern: eltern, mime: f.mimeType || '', groesse: Number(f.size) || 0,
-    geaendert: Date.parse(f.modifiedTime || '') || 0, url: f.webViewLink || ('https://drive.google.com/file/d/' + f.id + '/view'), lauf: lauf };
+    geaendert: Date.parse(f.modifiedTime || '') || 0, url: f.webViewLink || ('https://drive.google.com/file/d/' + f.id + '/view'),
+    aufnahme: (f.imageMediaMetadata && f.imageMediaMetadata.time) || '', lauf: lauf };
   const alt = dateiHolen.get(f.id);
   if (!alt) { dateiNeu.run(Object.assign({ erstmals: erstmals }, zeile)); return true; }
   // Die Datei selbst umbenannt oder in einen anderen Ordner gelegt: neu zuordnen — außer Louis hat selbst entschieden.
@@ -195,7 +201,7 @@ async function allesEinlesen(a) {
   })();
   if (!a) return;
   const dateien = await alleSeiten('/files?pageSize=1000&spaces=drive&fields='
-    + q('nextPageToken,files(id,name,mimeType,parents,modifiedTime,size,webViewLink)')
+    + q('nextPageToken,files(id,name,mimeType,parents,modifiedTime,size,webViewLink,imageMediaMetadata(time))')
     + '&q=' + q("mimeType != '" + ORDNER_TYP + "' and trashed = false"));
   if (auswahlGeaendert(auswahlVorher)) return;
   // Beim allerersten Einlesen ist nichts „neu“ — sonst stünde an jeder Datei zwei Tage lang NEU
@@ -214,7 +220,7 @@ async function allesEinlesen(a) {
 async function aenderungenHolen(a) {
   let seite = einstellung('dok_seite');
   const auswahlVorher = einstellung('dok_auswahl');
-  const felder = 'nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,parents,modifiedTime,size,webViewLink,trashed))';
+  const felder = 'nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,parents,modifiedTime,size,webViewLink,trashed,imageMediaMetadata(time)))';
   for (let runde = 0; seite && runde < 200; runde++) {
     let r;
     try {
@@ -268,6 +274,8 @@ async function abgleichen() {
     if (a && !stand.nochmal) {
       regelnAnwenden();
       await assistentAnwenden();
+      // Namensvorschläge vom Assistenten (gdrive-namen.js) — ein Fehler dort hält den Abgleich nicht auf
+      if (!stand.nochmal) { try { await require('./gdrive-namen').namenAssistent(); } catch (x) { /* nächster Lauf */ } }
     }
   } catch (x) {
     stand.fehler = x.message;
@@ -340,6 +348,50 @@ function tagesZaehler(dazu) {
   if (dazu) { zahl += dazu; einstellungSetzen('dok_assistent_tag', heute + ':' + zahl); }
   return zahl;
 }
+// Objekte und Wohnungen als Liste für den Assistenten
+function objektListe(s) {
+  return (s.objects || []).map(function (o) {
+    return '- ' + o.id + ': ' + o.name + '\n' + (o.units || []).map(function (x) {
+      return '    - ' + x.id + ': ' + (x.name || '') + (x.tenant ? ' (Mieter: ' + x.tenant + ')' : '');
+    }).join('\n');
+  }).join('\n');
+}
+// Claude mit strukturierter Antwort: Haiku zuerst, Opus (wenig Aufwand) als Ersatz. Zählt fürs Tageslimit.
+async function claudeJson(koerper, schema) {
+  const { claude } = require('./assistent');
+  let antwort = null;
+  for (const v of [{ model: 'claude-haiku-5-5', output_config: { format: { type: 'json_schema', schema: schema } } },
+                   { model: 'claude-opus-5-5', output_config: { effort: 'low', format: { type: 'json_schema', schema: schema } } }]) {
+    try { antwort = await claude(Object.assign({}, koerper, v), null, 60000); break; }
+    catch (x) { if (x.status && x.status !== 400 && x.status !== 404) throw x; }
+  }
+  if (!antwort) throw new Error('Kein Modell erreichbar');
+  tagesZaehler(1);
+  const block = (antwort.content || []).find(function (x) { return x.type === 'text'; });
+  return JSON.parse(block.text);
+}
+// Ein PDF aus Drive lesen lassen: Vermietung ja/nein, Objekt, Wohnung, Art, Titel, Datum, Sicherheit
+async function pdfLesen(d, s) {
+  const antwort = await fetch(DRIVE + '/files/' + q(d.id) + '?alt=media', {
+    headers: { Authorization: 'Bearer ' + await google.googleToken() }, signal: AbortSignal.timeout(30000)
+  });
+  if (!antwort.ok) throw new Error('Datei nicht lesbar (' + antwort.status + ')');
+  const daten = Buffer.from(await antwort.arrayBuffer());
+  return claudeJson({
+    max_tokens: 1500,
+    system: 'Du hilfst Louis Ziegler, einem privaten Vermieter, Dateien aus seinem Google Drive zu ordnen. Bestimme für das Dokument: '
+      + 'gehört es zur Vermietung (vermietung), zu welchem Objekt (objekt = die ID aus der Liste, sonst leer) und welcher Wohnung '
+      + '(einheit = die ID, sonst leer — leer lassen, wenn es das ganze Haus betrifft), welche Art es ist, einen kurzen Titel '
+      + '(z. B. „Nebenkostenabrechnung 2025“ oder „Rechnung Gartenpflege“), das Datum des Dokuments (JJJJ-MM-TT oder leer) und wie '
+      + 'sicher du dir bei Objekt und Wohnung bist. Adresse, Mietername oder Wohnungsbezeichnung im Text sind die besten Hinweise. '
+      + 'Rate nicht: lieber leer und sicherheit „niedrig“.\n\nObjekte und Wohnungen:\n' + objektListe(s),
+    messages: [{ role: 'user', content: [
+      { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: daten.toString('base64') } },
+      { type: 'text', text: 'Dateiname: ' + d.name + '\nOrdner: ' + d.pfad }
+    ] }]
+  }, SCHEMA);
+}
+
 async function assistentAnwenden() {
   if (!einstellung('anthropic_token')) return;
   const frei = Math.min(ASSISTENT_JE_LAUF, ASSISTENT_JE_TAG - tagesZaehler(0));
@@ -348,12 +400,6 @@ async function assistentAnwenden() {
     + 'AND groesse > 0 AND groesse <= ? ORDER BY geaendert DESC LIMIT ?').all(PDF_HOECHSTENS, frei);
   if (!offen.length) return;
   const s = standInhalt() || {};
-  const liste = (s.objects || []).map(function (o) {
-    return '- ' + o.id + ': ' + o.name + '\n' + (o.units || []).map(function (x) {
-      return '    - ' + x.id + ': ' + (x.name || '') + (x.tenant ? ' (Mieter: ' + x.tenant + ')' : '');
-    }).join('\n');
-  }).join('\n');
-  const { claude } = require('./assistent');
   const auswahlVorher = einstellung('dok_auswahl');
   for (const d of offen) {
     // Jede Datei kostet ein paar Sekunden: hat Louis inzwischen die Auswahl geändert, zurückgesetzt oder selbst
@@ -363,34 +409,7 @@ async function assistentAnwenden() {
     if (!jetzt || jetzt.status !== 'offen') continue;
     let r = null;
     try {
-      const antwort = await fetch(DRIVE + '/files/' + q(d.id) + '?alt=media', {
-        headers: { Authorization: 'Bearer ' + await google.googleToken() }, signal: AbortSignal.timeout(30000)
-      });
-      if (!antwort.ok) throw new Error('Datei nicht lesbar (' + antwort.status + ')');
-      const daten = Buffer.from(await antwort.arrayBuffer());
-      const koerper = {
-        max_tokens: 1500,
-        system: 'Du hilfst Louis Ziegler, einem privaten Vermieter, Dateien aus seinem Google Drive zu ordnen. Bestimme für das Dokument: '
-          + 'gehört es zur Vermietung (vermietung), zu welchem Objekt (objekt = die ID aus der Liste, sonst leer) und welcher Wohnung '
-          + '(einheit = die ID, sonst leer — leer lassen, wenn es das ganze Haus betrifft), welche Art es ist, einen kurzen Titel '
-          + '(z. B. „Nebenkostenabrechnung 2025“ oder „Rechnung Gartenpflege“), das Datum des Dokuments (JJJJ-MM-TT oder leer) und wie '
-          + 'sicher du dir bei Objekt und Wohnung bist. Adresse, Mietername oder Wohnungsbezeichnung im Text sind die besten Hinweise. '
-          + 'Rate nicht: lieber leer und sicherheit „niedrig“.\n\nObjekte und Wohnungen:\n' + liste,
-        messages: [{ role: 'user', content: [
-          { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: daten.toString('base64') } },
-          { type: 'text', text: 'Dateiname: ' + d.name + '\nOrdner: ' + d.pfad }
-        ] }]
-      };
-      let antwortClaude = null;
-      for (const v of [{ model: 'claude-haiku-5-5', output_config: { format: { type: 'json_schema', schema: SCHEMA } } },
-                       { model: 'claude-opus-5-5', output_config: { effort: 'low', format: { type: 'json_schema', schema: SCHEMA } } }]) {
-        try { antwortClaude = await claude(Object.assign({}, koerper, v), null, 60000); break; }
-        catch (x) { if (x.status && x.status !== 400 && x.status !== 404) throw x; }
-      }
-      if (!antwortClaude) throw new Error('Kein Modell erreichbar');
-      tagesZaehler(1);
-      const block = (antwortClaude.content || []).find(function (x) { return x.type === 'text'; });
-      r = JSON.parse(block.text);
+      r = await pdfLesen(d, s);
     } catch (x) {
       if (x.status === 401 || x.status === 429 || /Guthaben/.test(x.message || '')) break;   // Schlüssel, Auslastung, Guthaben: später weiter
       db.prepare("UPDATE dok_dateien SET status = 'unklar', quelle = 'assistent' WHERE id = ? AND status = 'offen'").run(d.id);
@@ -417,7 +436,7 @@ function zahlen() {
 }
 function status() {
   const g = googleVerbunden(), recht = g && darfLesen(), gewaehlt = !!auswahl();
-  return { google: g, recht: recht, gewaehlt: gewaehlt, verbunden: recht && gewaehlt,
+  return { google: g, recht: recht, gewaehlt: gewaehlt, verbunden: recht && gewaehlt, bearbeiten: g && google.darfBearbeiten(),
     zahlen: zahlen(), laeuft: stand.laeuft, zuletzt: stand.zuletzt || null, fehler: stand.fehler, assistentHeute: tagesZaehler(0) };
 }
 app.get('/api/dokumente', nurAngemeldet, function (req, res) { res.json(status()); });
@@ -480,6 +499,7 @@ app.delete('/api/dokumente', nurAngemeldet, nurVerwalter, function (req, res) {
   db.prepare('DELETE FROM dok_dateien').run();
   db.prepare('DELETE FROM dok_ordner').run();
   db.prepare('DELETE FROM dok_regeln').run();
+  try { db.prepare('DELETE FROM dok_namen').run(); } catch (e) { /* Tabelle kommt erst mit gdrive-namen.js */ }
   res.json({ ok: true });
 });
 
@@ -525,4 +545,8 @@ app.put('/api/dokumente/dateien/:id', nurAngemeldet, nurVerwalter, function (req
   res.json({ ok: true, datei: dateiHolen.get(d.id), zahlen: zahlen() });
 });
 
-module.exports = { router: app, abgleichen, regelnAnwenden };
+// Für das Aufräumen der Dateinamen (gdrive-namen.js)
+const intern = { DRIVE, stand, auswahl, darfLesen, googleVerbunden, dateiHolen, tagesZaehler, claudeJson, pdfLesen, objektListe,
+  ASSISTENT_JE_TAG, PDF_HOECHSTENS };
+
+module.exports = { router: app, abgleichen, regelnAnwenden, intern };

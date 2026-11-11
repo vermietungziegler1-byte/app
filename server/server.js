@@ -63,6 +63,7 @@ app.use(require('./lib/kaufen').router);
 app.use(require('./lib/anfragen').router);
 app.use(require('./lib/postfach').router);
 app.use(require('./lib/gdrive').router);
+app.use(require('./lib/gdrive-namen').router);
 
 // ---------------- Oberfläche ----------------
 app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'] }));
