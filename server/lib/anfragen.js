@@ -159,10 +159,11 @@ function antwortAdresse(h) {
   return replyTo;
 }
 
-// ImmoScout schickt seit Herbst 2026 zu jeder Kontaktanfrage nur noch eine Benachrichtigung: Anzeige und Scout-ID, aber
-// weder Name, Nachricht noch Kontaktdaten — die stehen allein im Nachrichten-Manager auf der ImmoScout-Seite. So eine
-// Mail gibt dem Assistenten nichts zu bewerten; sie bekommt eine Karte mit dem Weg dorthin, ohne Bewertung.
-// Erst wenn die Person auf Louis’ Nachricht antwortet, kommt eine Mail mit Text („Neue Nachricht: … hat Ihnen geantwortet“).
+// ImmoScout schickt seit Herbst 2026 zu jeder Kontaktanfrage nur noch eine Benachrichtigung: sichtbar sind Anzeige und
+// Scout-ID, der Abschnitt „Nachricht Ihrer Interessent:innen“ bleibt leer. Die Nachricht steht aber als HTML-Kommentar
+// im Kopf derselben Mail (versteckteAnfrage) — dann bewertet der Assistent sie wie jede Anfrage. Fehlt auch der, gibt
+// die Mail nichts zu bewerten; sie bekommt eine Karte mit dem Weg in den Nachrichten-Manager, ohne Bewertung.
+// Antwortet die Person später, kommt ihre Mail mit Text („Neue Nachricht: … hat Ihnen geantwortet“).
 const HINWEIS_ABSENDER = /anfrage@immobilienscout24\.de/i;
 function hinweisAus(von, betreff, text, html) {
   if (!HINWEIS_ABSENDER.test(String(von || ''))) return null;
@@ -187,7 +188,9 @@ function hinweisAus(von, betreff, text, html) {
   // Der Link in den Nachrichten-Manager — nur einer auf die ImmoScout-Seite selbst
   const m = String(html || '').match(/href="(https:\/\/www\.immobilienscout24\.de\/[^"]*(?:nachrichten-manager|postfach\/redirects\/conversations)[^"]*)"/i);
   const link = m ? m[1].replace(/&amp;/g, '&').slice(0, 500) : (nr ? 'https://www.immobilienscout24.de/expose/' + nr : '');
-  return { nr: nr, titel: titel, adresse: adresse, link: link, relais: relaisAusLink(html) };
+  const versteckt = versteckteAnfrage(html);
+  return { nr: nr, titel: titel, adresse: adresse, link: link, relais: relaisAusLink(html),
+    nachricht: versteckt ? versteckt.text : '', felder: versteckt ? versteckt.felder : {} };
 }
 // Die Kennung der Kontaktanfrage im Link („…/contact-request/4059af1f…“) ist dieselbe wie in der Weiterleitungsadresse
 // der Person (sucher.4059af1f…@nachrichten.immobilienscout24.de) — so kam es bei jeder Anfrage, auf die später eine
@@ -195,6 +198,48 @@ function hinweisAus(von, betreff, text, html) {
 function relaisAusLink(text) {
   const k = String(text || '').match(/contact-request\/([a-f0-9]{16,40})/i);
   return k ? 'sucher.' + k[1].toLowerCase() + '@nachrichten.immobilienscout24.de' : '';
+}
+// HTML-Zeichenreferenzen in einem Stück auflösen (&uuml;, &#252;, &#xFC;, &amp; …) — ein Durchgang, damit aus
+// „&amp;lt;“ nicht doch noch ein „<“ wird. Unbekannte Namen bleiben stehen
+const BENANNT = { nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", auml: 'ä', ouml: 'ö', uuml: 'ü', Auml: 'Ä',
+  Ouml: 'Ö', Uuml: 'Ü', szlig: 'ß', euro: '€', eacute: 'é', egrave: 'è', ndash: '–', mdash: '—', bdquo: '„', ldquo: '“',
+  rdquo: '”', lsquo: '‘', rsquo: '’', hellip: '…' };
+function entitaetenAufloesen(text) {
+  return String(text || '').replace(/&(#\d{1,7}|#x[0-9a-f]{1,6}|[a-z]{2,8});/gi, function (m, e) {
+    if (e[0] === '#') return zeichen(/^#x/i.test(e) ? parseInt(e.slice(2), 16) : Number(e.slice(1)));
+    return Object.prototype.hasOwnProperty.call(BENANNT, e) ? BENANNT[e] : m;
+  });
+}
+// Die Nachricht, die ImmoScout in der Benachrichtigung versteckt: ein HTML-Kommentar im Kopf der Mail, etwa
+//   <!-- Kontaktanfrage zu Ihrem Objekt 169648839
+//   ObjektID: 169648839
+//   Objektname: 169648839
+//   Text: Guten Tag Herr Ziegler, …
+//    -->
+// Liefert { felder, text } — die Felder vor „Text:“ und alles ab „Text:“ bis zum Ende des Kommentars — oder null
+function versteckteAnfrage(html) {
+  const k = String(html || '').match(/<!--\s*(Kontaktanfrage\b[\s\S]*?)-->/i);
+  if (!k) return null;
+  const felder = {};
+  let text = null;
+  k[1].replace(/\r\n?/g, '\n').split('\n').slice(1).forEach(function (z) {
+    if (text) { text.push(z); return; }
+    const f = z.match(/^\s*([A-Za-zÄÖÜäöüß][A-Za-zÄÖÜäöüß .-]{0,30}?)\s*:\s?(.*)$/);
+    if (!f) return;
+    if (/^text$/i.test(f[1])) text = [f[2]];
+    else if (Object.keys(felder).length < 12) felder[f[1]] = entitaetenAufloesen(f[2]).trim().slice(0, 200);
+  });
+  const t = entitaetenAufloesen((text || []).join('\n')).replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim();
+  return { felder: felder, text: t.slice(0, 8000) };
+}
+// Was der Assistent zu einer Benachrichtigung mit versteckter Nachricht liest: die Anzeige, weitere Felder aus dem
+// Kommentar (falls ImmoScout welche mitschickt) und die Nachricht selbst
+function hinweisMailText(h) {
+  const felder = Object.keys(h.felder || {}).filter(function (k) { return !/^objekt(id|name)$/i.test(k); })
+    .map(function (k) { return k + ': ' + h.felder[k]; });
+  const anzeige = [h.titel, h.adresse].filter(Boolean).join(', ');
+  return ['Kontaktanfrage über ImmoScout24 zur Anzeige ' + (h.nr || '?') + (anzeige ? ': ' + anzeige : '')]
+    .concat(felder, ['', 'Nachricht der Person:', h.nachricht || '']).join('\n');
 }
 // Was bei einer Benachrichtigung immer fehlt — die Antwort fragt es ab
 const STANDARD_FEHLT = ['Zahl der Erwachsenen und Kinder', 'monatliches Haushaltsnettoeinkommen', 'Beruf und Art der Beschäftigung',
@@ -552,6 +597,10 @@ function ablegen(id, mail, ergebnis, fehler) {
   let inhalt = null;
   if (ergebnis) {
     inhalt = Object.assign({}, ergebnis.inhalt);
+    // Kam die Anfrage als ImmoScout-Benachrichtigung, gilt die Weiterleitungsadresse: Antwortweg über ImmoScout und
+    // Schlüssel, unter dem spätere Nachrichten der Person auf derselben Karte landen. Dazu der Link in den Nachrichten-Manager
+    if (mail.hinweis && mail.hinweis.relais) inhalt.email = mail.hinweis.relais;
+    if (mail.hinweis && mail.hinweis.link && !inhalt.link) inhalt.link = mail.hinweis.link;
     // Nennt die Mail keine Adresse im Text, hilft das Reply-To weiter — sonst gäbe es keinen Antwortweg
     if (!inhalt.email && mail.antwortAn) inhalt.email = mail.antwortAn;
     // Der Wortlaut (gekürzt), damit Louis Ton und Sorgfalt selbst beurteilen kann, ohne das Postfach zu öffnen
@@ -661,16 +710,17 @@ async function abgleichen() {
       }
       if (!m.text) { erledigt.run(id, Date.now()); continue; }
 
-      // Nur eine Benachrichtigung von ImmoScout (ohne Nachricht und Kontaktdaten): Karte mit dem Weg in den
-      // Nachrichten-Manager, ohne den Assistenten zu fragen — es gäbe nichts zu bewerten
+      // Eine Benachrichtigung von ImmoScout: mit versteckter Nachricht liest der Assistent die Anzeige und diese Nachricht;
+      // ohne bleibt es eine Karte mit dem Weg in den Nachrichten-Manager, ohne den Assistenten zu fragen
       const hinweis = hinweisAus(m.von, m.betreff, m.text, mailHtml(mail.payload));
-      if (hinweis) {
-        m.hinweis = hinweis;
+      if (hinweis) m.hinweis = hinweis;
+      if (hinweis && !hinweis.nachricht) {
         ablegen(id, m, hinweisErgebnis(hinweis), null);
         erledigt.run(id, Date.now());
         neu.push(id);
         continue;
       }
+      if (hinweis) m.text = hinweisMailText(hinweis);
 
       bewertet++;
       let ergebnis = null, fehler = null;
@@ -740,12 +790,13 @@ async function neuBewerten(id) {
   try { m.text = mailText(mail.payload); }
   catch (e) { nurFehler.run('Die Mail ließ sich nicht lesen: ' + e.message, id); return zeile(); }
   const hinweis = hinweisAus(m.von, m.betreff, m.text, mailHtml(mail.payload));
-  if (hinweis) {
+  if (hinweis) m.hinweis = hinweis;
+  if (hinweis && !hinweis.nachricht) {
     // Eine Benachrichtigung ohne Inhalt bleibt eine — der Assistent bekäme nur den Hinweis auf den Nachrichten-Manager
-    m.hinweis = hinweis;
     ablegen(id, m, hinweisErgebnis(hinweis), null);
     return zeile();
   }
+  if (hinweis) m.text = hinweisMailText(hinweis);   // mit versteckter Nachricht: bewerten wie jede Anfrage
   let ergebnis = null, fehler = null;
   m.fruehere = fruehereVon(m.von, id, m.wann);
   try { ergebnis = await bewerten(m); }
@@ -881,6 +932,29 @@ async function imHintergrund() {
   const b = bereit();
   if (!b.postfach || !b.assistent) return;
   try { await abgleichen(); } catch (e) { /* beim nächsten Mal */ }
+  try { await hinweiseNachlesen(); } catch (e) { /* beim nächsten Mal */ }
+}
+// Benachrichtigungen, die vor dieser Fassung ohne Nachricht abgelegt wurden, einmal neu lesen: die Nachricht stand die
+// ganze Zeit versteckt in der Mail. Nur offene (neu, gemerkt) und ohne Sofortmeldung. Ist der Assistent gestört, geht
+// es beim nächsten Takt weiter — schon gelesene sind dann keine Benachrichtigungen mehr und fallen aus der Liste
+let nachlesenLaeuft = false;
+async function hinweiseNachlesen() {
+  if (nachlesenLaeuft || einstellung('anfragen_hinweise_gelesen') === '1') return;
+  nachlesenLaeuft = true;
+  try {
+    const ids = db.prepare(`SELECT id FROM anfragen WHERE inhalt LIKE '%"hinweis":"nachrichten-manager"%'
+                            AND status IN ('neu','gemerkt') ORDER BY wann DESC LIMIT 60`).all().map(function (z) { return z.id; });
+    for (const id of ids) {
+      const z = await neuBewerten(id);
+      // Spätere Nachrichten derselben Person wurden ohne ihre erste Nachricht bewertet — jetzt mit ihr zusammen, der Reihe nach
+      if (z && !z.inhalt.hinweis && z.person) {
+        const spaeter = db.prepare("SELECT id FROM anfragen WHERE person = ? AND wann > ? AND status IN ('neu','gemerkt') ORDER BY wann")
+          .all(z.person, z.wann);
+        for (const s of spaeter) await neuBewerten(s.id);
+      }
+    }
+    einstellungSetzen('anfragen_hinweise_gelesen', '1');
+  } finally { nachlesenLaeuft = false; }
 }
 setTimeout(imHintergrund, 90 * 1000).unref();
 // Alle 2 Minuten ins Postfach schauen, damit neue Anfragen gleich in der App stehen und die Sofortmeldung
@@ -1086,4 +1160,4 @@ app.delete('/api/anfragen/:id', nurAngemeldet, nurVerwalter, function (req, res)
   res.json({ ok: true });
 });
 
-module.exports = { router: app, abgleichen, melden, meldungText, mailText, mailHtml, htmlZuText, hinweisAus, antwortAdresse, aufraeumen, STANDARD_KRITERIEN, KEINE_ANFRAGE, IST_ANFRAGE };
+module.exports = { router: app, abgleichen, melden, meldungText, mailText, mailHtml, htmlZuText, hinweisAus, versteckteAnfrage, hinweisMailText, antwortAdresse, aufraeumen, STANDARD_KRITERIEN, KEINE_ANFRAGE, IST_ANFRAGE };

@@ -6462,8 +6462,8 @@
             + (x.bewertung ? ' · ' + x.bewertung.punkte + ' Punkte' : '') + '</button>';
         }).join('') + '</div>'
       : '';
-    // Nur eine ImmoScout-Benachrichtigung: der Weg in den Nachrichten-Manager, nur auf die ImmoScout-Seite selbst
-    const scoutLink = anfHinweis(a) && /^https:\/\/www\.immobilienscout24\.de\//.test(i.link || '') ? i.link : '';
+    // Kam die Anfrage als ImmoScout-Benachrichtigung: der Weg in den Nachrichten-Manager, nur auf die ImmoScout-Seite selbst
+    const scoutLink = /^https:\/\/www\.immobilienscout24\.de\//.test(i.link || '') ? i.link : '';
     return '<h2>' + esc(i.name || (anfHinweis(a) ? 'Neue Anfrage bei ImmoScout' : 'Anfrage')) + '</h2>'
       + '<div class="hint">' + esc([a.betreff, anfAbsender(a.von),
           new Date(a.wann).toLocaleString('de-DE', { day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })]
@@ -6496,7 +6496,8 @@
       + '<button class="tiny" data-act="anf-kopieren">Antwort kopieren</button>'
       + (adresse ? '<a class="kauf-link" href="' + esc(mailto) + '" data-anf-mail="1">' + (pfBereit() ? 'Im Mailprogramm' : 'Per Mail antworten') + '</a>' : '')
       + '<button class="tiny ghost" data-act="anf-interessent">Interessent vormerken</button>'
-      + (anfHinweis(a) ? '' : '<button class="tiny ghost" data-act="anf-bewerten">Neu bewerten</button>')
+      // Auch bei einer Benachrichtigung: beim Neubewerten liest die App die Nachricht, die ImmoScout in der Mail versteckt
+      + '<button class="tiny ghost" data-act="anf-bewerten">Neu bewerten</button>'
       + '</div>'
       // Nach dem Antworten: gleich ablegen, statt es später zu vergessen
       + (modal.nachMail ? '<div class="anf-nachfrage">' + (modal.nachMail === 'gesendet' ? 'Antwort gesendet' : 'Mailprogramm geöffnet') + ' — Anfrage als erledigt ablegen?'

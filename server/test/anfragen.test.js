@@ -127,6 +127,15 @@ function fakeGoogle() {
 // Was „Claude“ aus einer Mail herausliest — je nachdem, was im Mailtext steht.
 // Alle Felder des Schemas sind dabei, damit ergebnisBereinigen() etwas zu tun hat.
 function ergebnisFuer(text) {
+  if (text.indexOf('Familie Ibrom') !== -1) {
+    return { istAnfrage: true, name: 'Familie Ibrom', email: '', telefon: '',
+      objekt: 'Scout-ID 158460832', einheitId: '', personen: '2 Erwachsene, 2 Kinder', erwachsene: 2, kinder: 2,
+      haustiere: '', beruf: '', einkommen: '', einkommenNetto: null, einzug: '',
+      nachricht: 'Junge Familie mit zwei Kindern sucht eine Wohnung und bittet um einen Besichtigungstermin.',
+      urteil: 'unklar', punkte: 40, gruende: ['Familie mit zwei Kindern', 'Einkommen und Beruf fehlen'],
+      fehlt: ['monatliches Haushaltsnettoeinkommen', 'Beruf und Art der Beschäftigung'],
+      antwort: 'Guten Tag Familie Ibrom,\n\nvielen Dank für Ihre Nachricht.' };
+  }
   if (text.indexOf('Wochenstatistik') !== -1) {
     return { istAnfrage: false, name: '', email: '', telefon: '', objekt: '', einheitId: '', personen: '',
       erwachsene: null, kinder: null, haustiere: '', beruf: '', einkommen: '', einkommenNetto: null, einzug: '',
@@ -460,6 +469,33 @@ test('Benachrichtigung und Antwortweg: die Regeln einzeln', function () {
   assert.equal(mailText({ parts: [{ mimeType: 'text/plain', body: { data: b64('Nur Klartext.') } }] }), 'Nur Klartext.');
 });
 
+test('Benachrichtigung mit versteckter Nachricht: der Kommentar im Kopf der Mail', function () {
+  const { hinweisAus, versteckteAnfrage, hinweisMailText } = require('../lib/anfragen');
+  // So steht es in den echten Mails: Kopfzeile, ObjektID, Objektname, Text bis zum Ende, Zeilen mit \r\n, Umlaute umschrieben
+  const html = '<html><head><!--[if mso]>\r\n<style>td {}</style>\r\n<![endif]-->\r\n  \r\n'
+    + '  <!-- Kontaktanfrage zu Ihrem Objekt 169648839\r\nObjektID: 169648839\r\nObjektname: 169648839\r\n'
+    + 'Text: Guten Tag Herr Ziegler, \r\n\r\nFinanzielle Situation & Unterlagen:\r\nTelefon: 0179/1234567\r\n'
+    + 'wir freuen uns ueber einen Termin &amp; Gr&#252;&szlig;e, 4.000 € netto.\r\n\r\n\r\n\r\nVG\r\nFamilie Ibrom\r\n -->\r\n'
+    + '</head><body><p>Nachricht Ihrer Interessent:innen</p></body></html>';
+  const v = versteckteAnfrage(html);
+  assert.deepEqual(v.felder, { ObjektID: '169648839', Objektname: '169648839' });
+  assert.equal(v.text, 'Guten Tag Herr Ziegler,\n\nFinanzielle Situation & Unterlagen:\nTelefon: 0179/1234567\n'
+    + 'wir freuen uns ueber einen Termin & Grüße, 4.000 € netto.\n\nVG\nFamilie Ibrom',
+    'Zeilen mit Doppelpunkt nach „Text:“ gehören zum Text; Leerzeichen am Zeilenende und Leerzeilen zusammengefasst');
+  assert.equal(versteckteAnfrage('<html><head><!--[if !mso]><!--><!--<![endif]--></head></html>'), null, 'andere Kommentare zählen nicht');
+  assert.equal(versteckteAnfrage('<!-- Kontaktanfrage zu Ihrem Objekt 1\r\nObjektID: 1\r\nText: \r\n -->').text, '', 'leere Nachricht bleibt leer');
+  assert.equal(versteckteAnfrage('<!-- Kontaktanfrage zu Ihrem Objekt 1\r\nObjektID: 1\r\n -->').text, '', 'ohne „Text:“ gibt es keine Nachricht');
+  // hinweisAus reicht die Nachricht weiter, der Assistent liest Anzeige und Nachricht
+  const h = hinweisAus('anfrage@immobilienscout24.de', 'Anfrage zu Ihrem Objekt 169648839',
+    'Sie haben eine neue Anfrage erhalten. Nachrichten-Manager', html);
+  assert.match(h.nachricht, /^Guten Tag Herr Ziegler,\n[\s\S]*Familie Ibrom$/);
+  const t = hinweisMailText(Object.assign({}, h, { titel: '4-Zimmer-Wohnung', adresse: '71332 Waiblingen' }));
+  assert.match(t, /^Kontaktanfrage über ImmoScout24 zur Anzeige 169648839: 4-Zimmer-Wohnung, 71332 Waiblingen\n\nNachricht der Person:\nGuten Tag Herr Ziegler,/);
+  assert.doesNotMatch(t, /ObjektID|Objektname/, 'die Nummer steht schon in der ersten Zeile');
+  // Ohne Kommentar bleibt es eine bloße Benachrichtigung
+  assert.equal(hinweisAus('anfrage@immobilienscout24.de', 'Anfrage zu Ihrem Objekt 1', 'Sie haben eine neue Anfrage erhalten. Nachrichten-Manager', '<p>x</p>').nachricht, '');
+});
+
 test('Stand ändern: merken, absagen, Unsinn abgewiesen', async function () {
   let a = await papa.put('/api/anfragen/anfrage1', { status: 'gemerkt' });
   assert.equal(a.status, 200);
@@ -552,4 +588,31 @@ test('Löschen nur der Verwalter', async function () {
   a = await louis.get('/api/anfragen?neu=1');
   assert.deepEqual(ids(a.json.anfragen), ['anfrage1', 'antwort2', 'antwort1', 'hinweis']);
   assert.equal(google.abrufe.length, geholt);
+});
+
+test('Benachrichtigung mit versteckter Nachricht: der Assistent bewertet sie, die Karte behält den Antwortweg', async function () {
+  const vorher = anthropic.anfragen.length;
+  const RELAIS_HINWEIS = 'sucher.4059af1f395448edaa64e4132e84a361@nachrichten.immobilienscout24.de';
+  MAILS.hinweis.html = MAILS.hinweis.html.replace('<html>', '<html><head><!--[if mso]><style>td {}</style><![endif]-->\r\n'
+    + '  <!-- Kontaktanfrage zu Ihrem Objekt 158460832\r\nObjektID: 158460832\r\nObjektname: 158460832\r\n'
+    + 'Text: Guten Tag Herr Ziegler,\r\n\r\nals junge Familie mit zwei Kindern (3 und 5 Jahre) suchen wir eine Wohnung. '
+    + 'Wir freuen uns ueber einen Besichtigungstermin.\r\n\r\nVG\r\nFamilie Ibrom\r\n -->\r\n</head>');
+  const a = await louis.post('/api/anfragen/bewerten', { id: 'hinweis' });
+  assert.equal(a.status, 200);
+  assert.equal(anthropic.anfragen.length, vorher + 1, 'jetzt fragt die App den Assistenten');
+  const frage = anthropic.anfragen[anthropic.anfragen.length - 1].body.messages[0].content;
+  assert.match(frage, /Kontaktanfrage über ImmoScout24 zur Anzeige 158460832: Erstbezug 2025/);
+  assert.match(frage, /Nachricht der Person:\nGuten Tag Herr Ziegler,\n\nals junge Familie/);
+  const h = a.json.anfragen[0];
+  assert.equal(h.id, 'hinweis');
+  assert.equal(h.inhalt.name, 'Familie Ibrom');
+  assert.equal(h.inhalt.hinweis, undefined, 'keine bloße Benachrichtigung mehr');
+  assert.equal(h.inhalt.email, RELAIS_HINWEIS, 'Antwortweg über ImmoScout');
+  assert.equal(h.person, RELAIS_HINWEIS, 'spätere Nachrichten der Person landen auf derselben Karte');
+  assert.match(h.inhalt.link, /^https:\/\/www\.immobilienscout24\.de\/nachrichten-manager\/.*contact-request\/4059af1f395448edaa64e4132e84a361/);
+  assert.equal(h.bewertung.urteil, 'unklar');
+  assert.equal(h.bewertung.punkte, 40);
+  assert.match(h.bewertung.antwort, /folgende Angaben:\n- monatliches Haushaltsnettoeinkommen\n- Beruf und Art der Beschäftigung$/);
+  assert.match(h.inhalt.original, /Familie Ibrom/, 'der Wortlaut zeigt die Nachricht');
+  assert.equal(h.fehler, null);
 });
