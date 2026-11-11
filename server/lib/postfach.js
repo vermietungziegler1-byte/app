@@ -442,9 +442,13 @@ app.post('/api/postfach/aktion', nurAngemeldet, nurVerwalter, mitFehler(async fu
 // ---------------- Postausgang ----------------
 // Erst der eingestellte Weg (465, TLS von Anfang an), bei Verbindungsfehlern 587 mit STARTTLS — manche Anbieter
 // und manche Netze lassen nur einen der beiden durch. Ein abgelehntes Passwort wird nicht noch einmal probiert
+// Der Weg, der zuletzt funktioniert hat, kommt zuerst — sonst wartete jeder Versand erst 20 s auf den blockierten Port
+// (auf dem Server ist 465 zum Mailserver dicht, 587 geht). Gemerkt in den Einstellungen, überlebt also den Neustart
 function smtpWege(z) {
   const wege = [{ port: SMTP_PORT, secure: MIT_TLS && SMTP_PORT === 465 }];
   if (MIT_TLS && SMTP_PORT === 465) wege.push({ port: 587, secure: false });
+  const bewaehrt = Number(einstellung('postfach_smtp_port')) || 0;
+  wege.sort(function (a, b) { return (b.port === bewaehrt) - (a.port === bewaehrt); });
   return wege.map(function (w) {
     return {
       host: z.server, port: w.port, secure: w.secure, requireTLS: MIT_TLS && !w.secure, ignoreTLS: !MIT_TLS,
@@ -456,10 +460,17 @@ function verbindungsfehler(e) {
   return /ECONNREFUSED|ETIMEDOUT|ECONNRESET|EHOSTUNREACH|ENETUNREACH|ESOCKET|ETIMEOUT|Greeting never received|Connection timeout/i
     .test(String((e && e.code) || '') + ' ' + String((e && e.message) || ''));
 }
+function smtpPortMerken(port) {
+  if (String(einstellung('postfach_smtp_port') || '') !== String(port)) einstellungSetzen('postfach_smtp_port', String(port));
+}
 async function smtpSenden(z, nachricht) {
   let letzter = null;
   for (const o of smtpWege(z)) {
-    try { return await nodemailer.createTransport(o).sendMail(nachricht); }
+    try {
+      const ergebnis = await nodemailer.createTransport(o).sendMail(nachricht);
+      smtpPortMerken(o.port);
+      return ergebnis;
+    }
     catch (e) {
       e.port = o.port;
       letzter = e;
@@ -483,7 +494,12 @@ app.get('/api/postfach/pruefen', nurAngemeldet, nurVerwalter, mitFehler(async fu
   catch (e) { ergebnis.eingang = { port: IMAP_PORT, ok: false, fehler: anmeldeFehler(e), code: String(e.code || ''), ms: Date.now() - t0 }; }
   for (const o of smtpWege(z)) {
     const t1 = Date.now();
-    try { await nodemailer.createTransport(o).verify(); ergebnis.ausgang.push({ port: o.port, ok: true, ms: Date.now() - t1 }); }
+    try {
+      await nodemailer.createTransport(o).verify();
+      ergebnis.ausgang.push({ port: o.port, ok: true, ms: Date.now() - t1 });
+      // Der erste Weg, der geht, ist ab jetzt der erste Versuch beim Senden
+      if (!ergebnis.ausgang.some(function (x) { return x.ok && x.port !== o.port; })) smtpPortMerken(o.port);
+    }
     catch (e) { ergebnis.ausgang.push({ port: o.port, ok: false, fehler: anmeldeFehler(e), code: String(e.code || ''), ms: Date.now() - t1 }); }
   }
   res.json(ergebnis);
