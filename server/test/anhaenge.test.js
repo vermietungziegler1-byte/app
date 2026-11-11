@@ -152,6 +152,21 @@ test('Anhänge: finden, einordnen, korrigieren, in Objekt › 02 Nebenkosten ›
     assert.equal(a.ziel, '/Firma/Tribergle/03 Rechnungen/2026');
     assert.deepEqual(a.zielNeu, ['03 Rechnungen', '2026']);
 
+    // Ansehen: ein PDF geht im Browser auf, ohne es erst speichern zu müssen; ohne „ansehen“ bleibt es ein Download
+    const pfadDatei = '/api/anhaenge/' + encodeURIComponent(a.id) + '/datei';
+    let d = await louis.get(pfadDatei + '?ansehen=1');
+    assert.equal(d.status, 200);
+    assert.equal(d.text, '%PDF Strom');
+    assert.equal(d.kopf.get('content-type'), 'application/pdf');
+    assert.equal(d.kopf.get('content-disposition'), "inline; filename*=UTF-8''Rechnung_Strom.pdf");
+    assert.equal(d.kopf.get('x-content-type-options'), 'nosniff');
+    assert.match(d.kopf.get('content-security-policy'), /object-src 'self'/, 'sonst zeigt Chrome das PDF nicht');
+    assert.doesNotMatch(d.kopf.get('content-security-policy'), /sandbox/);
+    d = await louis.get(pfadDatei);
+    assert.equal(d.kopf.get('content-type'), 'application/octet-stream');
+    assert.match(d.kopf.get('content-disposition'), /^attachment; /);
+    assert.equal((await papa.get(pfadDatei + '?ansehen=1')).status, 403);
+
     // Louis: das ist eine Nebenkosten-Rechnung (Allgemeinstrom) für 2025
     const k = await louis.put('/api/anhaenge/' + encodeURIComponent(a.id), { art: 'Nebenkosten-Rechnung', kostenart: 'Allgemeinstrom', jahr: '2025',
       dateiname: '2026-03-03 Stromabrechnung 2025 Allgemeinstrom' });
@@ -215,4 +230,28 @@ test('Anhänge: finden, einordnen, korrigieren, in Objekt › 02 Nebenkosten ›
     g.stoppen();
     fs.rmSync(ordner, { recursive: true, force: true });
   }
+});
+
+test('Anhang ansehen: nur echte PDFs und Fotos gehen im Browser auf, getarnte Dateien werden heruntergeladen', function () {
+  const { anzeigeTyp, anhangSenden } = require('../lib/anhang-senden');
+  assert.equal(anzeigeTyp(Buffer.from('%PDF-1.7\n1 0 obj')), 'application/pdf');
+  assert.equal(anzeigeTyp(Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('IHDR')])), 'image/png');
+  assert.equal(anzeigeTyp(Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10])), 'image/jpeg');
+  assert.equal(anzeigeTyp(Buffer.from('GIF89a....')), 'image/gif');
+  assert.equal(anzeigeTyp(Buffer.from('RIFF\x10\x00\x00\x00WEBPVP8 ', 'latin1')), 'image/webp');
+  // Was sich nur „rechnung.pdf“ nennt, aber eine Seite oder ein Bild mit Skript ist, öffnet der Browser nie
+  assert.equal(anzeigeTyp(Buffer.from('<html><script>fetch("/api/data")</script></html>')), null);
+  assert.equal(anzeigeTyp(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>')), null);
+  assert.equal(anzeigeTyp(Buffer.from('PK\x03\x04 word/document.xml', 'latin1')), null, 'Word-Datei: Download');
+  assert.equal(anzeigeTyp(Buffer.alloc(0)), null);
+
+  const kopf = {};
+  let gesendet = null;
+  const res = { setHeader: function (k, v) { kopf[k.toLowerCase()] = v; }, end: function (b) { gesendet = b; } };
+  anhangSenden(res, Buffer.from('<html><script>alert(1)</script>'), 'rechnung.pdf', true);
+  assert.equal(kopf['content-type'], 'application/octet-stream');
+  assert.equal(kopf['content-disposition'], "attachment; filename*=UTF-8''rechnung.pdf");
+  assert.equal(kopf['x-content-type-options'], 'nosniff');
+  assert.equal(kopf['content-security-policy'], undefined);
+  assert.equal(gesendet.toString(), '<html><script>alert(1)</script>');
 });

@@ -14,6 +14,7 @@ const express = require('express');
 const { crypto, path, fs, DATENORDNER, db, einstellung, einstellungSetzen, mitFehler, standInhalt } = require('./kern');
 const { nurAngemeldet, nurVerwalter } = require('./anmeldung');
 const { signaturAus, umlautVarianten, einfacheKriterien } = require('./postfach-text');
+const { anhangSenden } = require('./anhang-senden');
 
 let ImapFlow = null, nodemailer = null, MailComposer = null, simpleParser = null;
 try {
@@ -391,7 +392,7 @@ app.get('/api/postfach/mail', nurAngemeldet, nurVerwalter, mitFehler(async funct
   res.json(antwort);
 }));
 
-// Anhang herunterladen — immer als Datei, nie im Browser ausgeführt
+// Anhang öffnen (mit ansehen=1: PDFs und Fotos im Browser) oder herunterladen — nie als Seite ausgeführt
 app.get('/api/postfach/anhang', nurAngemeldet, nurVerwalter, mitFehler(async function (req, res) {
   const ordner = String(req.query.ordner || 'INBOX');
   const uid = Number(req.query.uid), nr = Number(req.query.nr);
@@ -401,10 +402,7 @@ app.get('/api/postfach/anhang', nurAngemeldet, nurVerwalter, mitFehler(async fun
     if (!x) throw fehler('Diesen Anhang gibt es nicht', 404);
     return x;
   });
-  res.setHeader('Content-Type', 'application/octet-stream');
-  res.setHeader('Content-Disposition', "attachment; filename*=UTF-8''" + encodeURIComponent(a.filename || 'anhang'));
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.end(a.content);
+  anhangSenden(res, a.content, a.filename || 'anhang', req.query.ansehen === '1');
 }));
 
 // Löschen, verschieben, gelesen/ungelesen, markieren

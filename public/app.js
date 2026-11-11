@@ -1489,7 +1489,7 @@
             + '<div class="odn-klein">' + esc(zielText) + (z.fehler ? ' · <span class="rot">' + esc(z.fehler) + '</span>' : '') + '</div></div>'
             + '<div class="anh-rechts"><span class="odn-warum ' + gr + '">' + esc(art) + '</span>'
             + '<span class="anh-wo">' + esc((z.jahr ? z.jahr + ' · ' : '') + (wo.einheit || (z.objekt ? 'ganzes Objekt' : ''))) + (z.betrag ? ' · ' + esc(money(z.betrag)) : '') + '</span>'
-            + '<span class="anh-knoepfe"><a class="tiny-link" download href="/api/anhaenge/' + encodeURIComponent(z.id) + '/datei">Ansehen</a>'
+            + '<span class="anh-knoepfe">' + anhangLink('/api/anhaenge/' + encodeURIComponent(z.id) + '/datei', z.name, z.typ, 'tiny-link', 'Ansehen')
             // Während abgelegt wird, nichts ändern — sonst würde ein schon abgelegter Anhang wieder angeboten
             + (z.status === 'neu' || z.status === 'ablegen' || anh.arbeit ? '' : '<button class="tiny ghost" data-act="anh-aendern" data-id="' + esc(z.id) + '">Ändern</button>'
               + '<button class="tiny ghost" data-act="anh-weg" data-id="' + esc(z.id) + '" title="Nicht ablegen">✕</button>') + '</span></div></div>';
@@ -7695,6 +7695,16 @@
     return d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: '2-digit' });
   }
   function pfGroesse(b) { return b > 1048576 ? (b / 1048576).toLocaleString('de-DE', { maximumFractionDigits: 1 }) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB'; }
+  // Anhang-Link: PDFs und Fotos gehen in einem neuen Tab auf, ohne vorher speichern zu müssen; Word, Excel, ZIP …
+  // werden wie bisher heruntergeladen. Ob der Inhalt wirklich ein PDF oder Foto ist, prüft der Server noch einmal.
+  function anhangAnsehbar(name, typ) {
+    return /^(application\/pdf|image\/(png|jpe?g|gif|webp))\b/i.test(String(typ || '').trim())
+      || /\.(pdf|png|jpe?g|gif|webp)$/i.test(String(name || '').trim());
+  }
+  function anhangLink(url, name, typ, klasse, inhalt) {
+    if (!anhangAnsehbar(name, typ)) return '<a class="' + klasse + '" href="' + esc(url) + '" download="' + esc(name || 'anhang') + '">' + inhalt + '</a>';
+    return '<a class="' + klasse + '" href="' + esc(url + (url.indexOf('?') < 0 ? '?' : '&') + 'ansehen=1') + '" target="_blank" rel="noopener">' + inhalt + '</a>';
+  }
   function pfKuerzel(name) {
     return String(name || '').replace(/[^A-Za-zÄÖÜäöüß ]/g, '').split(/\s+/).filter(Boolean).slice(0, 2)
       .map(function (w) { return w.charAt(0).toUpperCase(); }).join('') || '✉';
@@ -7813,8 +7823,8 @@
       + '<div class="p2-adresse">An: ' + esc(m.an.map(pfName).join(', ') || '—') + (m.cc.length ? ' · Cc: ' + esc(m.cc.map(pfName).join(', ')) : '') + '</div></div>'
       + '<div class="p2-datum">' + esc(pfZeit(m.datum, true)) + '</div></div>'
       + (m.anhaenge.length ? '<div class="p2-anhaenge">' + m.anhaenge.map(function (a) {
-          return '<a class="p2-anhang" href="' + esc('/api/postfach/anhang?ordner=' + encodeURIComponent(ort) + '&uid=' + m.uid + '&nr=' + a.nr) + '" download="' + esc(a.name) + '">'
-            + '📎 <b>' + esc(a.name) + '</b> <span>' + pfGroesse(a.groesse) + '</span></a>';
+          return anhangLink('/api/postfach/anhang?ordner=' + encodeURIComponent(ort) + '&uid=' + m.uid + '&nr=' + a.nr, a.name, a.typ, 'p2-anhang',
+            '📎 <b>' + esc(a.name) + '</b> <span>' + pfGroesse(a.groesse) + '</span>');
         }).join('') + '</div>' : '')
       + (frist
           ? '<div class="p2-frist">' + sym('aufgaben', 18)
@@ -8434,7 +8444,7 @@
       body = '<h2>Anhang einordnen</h2>'
         + '<div class="od-datei">' + odSymbol({ name: z.name, mime: z.typ }) + '<div><b>' + esc(z.name || '') + '</b><div class="od-meta">'
         + esc(String(z.von || '').replace(/\s*<[^>]*>/, '')) + ' · „' + esc(z.betreff || '') + '“</div></div>'
-        + '<a class="tiny-link" download href="/api/anhaenge/' + encodeURIComponent(z.id || '') + '/datei">Ansehen</a></div>'
+        + anhangLink('/api/anhaenge/' + encodeURIComponent(z.id || '') + '/datei', z.name, z.typ, 'tiny-link', 'Ansehen') + '</div>'
         + f('Objekt', '<select id="anh-objekt"><option value="">— bitte wählen —</option>'
             + data.objects.map(function (x) { return '<option value="' + esc(x.id) + '"' + (x.id === objektId ? ' selected' : '') + '>' + esc(x.name.split(',')[0]) + '</option>'; }).join('') + '</select>')
         + (o ? f('Wohnung', '<select id="anh-einheit"><option value="">Ganzes Objekt</option>'

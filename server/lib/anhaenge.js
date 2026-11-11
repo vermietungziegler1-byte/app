@@ -14,6 +14,7 @@
 const express = require('express');
 const { db, holen, einstellung, einstellungSetzen, standInhalt, mitFehler } = require('./kern');
 const { nurAngemeldet, nurVerwalter } = require('./anmeldung');
+const { anhangSenden } = require('./anhang-senden');
 const google = require('./google');
 const regeln = require('./dokumente-regeln');
 const ar = require('./anhaenge-regeln');
@@ -466,15 +467,12 @@ async function ablageLauf(ids) {
   return ergebnisse;
 }
 
-// Den Anhang ansehen, bevor er abgelegt wird — immer als Datei, nie im Browser ausgeführt
+// Den Anhang ansehen, bevor er abgelegt wird — PDFs und Fotos im Browser (ansehen=1), sonst als Datei
 app.get('/api/anhaenge/:id/datei', nurAngemeldet, nurVerwalter, mitFehler(async function (req, res) {
   const a = db.prepare('SELECT * FROM anh_dateien WHERE id = ?').get(req.params.id);
   if (!a) throw fehler('Anhang nicht gefunden', 404);
   const d = await quelle().anhangInhalt(a.ordner, a.uid, a.teil, a.name, a.uidvalidity);
-  res.setHeader('Content-Type', 'application/octet-stream');
-  res.setHeader('Content-Disposition', "attachment; filename*=UTF-8''" + encodeURIComponent(d.name || a.name));
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.end(d.inhalt);
+  anhangSenden(res, d.inhalt, d.name || a.name, req.query.ansehen === '1');
 }));
 
 app.post('/api/anhaenge/abgleich', nurAngemeldet, nurVerwalter, function (req, res) {
