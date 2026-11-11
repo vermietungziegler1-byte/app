@@ -192,7 +192,16 @@ function suchen(ix, k) {
   return { top: top.map(zeileAus), mails: rest.slice(0, 150).map(zeileAus), gesamt: zeilen.length, mehr: zeilen.length >= grenze };
 }
 
+// Mails mit Anhang (für „Anhänge ablegen“): Kopf, Anhangnamen und der Anfang des Textes — ohne den Mailserver zu fragen
+function mitAnhang(ix, k) {
+  const werte = { seit: (k && k.seit) || 0 };
+  const ohne = ((k && k.ohneOrdner) || []).map(function (o, i) { werte['o' + i] = o; return '@o' + i; });
+  return ix.db.prepare('SELECT m.id, m.ordner, m.uid, m.datum, m.von_name, m.von_adresse, m.betreff, f.anhaenge, substr(f.text, 1, 1500) AS text '
+    + 'FROM mails m JOIN mails_fts f ON f.rowid = m.id WHERE m.anhang = 1 AND m.datum >= @seit'
+    + (ohne.length ? ' AND m.ordner NOT IN (' + ohne.join(',') + ')' : '') + ' ORDER BY m.datum DESC LIMIT 6000').all(werte);
+}
+
 module.exports = {
   oeffnen, anzahl, uidValidity, uidValiditySetzen, bekannte, eintragen, entfernen, ordnerLeeren, ordnerAufraeumen,
-  alleLeeren, merkerSetzen, merkerAendern, ausdruck, suchen
+  alleLeeren, merkerSetzen, merkerAendern, ausdruck, suchen, mitAnhang
 };

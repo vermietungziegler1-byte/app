@@ -20,7 +20,8 @@
 //    kaufen      Kaufangebote aus den ImmoScout-Suchaufträgen, durchgerechnet
 //    anfragen    Mietanfragen aus dem Postfach, von Claude nach eigenen Kriterien bewertet
 //    postfach    Mailkonto mzer.de (IMAP/SMTP) mit eigenem Suchverzeichnis
-//    gdrive      Unterlagen aus Google Drive bei Objekten, Wohnungen und Mietern
+//    gdrive      Unterlagen aus Google Drive bei Objekten, Wohnungen und Mietern (dazu gdrive-namen: Namen aufräumen)
+//    anhaenge    Mail-Anhänge in Google Drive ablegen, eingeordnet nach Objekt, Art und Jahr
 // -------------------------------------------------------------
 
 const express = require('express');
@@ -64,6 +65,7 @@ app.use(require('./lib/anfragen').router);
 app.use(require('./lib/postfach').router);
 app.use(require('./lib/gdrive').router);
 app.use(require('./lib/gdrive-namen').router);
+app.use(require('./lib/anhaenge').router);
 
 // ---------------- Oberfläche ----------------
 app.use(express.static(path.join(__dirname, '..', 'public'), { extensions: ['html'] }));

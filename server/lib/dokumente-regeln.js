@@ -83,7 +83,10 @@ const ARTEN = [
   ['Schriftverkehr', ['schreiben', 'brief', 'mahnung', 'mieterhoehung', 'anschreiben']],
   ['Kontoauszug', ['kontoauszug', 'kontoauszuege']],
   ['Vertrag', ['vertrag', 'vertraege', 'kaufvertrag', 'wartungsvertrag', 'stromvertrag', 'liefervertrag']],
-  ['Steuer', ['steuer', 'steuern', 'grundsteuer', 'steuerbescheid', 'steuererklaerung', 'grundsteuerbescheid']]
+  ['Steuer', ['steuer', 'steuern', 'grundsteuer', 'steuerbescheid', 'steuererklaerung', 'grundsteuerbescheid']],
+  // Umlagefähige Rechnung (kommt in die Nebenkostenabrechnung) — nicht am Wort zu erkennen, sondern an Rechnung + Ordner
+  // „Nebenkosten“ oder von Louis bzw. dem Assistenten beim Ablegen vergeben
+  ['Nebenkosten-Rechnung', []]
 ];
 const BILD = /\.(jpe?g|png|heic|heif|gif|webp)$/i;
 function artAusText(text) {
@@ -93,6 +96,8 @@ function artAusText(text) {
 }
 function artVon(name, mime, pfad) {
   const ausName = artAusText(String(name || '').replace(/\.[a-z0-9]+$/i, ''));
+  // Eine Rechnung im Ordner „Nebenkosten“ ist eine umlagefähige Rechnung
+  if (ausName === 'Rechnung' && /nebenkosten|betriebskosten/i.test(normal(pfad))) return 'Nebenkosten-Rechnung';
   if (ausName) return ausName;
   if (BILD.test(name || '') || /^image\//.test(mime || '')) return 'Foto';
   const ordner = String(pfad || '').split('/').filter(Boolean).reverse();

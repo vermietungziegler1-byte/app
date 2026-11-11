@@ -637,6 +637,7 @@
     try { nachGoogle = window.sessionStorage.getItem('vermietung:nachGoogle'); window.sessionStorage.removeItem('vermietung:nachGoogle'); } catch (e) { /* egal */ }
     if (nachGoogle === 'dokumente' && phase === 'app' && nutzerRolle === 'verwalter') handle('od-einrichten', null);
     if (nachGoogle === 'namen' && phase === 'app' && nutzerRolle === 'verwalter') handle('odn-oeffnen', null);
+    if (nachGoogle === 'anhaenge' && phase === 'app' && nutzerRolle === 'verwalter') handle('anh-oeffnen', null);
     if (phase === 'app' && todoist.verbunden) {
       planLaden().then(function () {
         if (planWunsch) { planWunsch = false; modal = { kind: 'plan' }; }
@@ -1093,8 +1094,13 @@
   // Der Server gleicht alle fünf Minuten ab und ordnet zu; hier wird angezeigt, gefiltert und korrigiert.
   // („od“ = Online-Dokumente; der erste Anlauf über OneDrive scheiterte an Microsofts Firmenverzeichnis.)
   // =================================================================
-  const OD_ARTEN = ['Mietvertrag', 'Nebenkosten', 'Kaution', 'Kündigung', 'Übergabeprotokoll', 'Selbstauskunft', 'Versicherung', 'Plan',
+  const OD_ARTEN = ['Mietvertrag', 'Nebenkosten', 'Nebenkosten-Rechnung', 'Kaution', 'Kündigung', 'Übergabeprotokoll', 'Selbstauskunft', 'Versicherung', 'Plan',
     'Angebot', 'Rechnung', 'Protokoll', 'Schriftverkehr', 'Kontoauszug', 'Vertrag', 'Steuer', 'Foto', 'Sonstiges'];
+  // Mehrzahl für Überschriften: „Nebenkosten-Rechnungen 2025“, „Sonstige Rechnungen 2026“
+  function odArtLabel(k) {
+    return { 'Nebenkosten-Rechnung': 'Nebenkosten-Rechnungen', Rechnung: 'Sonstige Rechnungen', Nebenkosten: 'Nebenkostenabrechnungen',
+      Steuer: 'Steuer und Bescheide', Vertrag: 'Verträge', Angebot: 'Angebote', Protokoll: 'Protokolle', Foto: 'Fotos', Plan: 'Pläne' }[k] || k;
+  }
   const OD_MIETER = ['Mietvertrag', 'Kaution', 'Kündigung', 'Übergabeprotokoll', 'Selbstauskunft', 'Schriftverkehr'];
   let od = { status: null, dateien: null, laedt: false, statusLaedt: false, geholt: 0, filter: {}, art: {}, suche: {} };
 
@@ -1162,6 +1168,7 @@
       + '<a class="od-link" href="' + esc(d.url) + '" target="_blank" rel="noopener">' + odSymbol(d)
       + '<span class="od-inhalt"><span class="od-name">' + esc(d.titel || d.name) + (odNeu(d) ? '<span class="od-neu">NEU</span>' : '') + '</span>'
       + '<span class="od-meta"><span class="od-art od-art-' + esc(String(d.art || 'Sonstiges').toLowerCase().replace(/[^a-z]/g, '')) + '">' + esc(d.art || 'Sonstiges') + '</span>'
+      + (d.kostenart ? esc(d.kostenart) + ' · ' : '') + (d.betrag ? esc(money(d.betrag)) + ' · ' : '')
       + esc(odDatum(d)) + (d.titel ? ' · ' + esc(d.name) : '') + ' · ' + esc(d.pfad || '/') + '</span></span>'
       + (mitWo ? '<span class="od-wo">' + esc(wo.einheit || 'ganzes Objekt') + (wo.mieter ? '<small>' + esc(wo.mieter) + '</small>' : '') + '</span>' : '')
       + '</a>'
@@ -1177,6 +1184,24 @@
       + (d.objekt ? '<button class="tiny primary" data-act="od-ok" data-id="' + esc(d.id) + '">Stimmt</button>' : '')
       + '<button class="tiny" data-act="od-aendern" data-id="' + esc(d.id) + '">' + (d.objekt ? 'Ändern' : 'Zuordnen') + '</button>'
       + '<button class="tiny ghost" data-act="od-weg" data-id="' + esc(d.id) + '">Gehört zu keinem</button></div>';
+  }
+
+  // Nach Jahr gruppiert (neueste oben, ohne Jahr unten), mit Anzahl und Summe der erkannten Beträge —
+  // so steht beim Objekt z. B. „Nebenkosten-Rechnungen 2025 · 12 Dateien · 4.380,00 €“
+  function odNachJahr(liste, art) {
+    const jahre = {}, reihe = [];
+    liste.forEach(function (d) { const j = d.jahr || ''; if (!jahre[j]) { jahre[j] = []; reihe.push(j); } jahre[j].push(d); });
+    if (reihe.length <= 1 && !art) return liste.map(function (d) { return odZeileHtml(d, true); }).join('');
+    reihe.sort(function (x, y) { if (!x) return 1; if (!y) return -1; return y.localeCompare(x); });
+    return reihe.map(function (j) {
+      const ds = jahre[j];
+      const mitBetrag = ds.filter(function (d) { return d.betrag; });
+      const summe = mitBetrag.reduce(function (s, d) { return s + Number(d.betrag); }, 0);
+      return '<div class="od-jahr"><b>' + esc((art ? odArtLabel(art) + ' ' : '') + (j || 'ohne Jahr')) + '</b><span>'
+        + ds.length + (ds.length === 1 ? ' Datei' : ' Dateien')
+        + (mitBetrag.length ? ' · ' + esc(money(summe)) + (mitBetrag.length < ds.length ? ' (bei ' + mitBetrag.length + ' erkannt)' : '') : '')
+        + '</span></div>' + ds.map(function (d) { return odZeileHtml(d, true); }).join('');
+    }).join('');
   }
 
   // Reiter „Dokumente“ beim Objekt
@@ -1216,9 +1241,9 @@
     h += '<div class="od-raster">'
       + '<div class="od-arten">' + ['', ].concat(OD_ARTEN.filter(function (k) { return arten[k]; })).map(function (k) {
           return '<button class="od-artknopf' + (a === k ? ' an' : '') + '" data-act="od-art" data-id="' + o.id + '" data-wert="' + esc(k) + '">'
-            + esc(k || 'Alle Arten') + '<span>' + (k ? arten[k] : imFilter.length) + '</span></button>';
+            + esc(k ? odArtLabel(k) : 'Alle Arten') + '<span>' + (k ? arten[k] : imFilter.length) + '</span></button>';
         }).join('') + '</div>'
-      + '<div class="od-liste">' + (liste.length ? liste.map(function (d) { return odZeileHtml(d, true); }).join('')
+      + '<div class="od-liste">' + (liste.length ? odNachJahr(liste, a)
           : '<div class="empty-note">' + (alle.length ? 'Keine Datei passt zu diesem Filter.' : 'Noch keine Datei diesem Objekt zugeordnet. Neue Dateien in Google Drive tauchen hier nach ein paar Minuten auf.') + '</div>')
       + '</div>'
       + (pruefen.length ? '<div class="od-pruefen"><h4>Bitte kurz prüfen</h4><div class="od-hinweis">Hier war sich die App nicht sicher. '
@@ -1332,6 +1357,107 @@
   function odnGewaehlt() {
     return odnSichtbar().filter(function (z) { return z.grund !== 'doppelt' && !odn.ab[z.id] && odnName(z).trim() && odnName(z) !== z.alt; });
   }
+  // ---- Anhänge aus dem Postfach ablegen: eingeordnet nach Objekt, Art und Jahr ----
+  let anh = { daten: null, laedt: false, ab: {}, namen: {}, filter: '', suche: '', arbeit: '' };
+  const ANH_FILTER = [['', 'Alle'], ['nk', 'Nebenkosten-Rechnungen'], ['rechnung', 'Sonstige Rechnungen'], ['abr', 'Nebenkostenabrechnungen'],
+    ['vertrag', 'Verträge & Versicherung'], ['bescheid', 'Bescheide'], ['mieter', 'Mieter'], ['sonst', 'Sonstiges'], ['offen', 'Noch offen']];
+  function anhLaden() {
+    anh.laedt = true;
+    return apiRoh('anhaenge').then(function (r) {
+      anh.daten = r;
+      const da = {};
+      (r.liste || []).forEach(function (z) { da[z.id] = true; });
+      Object.keys(anh.ab).forEach(function (id) { if (!da[id]) delete anh.ab[id]; });
+      Object.keys(anh.namen).forEach(function (id) { if (!da[id]) delete anh.namen[id]; });
+    }).catch(function (e) { anh.daten = { fehler: e.message, liste: [] }; })
+      .then(function () { anh.laedt = false; });
+  }
+  function anhSichtbar() {
+    const q = anh.suche.toLowerCase().trim();
+    return ((anh.daten && anh.daten.liste) || []).filter(function (z) {
+      return (!anh.filter || z.gruppe === anh.filter)
+        && (!q || (z.name + ' ' + z.dateiname + ' ' + z.von + ' ' + z.betreff + ' ' + z.kostenart + ' ' + z.jahr).toLowerCase().indexOf(q) !== -1);
+    });
+  }
+  function anhName(z) { return anh.namen[z.id] !== undefined ? anh.namen[z.id] : (z.dateiname || z.name); }
+  function anhBereit(z) { return z.status === 'vorschlag' && z.objekt && z.ziel && !z.zielFehlt; }
+  function anhGewaehlt() { return anhSichtbar().filter(function (z) { return anhBereit(z) && !anh.ab[z.id]; }); }
+  function anhFussAktualisieren() {
+    const d = anh.daten;
+    if (!d || !d.liste) return;
+    const n = anhGewaehlt().length;
+    const info = root.querySelector('.anh-info'), knopf = root.querySelector('[data-act="anh-ablegen"]');
+    if (info && !anh.arbeit) info.textContent = n + ' von ' + anhSichtbar().filter(anhBereit).length + ' ausgewählt';
+    if (knopf && d.bearbeiten) { knopf.disabled = !n || !!anh.arbeit; knopf.textContent = n + (n === 1 ? ' Anhang' : ' Anhänge') + ' ablegen'; }
+  }
+  function anhHtml() {
+    const d = anh.daten;
+    if (!d || anh.laedt && !d.liste) return '<div class="empty-note">Anhänge werden zusammengestellt …</div>';
+    if (d.fehler) return '<div class="hintbox"><b>Das hat nicht geklappt:</b> ' + esc(d.fehler) + '</div>';
+    if (!d.postfach) return '<div class="hintbox">Erst das Mailkonto einrichten (Menü → Mailkonto) — dann sucht die App hier nach Anhängen.</div>';
+    if (!d.drive) return '<div class="hintbox">Erst Google Drive einrichten (Menü → Google Drive, Ordner wählen) — dann weiß die App, wohin die Anhänge gehören.</div>';
+    const an = !!d.bearbeiten, z0 = d.zahlen || {};
+    const alle = d.liste || [];
+    const zahl = {};
+    alle.forEach(function (z) { zahl[z.gruppe] = (zahl[z.gruppe] || 0) + 1; });
+    const sichtbar = anhSichtbar(), gewaehlt = anhGewaehlt();
+    let h = schalterHtml(an, 'anhaenge', 'Anhänge in die Ordner deines Google Drive legen (und fehlende Jahresordner anlegen)', '„Ablegen“');
+    h += '<div class="odn-leiste"><div class="odn-seg">' + ANH_FILTER.filter(function (f) { return !f[0] || zahl[f[0]]; }).map(function (f) {
+        return '<button class="' + (anh.filter === f[0] ? 'an' : '') + '" data-act="anh-filter" data-wert="' + f[0] + '">' + esc(f[1]) + ' <span>' + (f[0] ? zahl[f[0]] : alle.length) + '</span></button>';
+      }).join('') + '</div><input type="search" id="anh-q" placeholder="Suchen" value="' + esc(anh.suche) + '" autocomplete="off"></div>';
+    h += '<div class="legal">' + (z0.neu ? (d.assistent ? 'Der Assistent liest noch ' + z0.neu + ' Anhänge (heute ' + d.heute + ' von ' + d.grenze + ') — das läuft im Hintergrund. ' : '') : '')
+      + (z0.in_drive ? z0.in_drive + ' Anhänge liegen schon in Google Drive. ' : '') + (z0.abgelegt ? z0.abgelegt + ' hat die App schon abgelegt. ' : '')
+      + 'Mails bleiben ungelesen, im Postfach wird nichts gelöscht.</div>';
+    if (!sichtbar.length) {
+      h += '<div class="empty-note">' + (alle.length ? 'Nichts passt zu diesem Filter.' : (d.laeuft || z0.neu ? 'Die App sucht gerade nach Anhängen …' : 'Keine Anhänge mehr, die abzulegen wären.')) + '</div>';
+    } else {
+      const gruppen = {}, reihe = [];
+      sichtbar.forEach(function (z) {
+        const g = z.objekt ? (odEinheitName(z.objekt, '').objekt || 'Ohne Objekt') : 'Noch ohne Objekt';
+        if (!gruppen[g]) { gruppen[g] = []; reihe.push(g); }
+        gruppen[g].push(z);
+      });
+      reihe.sort(function (x, y) { return (x === 'Noch ohne Objekt') - (y === 'Noch ohne Objekt'); });
+      h += '<div class="odn-liste anh-liste">' + reihe.map(function (g) {
+        return '<div class="odn-obj">' + esc(g) + '</div>' + gruppen[g].map(function (z) {
+          const wo = odEinheitName(z.objekt, z.einheit);
+          const bereit = anhBereit(z), ein = bereit && !anh.ab[z.id];
+          const datum = z.datum ? new Date(z.datum).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
+          const von = String(z.von || '').replace(/\s*<[^>]*>/, '').replace(/"/g, '') || String(z.von || '');
+          const gr = { nk: 'w-foto', abr: 'w-foto', rechnung: 'w-code', vertrag: 'w-klein', bescheid: 'w-klein', mieter: 'w-klein', sonst: 'w-klein', offen: 'w-dop' }[z.gruppe] || 'w-klein';
+          const art = z.status === 'neu' ? 'wird gelesen …' : (z.art || 'Sonstiges') + (z.kostenart ? ' · ' + z.kostenart : '');
+          const zielText = z.status === 'neu' ? '' : !z.objekt ? 'Wohin? Objekt wählen' : z.zielFehlt ? z.zielFehlt
+            : '→ ' + String(z.ziel || '').split('/').filter(Boolean).slice(-3).join(' › ') + (z.zielNeu && z.zielNeu.length ? ' (neu: ' + z.zielNeu.join(', ') + ')' : '');
+          return '<div class="odn-z anh-z' + (ein ? '' : ' ab') + '">'
+            + (bereit ? '<input type="checkbox" data-act="anh-an" data-id="' + esc(z.id) + '"' + (ein ? ' checked' : '') + '>' : '<span class="odn-cb-leer"></span>')
+            + odSymbol({ name: z.name, mime: z.typ })
+            + '<div class="odn-namen"><div class="odn-alt"><b>' + esc(von) + '</b> · „' + esc(z.betreff) + '“ · ' + esc(datum) + '</div>'
+            + '<input class="odn-neu" type="text" data-anh-name="' + esc(z.id) + '" value="' + esc(anhName(z)) + '" spellcheck="false"' + (z.status === 'neu' ? ' disabled' : '') + '>'
+            + '<div class="odn-klein">' + esc(zielText) + (z.fehler ? ' · <span class="rot">' + esc(z.fehler) + '</span>' : '') + '</div></div>'
+            + '<div class="anh-rechts"><span class="odn-warum ' + gr + '">' + esc(art) + '</span>'
+            + '<span class="anh-wo">' + esc((z.jahr ? z.jahr + ' · ' : '') + (wo.einheit || (z.objekt ? 'ganzes Objekt' : ''))) + (z.betrag ? ' · ' + esc(money(z.betrag)) : '') + '</span>'
+            + '<span class="anh-knoepfe"><a class="tiny-link" href="/api/anhaenge/' + encodeURIComponent(z.id) + '/datei">Ansehen</a>'
+            + (z.status === 'neu' ? '' : '<button class="tiny ghost" data-act="anh-aendern" data-id="' + esc(z.id) + '">Ändern</button>')
+            + '<button class="tiny ghost" data-act="anh-weg" data-id="' + esc(z.id) + '" title="Nicht ablegen">✕</button></span></div></div>';
+        }).join('');
+      }).join('') + '</div>';
+    }
+    h += '<div class="modal-actions odn-fuss"><span class="odn-info anh-info">' + (anh.arbeit ? esc(anh.arbeit) : gewaehlt.length + ' von ' + sichtbar.filter(anhBereit).length + ' ausgewählt') + '</span>'
+      + '<button class="ghost" data-act="anh-alle">Alle</button><button class="ghost" data-act="anh-keine">Keine</button><div class="spacer"></div>'
+      + '<button class="primary" data-act="anh-ablegen"' + (an && gewaehlt.length && !anh.arbeit ? '' : ' disabled') + '>'
+      + (an ? gewaehlt.length + (gewaehlt.length === 1 ? ' Anhang' : ' Anhänge') + ' ablegen' : 'Erst Schalter einschalten') + '</button></div>';
+    return h;
+  }
+  // Neu aufbauen, ohne dass die Liste springt
+  function anhNeuZeichnen() { odnNeuZeichnen(); }
+
+  // Der Schalter für das Bearbeiten-Recht in Google Drive — derselbe beim Umbenennen und beim Ablegen von Anhängen
+  function schalterHtml(an, ziel, was, knopf) {
+    return '<div class="odn-schalter"><div class="odn-st"><b>Google Drive bearbeiten erlauben</b><div>'
+      + (an ? 'An: Die App darf ' + was + ' — aber nur, wenn du unten auf ' + knopf + ' tippst. Aus: Sie gibt das Recht an Google zurück und liest nur noch.'
+            : 'Aus: Die App liest nur. Ansehen geht trotzdem. Einschalten: Google fragt einmal nach dem Recht, Dateien zu bearbeiten.')
+      + '</div></div><label class="odn-sw"><input type="checkbox" data-act="odn-schalter" data-ziel="' + ziel + '"' + (an ? ' checked' : '') + '><span></span></label></div>';
+  }
   function odnHtml() {
     const d = odn.daten;
     if (!d || odn.laedt && !d.liste) return '<div class="empty-note">Vorschläge werden zusammengestellt …</div>';
@@ -1347,10 +1473,7 @@
     const sichtbar = odnSichtbar();
     const gewaehlt = odnGewaehlt();
     const wartet = alle.filter(function (z) { return z.wartet; }).length;
-    let h = '<div class="odn-schalter"><div class="odn-st"><b>Umbenennen erlauben</b><div>'
-      + (an ? 'An: Die App darf Dateinamen in deinem Google Drive ändern — aber nur, wenn du unten auf „Umbenennen“ tippst. Aus: Sie gibt das Recht an Google zurück und liest nur noch.'
-            : 'Aus: Die App liest nur. Vorschläge ansehen geht trotzdem. Einschalten: Google fragt einmal nach dem Recht, Dateien zu bearbeiten.')
-      + '</div></div><label class="odn-sw"><input type="checkbox" data-act="odn-schalter"' + (an ? ' checked' : '') + '><span></span></label></div>';
+    let h = schalterHtml(an, 'namen', 'Dateinamen in deinem Google Drive ändern', '„Umbenennen“');
     h += '<div class="odn-leiste"><div class="odn-seg">' + ODN_FILTER.map(function (f) {
         const n = f[0] ? (zahl[f[0]] || 0) : alle.length;
         return '<button class="' + (odn.filter === f[0] ? 'an' : '') + '" data-act="odn-filter" data-wert="' + f[0] + '">' + esc(f[1]) + ' <span>' + n + '</span></button>';
@@ -4534,6 +4657,7 @@
         + eintrag('google', 'Postfach', google.verbunden ? 'verbunden' : 'offen')
         + (nutzerRolle === 'verwalter' ? eintrag('pf-einrichten', 'Mailkonto mzer.de', pfBereit() ? 'verbunden' : 'offen') : '')
         + (nutzerRolle === 'verwalter' ? eintrag('od-einrichten', 'Google Drive', od.status ? (odBereit() ? 'verbunden' : 'offen') : '') : '')
+        + (nutzerRolle === 'verwalter' && odBereit() ? eintrag('anh-oeffnen', 'Anhänge ablegen', '') : '')
         + eintrag('gkal', 'Kalender', gkal.eingerichtet ? 'verbunden' : 'offen')
         + eintrag('push', 'Mitteilungen', pushAbo ? 'aktiv' : 'aus')
         + eintrag('stimme', 'Vorlesestimme', stimme.verbunden ? 'verbunden' : 'Gerät')
@@ -5279,7 +5403,7 @@
     const p2alt = root.querySelector('.p2-liste');       // Post am PC: Liste bleibt beim Neuaufbau an ihrer Stelle
     const p2Rolle = p2alt ? p2alt.scrollTop : 0;
     // Wer gerade in einem Suchfeld tippt (Postfach, Dokumente), tippt nach dem Neuaufbau einfach weiter
-    const suchFeldId = document.activeElement && /^(pf-q|od-q-|odn-q)/.test(document.activeElement.id || '') ? document.activeElement.id : '';
+    const suchFeldId = document.activeElement && /^(pf-q|od-q-|odn-q|anh-q)/.test(document.activeElement.id || '') ? document.activeElement.id : '';
     const suchStelle = suchFeldId ? (document.activeElement.selectionStart || 0) : -1;
     root.innerHTML = html;
     if (alterToast) root.appendChild(alterToast);
@@ -7981,7 +8105,9 @@
           + '</div>'
           + '<div class="legal">Der Assistent hat heute ' + (s.assistentHeute || 0) + ' Dateien gelesen (höchstens 300 am Tag, etwa 1 Cent je Datei). '
           + 'Er liest nur PDFs, die am Namen nicht zu erkennen sind.</div>'
-          + '<div class="odn-eintrag"><div><b>Namen aufräumen</b><span>Bessere Dateinamen vorschlagen lassen und bestätigen · Umbenennen ist '
+          + '<div class="odn-eintrag"><div><b>Anhänge ablegen</b><span>Anhänge aus dem Postfach, die noch nicht in Google Drive liegen — '
+          + 'eingeordnet nach Objekt, Art (Nebenkosten oder sonstige Rechnung …) und Jahr</span></div><button data-act="anh-oeffnen">Öffnen ›</button></div>'
+          + '<div class="odn-eintrag"><div><b>Namen aufräumen</b><span>Bessere Dateinamen vorschlagen lassen und bestätigen · Bearbeiten ist '
           + (s.bearbeiten ? '<b class="gruen">an</b>' : 'aus') + '</span></div><button data-act="odn-oeffnen">Öffnen ›</button></div>'
           + (unklar.length ? '<div class="od-gruppe">Keinem Objekt zugeordnet (' + unklar.length + ')</div><div class="od-unklar">'
               + unklar.slice(0, 40).map(odVorschlagHtml).join('') + '</div>' : '')
@@ -8008,6 +8134,33 @@
         + (o ? '<label class="od-merken"><input type="checkbox" id="od-mit-wohnung"> Der ganze Ordner gehört zur gewählten Wohnung, nicht nur zum Objekt</label>' : '')
         + '<div class="modal-actions"><button class="ghost" data-act="od-weg" data-id="' + esc(d.id || '') + '">Gehört zu keinem</button><div class="spacer"></div>'
         + '<button data-act="close">Abbrechen</button><button class="primary" data-act="od-zuordnen-speichern">Speichern</button></div>';
+    } else if (modal.kind === 'anh') {
+      body = '<div class="odn-kopf"><button class="tiny ghost" data-act="od-einrichten">‹ Google Drive</button><h2>Anhänge ablegen</h2>'
+        + (anh.daten && anh.daten.liste ? '<span>' + anh.daten.liste.length + ' noch nicht in Google Drive</span>' : '') + '</div>' + anhHtml();
+    } else if (modal.kind === 'anh-aendern') {
+      const z = ((anh.daten && anh.daten.liste) || []).find(function (x) { return x.id === modal.id; }) || {};
+      const objektId = modal.objekt !== undefined ? modal.objekt : (z.objekt || '');
+      const o = objektId ? findObj(objektId) : null;
+      const art = modal.art !== undefined ? modal.art : (z.art || 'Sonstiges');
+      body = '<h2>Anhang einordnen</h2>'
+        + '<div class="od-datei">' + odSymbol({ name: z.name, mime: z.typ }) + '<div><b>' + esc(z.name || '') + '</b><div class="od-meta">'
+        + esc(String(z.von || '').replace(/\s*<[^>]*>/, '')) + ' · „' + esc(z.betreff || '') + '“</div></div>'
+        + '<a class="tiny-link" href="/api/anhaenge/' + encodeURIComponent(z.id || '') + '/datei">Ansehen</a></div>'
+        + f('Objekt', '<select id="anh-objekt"><option value="">— bitte wählen —</option>'
+            + data.objects.map(function (x) { return '<option value="' + esc(x.id) + '"' + (x.id === objektId ? ' selected' : '') + '>' + esc(x.name.split(',')[0]) + '</option>'; }).join('') + '</select>')
+        + (o ? f('Wohnung', '<select id="anh-einheit"><option value="">Ganzes Objekt</option>'
+            + o.units.map(function (x) { return '<option value="' + esc(x.id) + '"' + (x.id === (modal.einheit !== undefined ? modal.einheit : z.einheit) ? ' selected' : '') + '>'
+                + esc(x.name + (x.tenant ? ' · ' + x.tenant : '')) + '</option>'; }).join('') + '</select>') : '')
+        + f('Art', '<select id="anh-art">' + ((anh.daten && anh.daten.arten) || []).map(function (k) {
+            return '<option value="' + esc(k) + '"' + (k === art ? ' selected' : '') + '>' + esc(k === 'Rechnung' ? 'Rechnung (sonstige, nicht umlagefähig)'
+              : k === 'Nebenkosten-Rechnung' ? 'Nebenkosten-Rechnung (umlagefähig)' : k) + '</option>'; }).join('') + '</select>')
+        + f(art === 'Nebenkosten-Rechnung' ? 'Kostenart' : 'Stichwort', '<input type="text" id="anh-kostenart" list="anh-kostenarten" value="' + esc(modal.kostenart !== undefined ? modal.kostenart : (z.kostenart || '')) + '" autocomplete="off">'
+            + '<datalist id="anh-kostenarten">' + ((anh.daten && anh.daten.kostenarten) || []).map(function (k) { return '<option value="' + esc(k) + '">'; }).join('') + '</datalist>')
+        + f('Jahr', '<input type="text" id="anh-jahr" inputmode="numeric" maxlength="4" value="' + esc(modal.jahr !== undefined ? modal.jahr : (z.jahr || '')) + '" placeholder="z. B. 2025">')
+        + f('Dateiname', '<input type="text" id="anh-dateiname" value="' + esc(modal.dateiname !== undefined ? modal.dateiname : anhName(z)) + '">')
+        + '<div class="hint">Nebenkosten-Rechnungen kommen in „02 Nebenkosten / Jahr“, sonstige Rechnungen in „03 Rechnungen / Jahr“.</div>'
+        + '<div class="modal-actions"><button class="ghost" data-act="anh-weg" data-id="' + esc(z.id || '') + '">Nicht ablegen</button><div class="spacer"></div>'
+        + '<button data-act="anh-oeffnen">Abbrechen</button><button class="primary" data-act="anh-speichern">Übernehmen</button></div>';
     } else if (modal.kind === 'od-namen') {
       body = '<div class="odn-kopf"><button class="tiny ghost" data-act="od-einrichten">‹ Google Drive</button><h2>Namen aufräumen</h2>'
         + (odn.daten && odn.daten.liste ? '<span>' + odn.daten.liste.length + ' Vorschläge</span>' : '') + '</div>' + odnHtml();
@@ -9107,7 +9260,7 @@
         + '<button class="primary" data-act="save-object">Speichern</button></div>';
     }
     const breit = (modal.kind === 'strom' || modal.kind === 'konto' || modal.kind === 'wartung'
-      || modal.kind === 'nk' || modal.kind === 'auszug' || modal.kind === 'kauf' || modal.kind === 'anfrage' || modal.kind === 'od-namen') ? ' breit'
+      || modal.kind === 'nk' || modal.kind === 'auszug' || modal.kind === 'kauf' || modal.kind === 'anfrage' || modal.kind === 'od-namen' || modal.kind === 'anh') ? ' breit'
       : (modal.kind === 'aufgabe' ? ' mittel' : (modal.kind === 'pf-schreiben' || modal.kind === 'pf-mail' ? ' mailfenster' : ''));
 
     const titel = {
@@ -9119,7 +9272,7 @@
       kauf: 'Durchgerechnet', 'kauf-neu': 'Angebot eintragen', 'kauf-annahmen': 'Annahmen',
       anfrage: 'Anfrage', 'anf-kriterien': 'Kriterien',
       'pf-schreiben': 'Mail', 'pf-mail': 'Mail', 'pf-ziel': 'Verschieben', 'pf-einrichten': 'Mailkonto',
-      'od-einrichten': 'Google Drive', 'od-zuordnen': 'Zuordnen', 'od-namen': 'Namen aufräumen'
+      'od-einrichten': 'Google Drive', 'od-zuordnen': 'Zuordnen', 'od-namen': 'Namen aufräumen', anh: 'Anhänge ablegen', 'anh-aendern': 'Anhang einordnen'
     }[modal.kind] || '';
 
 
@@ -9202,6 +9355,20 @@
     });
     const odnq = root.querySelector('#odn-q');
     if (odnq) odnq.addEventListener('input', function () { odn.suche = odnq.value; odnNeuZeichnen(); });
+    // Anhänge ablegen: Dateiname beim Tippen merken, Suche, im Einordnen-Fenster lädt das Objekt seine Wohnungen
+    root.querySelectorAll('[data-anh-name]').forEach(function (feld) {
+      feld.addEventListener('input', function () { anh.namen[feld.getAttribute('data-anh-name')] = feld.value; anhFussAktualisieren(); });
+    });
+    const anhq = root.querySelector('#anh-q');
+    if (anhq) anhq.addEventListener('input', function () { anh.suche = anhq.value; anhNeuZeichnen(); });
+    const anho = root.querySelector('#anh-objekt'), anha = root.querySelector('#anh-art');
+    const anhFormMerken = function () {
+      modal.objekt = val('anh-objekt'); modal.art = val('anh-art');
+      modal.einheit = root.querySelector('#anh-einheit') ? val('anh-einheit') : '';
+      modal.kostenart = val('anh-kostenart'); modal.jahr = val('anh-jahr'); modal.dateiname = val('anh-dateiname');
+    };
+    if (anho) anho.addEventListener('change', function () { anhFormMerken(); modal.einheit = ''; render(); });
+    if (anha) anha.addEventListener('change', function () { anhFormMerken(); render(); });
     // Suchfeld im Postfach: Enter sucht, Esc beendet; das Getippte übersteht jeden Neuaufbau
     const pfq = root.querySelector('#pf-q');
     if (pfq) {
@@ -10004,6 +10171,81 @@
           }).catch(function (e) { toast(e.message); });
         });
     }
+    // ---- Anhänge ablegen ----
+    else if (act === 'anh-oeffnen') {
+      seiteOffen = false;
+      modal = { kind: 'anh' };
+      render();
+      anhLaden().then(function () { if (modal && modal.kind === 'anh') anhNeuZeichnen(); });
+    }
+    else if (act === 'anh-filter') { anh.filter = el.getAttribute('data-wert') || ''; render(); }
+    else if (act === 'anh-an') {
+      const id = el.getAttribute('data-id');
+      if (el.checked) delete anh.ab[id]; else anh.ab[id] = true;
+      const zeile = el.closest('.odn-z');
+      if (zeile) zeile.classList.toggle('ab', !el.checked);
+      anhFussAktualisieren();
+    }
+    else if (act === 'anh-alle' || act === 'anh-keine') {
+      anhSichtbar().forEach(function (z) { if (act === 'anh-alle') delete anh.ab[z.id]; else anh.ab[z.id] = true; });
+      anhNeuZeichnen();
+    }
+    else if (act === 'anh-aendern') { modal = { kind: 'anh-aendern', id: el.getAttribute('data-id') }; render(); }
+    else if (act === 'anh-weg') {
+      const id = el.getAttribute('data-id');
+      api('anhaenge/' + encodeURIComponent(id), { method: 'PUT', body: { ignorieren: true } }).then(function () {
+        if (anh.daten) anh.daten.liste = (anh.daten.liste || []).filter(function (z) { return z.id !== id; });
+        if (modal && modal.kind === 'anh-aendern') modal = { kind: 'anh' };
+        toast('Wird nicht abgelegt');
+        anhNeuZeichnen();
+      }).catch(function (e) { toast(e.message); });
+    }
+    else if (act === 'anh-speichern') {
+      const id = modal.id;
+      const koerper = { objekt: val('anh-objekt'), einheit: root.querySelector('#anh-einheit') ? val('anh-einheit') : '', art: val('anh-art'),
+        kostenart: val('anh-kostenart'), jahr: val('anh-jahr'), dateiname: val('anh-dateiname') };
+      if (koerper.jahr && !/^(19|20)\d{2}$/.test(koerper.jahr)) { toast('Bitte das Jahr vierstellig, z. B. 2025'); return; }
+      api('anhaenge/' + encodeURIComponent(id), { method: 'PUT', body: koerper }).then(function () {
+        delete anh.namen[id];
+        modal = { kind: 'anh' };
+        render();
+        return anhLaden();
+      }).then(function () { if (modal && modal.kind === 'anh') anhNeuZeichnen(); }).catch(function (e) { toast(e.message); });
+    }
+    else if (act === 'anh-ablegen') {
+      const liste = anhGewaehlt();
+      if (!liste.length) return;
+      dialog({ titel: liste.length + (liste.length === 1 ? ' Anhang' : ' Anhänge') + ' ablegen?',
+        text: 'Die App kopiert die Anhänge in die angezeigten Ordner in deinem Google Drive und legt fehlende Jahresordner an. Im Postfach bleibt alles, wie es ist.',
+        knoepfe: [{ label: 'Abbrechen', wert: false }, { label: 'Ablegen', wert: true, art: 'primaer' }] })
+        .then(async function (r) {
+          if (!r.wert) return;
+          // Geänderte Dateinamen zuerst übernehmen
+          for (const z of liste) {
+            if (anh.namen[z.id] !== undefined && anh.namen[z.id] !== z.dateiname) {
+              try { await api('anhaenge/' + encodeURIComponent(z.id), { method: 'PUT', body: { dateiname: anh.namen[z.id] } }); } catch (e) { /* bleibt beim Vorschlag */ }
+            }
+          }
+          let fertig = 0;
+          const fehler = [];
+          for (let i = 0; i < liste.length; i += 10) {
+            anh.arbeit = 'Lege ab … ' + i + ' von ' + liste.length;
+            if (modal && modal.kind === 'anh') anhNeuZeichnen();
+            try {
+              const a = await api('anhaenge/ablegen', { method: 'POST', body: { ids: liste.slice(i, i + 10).map(function (z) { return z.id; }) } });
+              (a.ergebnisse || []).forEach(function (e) {
+                if (e.ok) { fertig++; delete anh.namen[e.id]; } else fehler.push(e);
+              });
+              if ((a.ergebnisse || []).some(function (e) { return /bearbeiten erlauben/.test(e.fehler || ''); })) break;
+            } catch (e) { fehler.push({ fehler: e.message }); break; }
+          }
+          anh.arbeit = '';
+          await anhLaden();
+          od.dateien = null;   // die Dokumente beim Objekt neu holen
+          toast(fertig + ' abgelegt' + (fehler.length ? ' · ' + fehler.length + ' nicht' + (fehler[0].name ? ', z. B. „' + fehler[0].name + '“' : '') + ': ' + (fehler[0].fehler || '') : ''));
+          if (modal && modal.kind === 'anh') anhNeuZeichnen();
+        });
+    }
     // ---- Namen aufräumen ----
     else if (act === 'odn-oeffnen') {
       seiteOffen = false;
@@ -10029,16 +10271,16 @@
       odnNeuZeichnen();
     }
     else if (act === 'odn-schalter') {
-      const einschalten = !!el.checked;
+      const einschalten = !!el.checked, nachher = el.getAttribute('data-ziel') || 'namen';
       odnNeuZeichnen();   // Der Schalter zeigt weiter den echten Stand, bis Google geantwortet hat
       if (einschalten) {
-        dialog({ titel: 'Umbenennen erlauben?', text: 'Google fragt jetzt nach dem Recht, Dateien in deinem Google Drive zu bearbeiten. Google nennt das '
-            + '„Dateien sehen, bearbeiten, erstellen und löschen“ — die App benennt trotzdem nur um, wenn du bestätigst, und löscht nie etwas. '
+        dialog({ titel: 'Google Drive bearbeiten erlauben?', text: 'Google fragt jetzt nach dem Recht, Dateien in deinem Google Drive zu bearbeiten. Google nennt das '
+            + '„Dateien sehen, bearbeiten, erstellen und löschen“ — die App benennt trotzdem nur um oder legt Anhänge ab, wenn du bestätigst, und löscht nie etwas. '
             + 'Mit dem Schalter gibst du das Recht jederzeit zurück.',
           knoepfe: [{ label: 'Abbrechen', wert: false }, { label: 'Weiter zu Google', wert: true, art: 'primaer' }] })
           .then(function (r) {
             if (!r.wert) return;
-            try { window.sessionStorage.setItem('vermietung:nachGoogle', 'namen'); } catch (e) { /* egal */ }
+            try { window.sessionStorage.setItem('vermietung:nachGoogle', nachher); } catch (e) { /* egal */ }
             window.location.href = '/api/google/start?bearbeiten=1';
           });
       } else {
@@ -10049,7 +10291,7 @@
           .then(function (r) {
             if (!r.wert) return;
             api('dokumente/bearbeiten/aus', { method: 'POST' }).then(function () {
-              try { window.sessionStorage.setItem('vermietung:nachGoogle', 'namen'); } catch (e) { /* egal */ }
+              try { window.sessionStorage.setItem('vermietung:nachGoogle', nachher); } catch (e) { /* egal */ }
               toast('Recht zurückgegeben — jetzt Google wieder verbinden, nur zum Lesen');
               window.location.href = '/api/google/start';
             }).catch(function (e) { toast(e.message); });

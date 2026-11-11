@@ -66,6 +66,11 @@ try {
   db.exec('ALTER TABLE dok_dateien ADD COLUMN aufnahme TEXT');
   db.prepare("DELETE FROM einstellungen WHERE schluessel = 'dok_seite'").run();
 } catch (e) { /* gibt es schon */ }
+// Was beim Ablegen aus dem Postfach festgelegt wurde (anhaenge.js): Jahr, Kostenart, Betrag, woher
+db.exec('CREATE TABLE IF NOT EXISTS dok_meta (id TEXT PRIMARY KEY, jahr TEXT, kostenart TEXT, betrag REAL, herkunft TEXT)');
+// Rechnungen in einem Nebenkosten-Ordner sind umlagefähige Rechnungen (neue Art) — einmalig nachziehen, was die Regeln vergeben haben
+db.prepare("UPDATE dok_dateien SET art = 'Nebenkosten-Rechnung' WHERE art = 'Rechnung' AND quelle <> 'louis' "
+  + "AND (lower(pfad) LIKE '%nebenkosten%' OR lower(pfad) LIKE '%betriebskosten%')").run();
 // status: neu (noch nicht angesehen) · zugeordnet · pruefen (Vorschlag, unsicher) · offen (keine Ahnung, wartet auf den
 // Assistenten) · unklar (auch der Assistent weiß es nicht) · fremd (hat nichts mit der Vermietung zu tun) · ignoriert (Louis: keins)
 
@@ -357,7 +362,7 @@ function objektListe(s) {
   }).join('\n');
 }
 // Claude mit strukturierter Antwort: Haiku zuerst, Opus (wenig Aufwand) als Ersatz. Zählt fürs Tageslimit.
-async function claudeJson(koerper, schema) {
+async function claudeJson(koerper, schema, zaehler) {
   const { claude } = require('./assistent');
   let antwort = null;
   for (const v of [{ model: 'claude-haiku-5-5', output_config: { format: { type: 'json_schema', schema: schema } } },
@@ -366,7 +371,7 @@ async function claudeJson(koerper, schema) {
     catch (x) { if (x.status && x.status !== 400 && x.status !== 404) throw x; }
   }
   if (!antwort) throw new Error('Kein Modell erreichbar');
-  tagesZaehler(1);
+  (zaehler || tagesZaehler)(1);   // jeder Bereich hat sein eigenes Tageslimit
   const block = (antwort.content || []).find(function (x) { return x.type === 'text'; });
   return JSON.parse(block.text);
 }
@@ -502,6 +507,7 @@ app.delete('/api/dokumente', nurAngemeldet, nurVerwalter, function (req, res) {
   db.prepare('DELETE FROM dok_ordner').run();
   db.prepare('DELETE FROM dok_regeln').run();
   try { db.prepare('DELETE FROM dok_namen').run(); } catch (e) { /* Tabelle kommt erst mit gdrive-namen.js */ }
+  db.prepare('DELETE FROM dok_meta').run();
   res.json({ ok: true });
 });
 
@@ -511,9 +517,21 @@ app.post('/api/dokumente/abgleich', nurAngemeldet, nurVerwalter, function (req, 
 });
 
 // Alle zugeordneten, zu prüfenden und offenen Dateien — schlank, die App filtert selbst nach Objekt und Wohnung
+// Zu welchem Jahr gehört eine Datei? Was beim Ablegen festgelegt wurde, sonst ein Jahresordner („02 Nebenkosten/2025“),
+// sonst das Datum des Dokuments, sonst ein Jahr im Namen („Nebenkostenabrechnung 2023“, „2025-03-03 …“)
+function jahrVon(d) {
+  if (d.meta_jahr) return String(d.meta_jahr);
+  const ordner = String(d.pfad || '').split('/').reverse().find(function (t) { return /^(19|20)\d{2}$/.test(t.trim()); });
+  if (ordner) return ordner.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(d.datum || '')) return d.datum.slice(0, 4);
+  const m = /(?<!\d)((?:19|20)\d{2})(?!\d)/.exec(String(d.name || ''));
+  return m ? m[1] : '';
+}
 app.get('/api/dokumente/dateien', nurAngemeldet, function (req, res) {
-  const zeilen = db.prepare("SELECT id, name, pfad, mime, groesse, geaendert, url, objekt, einheit, art, titel, datum, quelle, status, erstmals AS gesehen "
-    + "FROM dok_dateien WHERE status IN ('zugeordnet', 'pruefen', 'unklar', 'offen') ORDER BY geaendert DESC LIMIT 8000").all();
+  const zeilen = db.prepare("SELECT d.id, d.name, d.pfad, d.mime, d.groesse, d.geaendert, d.url, d.objekt, d.einheit, d.art, d.titel, d.datum, d.quelle, "
+    + "d.status, d.erstmals AS gesehen, m.jahr AS meta_jahr, m.kostenart, m.betrag FROM dok_dateien d LEFT JOIN dok_meta m ON m.id = d.id "
+    + "WHERE d.status IN ('zugeordnet', 'pruefen', 'unklar', 'offen') ORDER BY d.geaendert DESC LIMIT 8000").all();
+  zeilen.forEach(function (d) { d.jahr = jahrVon(d); delete d.meta_jahr; if (d.kostenart === null) delete d.kostenart; if (d.betrag === null) delete d.betrag; });
   res.json({ dateien: zeilen, zahlen: zahlen(), laeuft: stand.laeuft, zuletzt: stand.zuletzt || null, fehler: stand.fehler });
 });
 
@@ -549,6 +567,6 @@ app.put('/api/dokumente/dateien/:id', nurAngemeldet, nurVerwalter, function (req
 
 // Für das Aufräumen der Dateinamen (gdrive-namen.js)
 const intern = { DRIVE, stand, auswahl, darfLesen, googleVerbunden, dateiHolen, tagesZaehler, claudeJson, pdfLesen, objektListe,
-  ASSISTENT_JE_TAG, PDF_HOECHSTENS };
+  ASSISTENT_JE_TAG, PDF_HOECHSTENS, karte, ordnerPfad, ordnerZeile, ordnerMerken, abgleichen };
 
 module.exports = { router: app, abgleichen, regelnAnwenden, intern };

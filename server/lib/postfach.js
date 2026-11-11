@@ -761,4 +761,52 @@ app.get('/api/postfach/suche', nurAngemeldet, nurVerwalter, mitFehler(async func
   });
 }));
 
-module.exports = { router: app, verschluesseln, entschluesseln, signaturAus };
+// ---------------- Für „Anhänge ablegen“ (anhaenge.js) ----------------
+// Nichts davon markiert eine Mail als gelesen: Kopf und Aufbau kommen aus dem Verzeichnis bzw. per BODYSTRUCTURE,
+// der Inhalt per BODY.PEEK (mailHolen).
+function postfachBereit() { return !!zugang() && indexAnzahl() > 0; }
+async function anhangKandidaten(seit) {
+  if (!postfachBereit()) return [];
+  const liste = await ordnerListe(false);
+  const ohne = liste.filter(function (f) { return ['papierkorb', 'spam', 'gesendet', 'entwuerfe'].indexOf(f.spezial) !== -1; })
+    .map(function (f) { return f.pfad; });
+  const ix2 = index();
+  return indexMod.mitAnhang(ix2, { seit: seit, ohneOrdner: ohne }).map(function (z) {
+    return Object.assign(z, { uidvalidity: indexMod.uidValidity(ix2, z.ordner) || '' });
+  });
+}
+function anhangTeile(s, liste) {
+  if (!s) return liste;
+  const name = (s.dispositionParameters && s.dispositionParameters.filename) || (s.parameters && s.parameters.name) || '';
+  if (!s.childNodes && name && !/^(text\/(plain|html)|multipart\/)/i.test(s.type || '')) {
+    liste.push({ teil: String(s.part || '1'), name: String(name), typ: String(s.type || ''), groesse: Number(s.size) || 0,
+      inline: s.disposition === 'inline' && /^image\//i.test(s.type || '') });
+  }
+  (s.childNodes || []).forEach(function (k) { anhangTeile(k, liste); });
+  return liste;
+}
+// Anhänge mehrerer Mails eines Ordners: uid → [{ teil, name, typ, groesse, inline }]
+async function anhangListen(ordner, uids) {
+  return imOrdner(ordner, async function (c) {
+    const erg = new Map();
+    if (!uids.length) return erg;
+    for await (const m of c.fetch(uids.join(','), { uid: true, bodyStructure: true }, { uid: true })) {
+      erg.set(m.uid, anhangTeile(m.bodyStructure, []));
+    }
+    return erg;
+  });
+}
+// Ein Anhang mit Inhalt — gefunden am Namen, sonst an der Reihenfolge
+async function anhangInhalt(ordner, uid, name, nr) {
+  return imOrdner(ordner, async function (c) {
+    const g = await mailHolen(c, uid);
+    const liste = (g.p.attachments || []).filter(function (a) { return !a.related; });
+    // Am Namen erkennen (Unicode einheitlich); die Reihenfolge nur für namenlose Anhänge — sonst lieber gar keiner als ein falscher
+    const gleich = function (x) { return String(x || '').normalize('NFC') === String(name || '').normalize('NFC'); };
+    const a = liste.find(function (x) { return gleich(x.filename); }) || (liste[nr] && !liste[nr].filename ? liste[nr] : null);
+    if (!a) throw fehler('Den Anhang gibt es in der Mail nicht mehr', 404);
+    return { name: a.filename || name, typ: a.contentType || '', inhalt: a.content };
+  });
+}
+
+module.exports = { router: app, verschluesseln, entschluesseln, signaturAus, postfachBereit, anhangKandidaten, anhangListen, anhangInhalt };
