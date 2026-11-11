@@ -199,4 +199,8 @@ test('index.html verweist mit aktuellen Prüfsummen auf CSS und JS', function ()
   const { gebaut } = require('../../werkzeuge/bauen');
   const html = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'index.html'), 'utf8');
   assert.equal(html, gebaut(), 'Bitte "node werkzeuge/bauen.js" ausführen');
+  // Einmal falsch gelesen und als UTF-8 zurückgeschrieben (etwa mit Get-Content in Windows PowerShell), wird aus „ü“
+  // ein „Ã¼“ — der Prüfsummen-Vergleich oben merkt das nicht, er rechnet mit der kaputten Datei
+  assert.match(html, /<title>Ziegler — Objektübersicht<\/title>/, 'Umlaute in index.html sind kaputt');
+  assert.doesNotMatch(html, /Ã|Â|â€/, 'index.html enthält doppelt kodierte Zeichen');
 });
