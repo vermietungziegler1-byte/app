@@ -77,3 +77,14 @@ test('Weitere echte Namen', function () {
   assert.equal(bewerten('2020_10.pdf'), 'Scan');
   assert.equal(bewerten('Schlafzimmer002.jpg'), '');
 });
+
+test('Fotos ohne feste Zuordnung: der nächste sprechende Ordner statt einer geratenen Adresse', function () {
+  assert.equal(fotoName({ name: 'IMG_1.HEIC', pfad: '/Firma/Bertha von Suttna/07 Sonstiges/Foto', aufnahme: '2025:06:14 12:35:10' }, '').name,
+    '2025-06-14 Foto Bertha von Suttna.heic');
+  assert.equal(fotoName({ name: 'IMG_2.jpg', pfad: '/Firma', aufnahme: '' }, '').name, 'Foto Firma.jpg');
+});
+
+test('Eine Datums-Endung ist keine Dateiendung', function () {
+  assert.equal(sauber('2025-10-14 Protokoll Eigentümerversammlung', 'Protokoll 14.10.2025'), '2025-10-14 Protokoll Eigentümerversammlung');
+  assert.equal(sauber('Plan V2', 'Plan v1.2'), 'Plan V2');
+});

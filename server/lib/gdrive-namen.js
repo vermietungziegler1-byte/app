@@ -22,7 +22,7 @@ const NAMEN_JE_LAUF = 60, SCANS_JE_LAUF = 10;
 const GRUENDE = ['Code', 'Umlaute', 'Tippfehler', 'Kleinigkeit', 'Kopie', 'am Inhalt erkannt', 'Scan', 'unverändert'];
 
 db.exec(`
-  CREATE TABLE IF NOT EXISTS dok_namen (id TEXT PRIMARY KEY, alt TEXT, vorschlag TEXT, grund TEXT, erstellt INTEGER);
+  CREATE TABLE IF NOT EXISTS dok_namen (id TEXT PRIMARY KEY, alt TEXT, vorschlag TEXT, grund TEXT, erstellt INTEGER, ort TEXT);
   CREATE TABLE IF NOT EXISTS dok_umbenannt (nr INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT, alt TEXT, neu TEXT, stapel TEXT, wann INTEGER,
     zurueck INTEGER DEFAULT 0);
 `);
@@ -37,13 +37,18 @@ function orte() {
   });
   return { o: o, u: u, s: s };
 }
+// Ort (Objekt und Wohnung) kommt nur in den Namen, wenn die Zuordnung feststeht — sonst schriebe ein Rateversuch
+// sich selbst in den Dateinamen und sähe beim nächsten Abgleich wie eine sichere Zuordnung aus
+function sicher(d) { return d.status === 'zugeordnet'; }
 function ortVon(d, k) {
+  if (!sicher(d)) return '';
   const obj = k.o[d.objekt] || '';
   const e = d.einheit && k.u[d.einheit] ? k.u[d.einheit].name : '';
   return (obj + (e ? ' ' + e : '')).trim();
 }
+function mieterVon(d, k) { return sicher(d) && d.einheit && k.u[d.einheit] ? k.u[d.einheit].mieter : ''; }
 function dateienJetzt() {
-  return db.prepare("SELECT id, name, pfad, eltern, mime, groesse, objekt, einheit, art, titel, datum, aufnahme, url FROM dok_dateien "
+  return db.prepare("SELECT id, name, pfad, eltern, mime, groesse, objekt, einheit, art, titel, datum, aufnahme, url, status FROM dok_dateien "
     + "WHERE status IN ('zugeordnet', 'pruefen', 'offen', 'unklar')").all();
 }
 
@@ -92,7 +97,8 @@ function vorschlaege() {
       return;
     }
     const g = gespeichert.get(d.id);
-    if (g && g.alt === d.name) {
+    // Gilt nur, solange Name und Zuordnung noch dieselben sind wie beim Vorschlag
+    if (g && g.alt === d.name && (g.ort || '') === zeile.ort) {
       // Der Assistent hat geantwortet — leer heißt: der Name ist in Ordnung
       if (g.vorschlag && g.vorschlag !== d.name) liste.push(Object.assign(zeile, { grund: g.grund || grund, vorschlag: g.vorschlag, quelle: 'assistent' }));
       return;
@@ -136,13 +142,19 @@ async function namenAssistent() {
   if (laeuft || !einstellung('anthropic_token') || intern.tagesZaehler(0) >= intern.ASSISTENT_JE_TAG) return;
   laeuft = true;
   try {
-    // Gemerkte Vorschläge für verschwundene oder inzwischen anders benannte Dateien wegwerfen
-    db.prepare('DELETE FROM dok_namen WHERE id NOT IN (SELECT id FROM dok_dateien) '
-      + 'OR id IN (SELECT n.id FROM dok_namen n JOIN dok_dateien d ON d.id = n.id WHERE d.name <> n.alt)').run();
+    // Gemerkte Vorschläge für verschwundene, anders benannte oder anders zugeordnete Dateien wegwerfen
+    db.prepare('DELETE FROM dok_namen WHERE id NOT IN (SELECT id FROM dok_dateien)').run();
     const s = standInhalt() || {}, k = orte();
     const dateien = dateienJetzt();
     const doppelt = namen.dubletten(dateien);
-    const schon = new Set(db.prepare('SELECT id FROM dok_namen').all().map(function (r) { return r.id; }));
+    const gemerkt = new Map(db.prepare('SELECT id, alt, ort FROM dok_namen').all().map(function (r) { return [r.id, r]; }));
+    const schon = new Set();
+    const weg = db.prepare('DELETE FROM dok_namen WHERE id = ?');
+    dateien.forEach(function (d) {
+      const g = gemerkt.get(d.id);
+      if (!g) return;
+      if (g.alt === d.name && (g.ort || '') === ortVon(d, k)) schon.add(d.id); else weg.run(d.id);
+    });
     const offen = dateien.filter(function (d) {
       const g = namen.bewerten(d.name, d.mime);
       return g && g !== 'Handyfoto' && !doppelt.has(d.id) && !schon.has(d.id);
@@ -170,8 +182,9 @@ async function namenAssistent() {
     if (!weiter()) return;
     const stapel = offen.slice(0, NAMEN_JE_LAUF);
     const eintraege = stapel.map(function (d) {
-      return { id: d.id, name: d.name, ordner: d.pfad, ort: ortVon(d, k), mieter: d.einheit && k.u[d.einheit] ? k.u[d.einheit].mieter : '',
-        art: d.art || '', titel: d.titel || '', datum: d.datum || '' };
+      // Ort und Mieter nur bei feststehender Zuordnung (sonst leer: der Assistent soll nichts Geratenes in den Namen schreiben)
+      return { id: d.id, name: d.name, ordner: d.pfad, ort: ortVon(d, k), mieter: mieterVon(d, k),
+        art: sicher(d) ? (d.art || '') : '', titel: d.titel || '', datum: d.datum || '' };
     });
     let r;
     try {
@@ -179,14 +192,15 @@ async function namenAssistent() {
     } catch (x) { return; }
     if (einstellung('dok_auswahl') !== auswahlVorher) return;
     const nachId = new Map((r.namen || []).map(function (n) { return [String(n.id), n]; }));
-    const merken = db.prepare('INSERT OR REPLACE INTO dok_namen (id, alt, vorschlag, grund, erstellt) VALUES (?, ?, ?, ?, ?)');
+    const merken = db.prepare('INSERT OR REPLACE INTO dok_namen (id, alt, vorschlag, grund, erstellt, ort) VALUES (?, ?, ?, ?, ?, ?)');
     db.transaction(function () {
       stapel.forEach(function (d) {
         const n = nachId.get(d.id);
         if (!n) return;
         const v = namen.sauber(n.vorschlag, d.name);
         const gleich = !v || v === d.name || n.grund === 'unverändert';
-        merken.run(d.id, d.name, gleich ? '' : v, gleich ? '' : (GRUENDE.indexOf(n.grund) !== -1 ? n.grund : namen.bewerten(d.name, d.mime)), Date.now());
+        merken.run(d.id, d.name, gleich ? '' : v, gleich ? '' : (GRUENDE.indexOf(n.grund) !== -1 ? n.grund : namen.bewerten(d.name, d.mime)),
+          Date.now(), ortVon(d, k));
       });
     })();
   } finally {
@@ -195,21 +209,30 @@ async function namenAssistent() {
 }
 
 // ---------------- Umbenennen bei Google ----------------
+// Google sagt bei 403 genauer, warum: zu viele Anfragen (kurz warten, nochmal), fehlendes Recht für die ganze App
+// (Schalter aus → alles abbrechen) oder nur diese eine Datei (z. B. gehört jemand anderem → nur sie auslassen)
+const warte = function (ms) { return new Promise(function (r) { setTimeout(r, ms); }); };
 async function beiGoogleUmbenennen(id, neu) {
-  const antwort = await holen(intern.DRIVE + '/files/' + encodeURIComponent(id) + '?fields=id,name', {
-    method: 'PATCH',
-    headers: { Authorization: 'Bearer ' + await google.googleToken(), 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: neu })
-  });
-  if (antwort.status === 401) google.googleZugriffVergessen();
-  if (!antwort.ok) {
+  for (let versuch = 0; ; versuch++) {
+    const antwort = await holen(intern.DRIVE + '/files/' + encodeURIComponent(id) + '?fields=id,name', {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer ' + await google.googleToken(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: neu })
+    });
+    if (antwort.ok) return antwort.json();
+    if (antwort.status === 401) google.googleZugriffVergessen();
     const grund = await antwort.text().catch(function () { return ''; });
-    const e = new Error(antwort.status === 403 ? 'Google erlaubt das Umbenennen nicht — ist „Umbenennen erlauben“ eingeschaltet?'
+    const zuViel = antwort.status === 429 || (antwort.status === 403 && /rateLimitExceeded|userRateLimitExceeded/i.test(grund));
+    if (zuViel && versuch < 4) { await warte(1000 * Math.pow(2, versuch)); continue; }
+    const ohneRecht = antwort.status === 401 || (antwort.status === 403 && /insufficientPermissions|SCOPE_INSUFFICIENT|insufficient authentication scopes/i.test(grund));
+    const e = new Error(ohneRecht ? 'Google erlaubt der App das Umbenennen nicht — ist „Umbenennen erlauben“ eingeschaltet?'
+      : antwort.status === 403 ? 'Diese Datei darf die App nicht umbenennen (gehört sie jemand anderem?)'
+      : zuViel ? 'Google ist gerade überlastet — bitte gleich noch einmal'
       : 'Google antwortet mit ' + antwort.status + (grund ? ': ' + grund.slice(0, 120) : ''));
     e.status = antwort.status;
+    e.ohneRecht = ohneRecht;
     throw e;
   }
-  return antwort.json();
 }
 // Im selben Ordner darf es den Namen noch nicht geben (Google würde ihn erlauben, aber das stiftet nur Verwirrung)
 function freierName(d, neu) {
@@ -225,7 +248,8 @@ function letzte() {
 
 // ---------------- Schnittstellen ----------------
 app.get('/api/dokumente/namen', nurAngemeldet, nurVerwalter, function (req, res) {
-  res.json({ bearbeiten: google.darfBearbeiten(), liste: vorschlaege(), letzte: letzte(), assistent: !!einstellung('anthropic_token') });
+  res.json({ google: !!google.googleEinstellungen().refresh, bearbeiten: google.darfBearbeiten(), liste: vorschlaege(), letzte: letzte(),
+    assistent: !!einstellung('anthropic_token') });
 });
 
 // Louis hat bestätigt: diese Dateien so umbenennen (höchstens 25 auf einmal)
@@ -235,6 +259,7 @@ app.put('/api/dokumente/namen', nurAngemeldet, nurVerwalter, async function (req
   const stapel = String(b.stapel || Date.now()).replace(/[^\w-]/g, '').slice(0, 40) || String(Date.now());
   const liste = Array.isArray(b.dateien) ? b.dateien.slice(0, JE_ANFRAGE) : [];
   let umbenannt = 0;
+  const ids = [];
   const fehler = [];
   for (const w of liste) {
     const d = intern.dateiHolen.get(String((w && w.id) || ''));
@@ -249,12 +274,13 @@ app.put('/api/dokumente/namen', nurAngemeldet, nurVerwalter, async function (req
       db.prepare('INSERT INTO dok_umbenannt (id, alt, neu, stapel, wann) VALUES (?, ?, ?, ?, ?)').run(d.id, d.name, jetzt, stapel, Date.now());
       db.prepare('DELETE FROM dok_namen WHERE id = ?').run(d.id);
       umbenannt++;
+      ids.push(d.id);
     } catch (x) {
-      fehler.push({ id: d.id, grund: x.message });
-      if (x.status === 401 || x.status === 403) break;   // ohne Recht hat der Rest keinen Sinn
+      fehler.push({ id: d.id, name: d.name, grund: x.message });
+      if (x.ohneRecht) break;   // ohne Recht hat der Rest keinen Sinn — eine einzelne gesperrte Datei hält den Rest nicht auf
     }
   }
-  res.json({ ok: true, umbenannt: umbenannt, fehler: fehler, letzte: letzte() });
+  res.json({ ok: true, umbenannt: umbenannt, ids: ids, fehler: fehler, letzte: letzte() });
 });
 
 // Rückgängig: die alten Namen zurück (höchstens 25 auf einmal; „rest“ sagt, wie viele noch fehlen)
@@ -273,8 +299,8 @@ app.post('/api/dokumente/namen/rueckgaengig', nurAngemeldet, nurVerwalter, async
       db.prepare('UPDATE dok_dateien SET name = ? WHERE id = ?').run(z.alt, z.id);
       fertig.run(z.nr);
     } catch (x) {
-      fehler.push({ id: z.id, grund: x.message });
-      if (x.status === 401 || x.status === 403) break;
+      fehler.push({ id: z.id, name: z.neu, grund: x.message });
+      if (x.ohneRecht) break;
     }
   }
   const rest = db.prepare('SELECT COUNT(*) AS n FROM dok_umbenannt WHERE stapel = ? AND zurueck = 0').get(stapel).n;

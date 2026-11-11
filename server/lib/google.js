@@ -24,14 +24,14 @@ const BEARBEITEN = 'https://www.googleapis.com/auth/drive';
 const REVOKE_URL = process.env.GOOGLE_REVOKE_URL || 'https://oauth2.googleapis.com/revoke';
 
 // Das dauerhafte Zugriffsrecht liegt verschlüsselt in der Datenbank (wie das Passwort des Mailkontos).
-// Ein älterer, unverschlüsselt gespeicherter Wert wird beim ersten Lesen gleich verschlüsselt.
+// Ein älterer, unverschlüsselt gespeicherter Wert gilt weiter, bis Google das nächste Mal verbunden wird — absichtlich
+// nicht beim Lesen umgestellt: Spielt einspielen eine ältere Fassung zurück, liefe Google sonst nicht mehr.
 function refreshLesen() {
   const roh = einstellung('google_refresh');
   if (!roh) return null;
   if (String(roh).indexOf('v1:') === 0) {
     try { return geheim.entschluesseln(roh); } catch (e) { return null; }
   }
-  try { einstellungSetzen('google_refresh', geheim.verschluesseln(roh)); } catch (e) { /* bleibt, wie es ist */ }
   return roh;
 }
 
@@ -99,6 +99,8 @@ app.get('/api/google', nurAngemeldet, function (req, res) {
   res.json({
     eingerichtet: !!(g.clientId && g.clientSecret),
     verbunden: !!g.refresh,
+    // Nach „Recht zurückgeben“ und noch nicht wieder verbunden: Postfach, Sicherungen, Kalender und Dokumente pausieren
+    getrennt: !g.refresh && !!einstellung('google_getrennt'),
     adresse: g.adresse || null
   });
 });
@@ -176,7 +178,12 @@ app.get('/api/google/zurueck', nurAngemeldet, nurVerwalter, async function (req,
     return res.status(400).send('Dieser Rücksprung gehört zu keiner laufenden Anmeldung. Bitte in der App neu verbinden.');
   }
   const code = req.query.code;
-  if (!code) return res.status(400).send('Kein Code von Google');
+  if (!code) {
+    // Bei Google abgebrochen: freundlich zurück zur App, die dort „Google verbinden“ anbietet
+    return res.status(400).send('<meta charset="utf-8"><meta http-equiv="refresh" content="4;url=/"><body style="font-family:sans-serif;background:#14181e;color:#e8eaed;padding:40px">'
+      + '<h2>Nicht verbunden</h2><p>Die Anmeldung bei Google wurde abgebrochen. In der App kannst du Google jederzeit wieder verbinden '
+      + '(Menü → Google Drive oder Postfach).</p><p><a style="color:#0a84ff" href="/">Zurück zur App</a></p></body>');
+  }
   try {
     const ziel = googleRueckweg(req);
     const antwort = await holen(TOKEN_URL, {
@@ -191,6 +198,7 @@ app.get('/api/google/zurueck', nurAngemeldet, nurVerwalter, async function (req,
     if (!daten.refresh_token) throw new Error(daten.error_description || 'Kein dauerhaftes Zugriffsrecht erhalten');
     einstellungSetzen('google_refresh', geheim.verschluesseln(daten.refresh_token));
     einstellungSetzen('google_scope', String(daten.scope || ''));
+    db.prepare("DELETE FROM einstellungen WHERE schluessel = 'google_getrennt'").run();
     googleZugriffVergessen();
     postCache.clear();
 
@@ -539,6 +547,8 @@ async function zugangZurueckgeben() {
     if (!antwort.ok && antwort.status !== 400) throw new Error('Google nimmt das Recht gerade nicht zurück (' + antwort.status + ') — bitte später noch einmal');
   }
   ['google_refresh', 'google_scope'].forEach(function (k) { db.prepare('DELETE FROM einstellungen WHERE schluessel = ?').run(k); });
+  // Merken, dass die Verbindung absichtlich getrennt wurde: Die App zeigt das deutlich an, bis Google wieder verbunden ist
+  einstellungSetzen('google_getrennt', String(Date.now()));
   googleZugriffVergessen();
   postCache.clear();
 }

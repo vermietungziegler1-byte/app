@@ -191,11 +191,14 @@ test('Namen aufräumen: vorschlagen, Schalter, umbenennen, rückgängig, Recht z
     const s = (await louis.get('/api/dokumente')).json;
     assert.equal(s.google, false);
     assert.equal(s.bearbeiten, false);
+    assert.equal((await louis.get('/api/google')).json.getrennt, true, 'die App zeigt an, dass Google getrennt ist');
+    assert.equal((await louis.get('/api/dokumente/namen')).json.google, false);
     g.mitBearbeiten = false;
     await verbinden(louis, false);
     const s2 = (await louis.get('/api/dokumente')).json;
     assert.equal(s2.recht, true);
     assert.equal(s2.bearbeiten, false);
+    assert.equal((await louis.get('/api/google')).json.getrennt, false);
   } finally {
     await server.stoppen();
     g.stoppen();

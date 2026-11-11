@@ -1133,7 +1133,14 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 #app .odn-wo small { display: block; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
 #app .odn-fuss { align-items: center; flex-wrap: wrap; }
 #app .odn-info { font-size: 13px; color: var(--muted); margin-right: 6px; }
+/* Google getrennt (nach „Recht zurückgeben“): auf der Heute-Seite und im Fenster nicht zu übersehen */
+#app .google-getrennt { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0; padding: 12px 14px; border-radius: 12px;
+  background: rgba(255, 159, 10, .16); font-size: 13.5px; line-height: 1.45; }
+#app .google-getrennt b { font-weight: 700; }
+#app .google-getrennt button { margin-left: auto; }
 @media (max-width: 700px) {
+  /* Unter 16 px zoomt das iPhone beim Antippen in das Feld */
+  #app input.odn-neu, #app .odn-leiste input[type="search"] { font-size: 16px; }
   #app .odn-wo { display: none; }
   #app .odn-z { gap: 9px; padding: 9px 10px; align-items: flex-start; }
   #app .odn-z .od-ic { display: none; }

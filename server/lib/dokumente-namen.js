@@ -8,7 +8,8 @@
 // -------------------------------------------------------------
 
 const BILD = /\.(jpe?g|png|heic|heif|gif|webp)$/i;
-function endung(name) { const m = /\.[a-z0-9]{1,5}$/i.exec(String(name || '')); return m ? m[0] : ''; }
+// Endung nur mit mindestens einem Buchstaben — „Protokoll 14.10.2025“ (Google-Dokument) hat keine Endung „.2025“
+function endung(name) { const m = /\.(?=[a-z0-9]{1,5}$)[a-z0-9]*[a-z][a-z0-9]*$/i.exec(String(name || '')); return m ? m[0] : ''; }
 function stamm(name) { const e = endung(name); return e ? String(name).slice(0, -e.length) : String(name || ''); }
 function istBild(name, mime) { return BILD.test(String(name || '')) || /^image\//.test(String(mime || '')); }
 
@@ -82,17 +83,22 @@ function fotoName(d, ort) {
   const z = aufnahmeZeit(d.aufnahme);
   const datum = z.datum || datumAusName(stamm(d.name)).datum;
   const teile = String(d.pfad || '').split('/').filter(Boolean);
-  const letzter = teile[teile.length - 1] || '';
-  const n = normal(letzter);
   const imOrt = normal(ort);
-  let hinweis = '';
-  if (letzter && !ALLGEMEINE_ORDNER.test(letzter.trim()) && n && imOrt.indexOf(n) === -1 && !/^\d+$/.test(n)) {
-    hinweis = letzter.replace(/^\d+\s+/, '').trim();
+  const sprechend = function (ordner) {
+    const n = normal(ordner);
+    if (!ordner || ALLGEMEINE_ORDNER.test(ordner.trim()) || !n || /^\d+$/.test(n) || imOrt.indexOf(n) !== -1) return '';
     // Ordner, der nur Haus oder Wohnung wiederholt („Bertha von Suttna“, „EG Links“), bringt nichts
-    if (n.split(' ').some(function (w) { return w.length >= 5 && imOrt.indexOf(w.slice(0, 5)) !== -1; })) hinweis = '';
+    if (imOrt && n.split(' ').some(function (w) { return w.length >= 5 && imOrt.indexOf(w.slice(0, 5)) !== -1; })) return '';
+    return ordner.replace(/^\d+\s+/, '').trim();
+  };
+  let hinweis = '';
+  if (ort) hinweis = sprechend(teile[teile.length - 1] || '');
+  else {
+    // Ohne feste Zuordnung: der nächste sprechende Ordner nach oben (der oberste wie „Firma“ zählt nicht)
+    for (let i = teile.length - 1; i >= (teile.length > 1 ? 1 : 0) && !hinweis; i--) hinweis = sprechend(teile[i]);
   }
-  const wo = (ort || hinweis || 'ohne Ort').trim();
-  const text = (datum ? datum + ' ' : '') + 'Foto ' + wo + (ort && hinweis ? ' ' + hinweis : '');
+  const wo = [ort, hinweis].filter(Boolean).join(' ');
+  const text = (datum ? datum + ' ' : '') + 'Foto' + (wo ? ' ' + wo : '');
   return { name: text + endung(d.name).toLowerCase(), uhr: z.uhr };
 }
 

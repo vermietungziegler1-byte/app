@@ -1308,12 +1308,26 @@
     });
   }
   function odnName(z) { return odn.namen[z.id] !== undefined ? odn.namen[z.id] : (z.vorschlag || ''); }
-  // Neu aufbauen, ohne dass die lange Liste nach oben springt
+  // Neu aufbauen, ohne dass die lange Liste nach oben springt — am PC rollt die Liste selbst, am Handy das ganze Fenster
   function odnNeuZeichnen() {
-    const l = root.querySelector('.odn-liste'), oben = l ? l.scrollTop : 0;
+    const l = root.querySelector('.odn-liste'), f = root.querySelector('.fensterinhalt');
+    const oben = l ? l.scrollTop : 0, fOben = f ? f.scrollTop : 0;
     render();
-    const n = root.querySelector('.odn-liste');
+    const n = root.querySelector('.odn-liste'), nf = root.querySelector('.fensterinhalt');
     if (n) n.scrollTop = oben;
+    if (nf) nf.scrollTop = fOben;
+  }
+  // Nur Zahl und Knopf unten auffrischen — für Häkchen und Tippen, ohne die Liste neu aufzubauen
+  function odnFussAktualisieren() {
+    const d = odn.daten;
+    if (!d || !d.liste) return;
+    const gewaehlt = odnGewaehlt().length;
+    const info = root.querySelector('.odn-info'), knopf = root.querySelector('[data-act="odn-umbenennen"]');
+    if (info && !odn.arbeit) info.textContent = gewaehlt + ' von ' + odnSichtbar().filter(function (z) { return z.grund !== 'doppelt'; }).length + ' ausgewählt';
+    if (knopf && d.bearbeiten) {
+      knopf.disabled = !gewaehlt || !!odn.arbeit;
+      knopf.textContent = gewaehlt + (gewaehlt === 1 ? ' Datei' : ' Dateien') + ' umbenennen';
+    }
   }
   function odnGewaehlt() {
     return odnSichtbar().filter(function (z) { return z.grund !== 'doppelt' && !odn.ab[z.id] && odnName(z).trim() && odnName(z) !== z.alt; });
@@ -1322,6 +1336,10 @@
     const d = odn.daten;
     if (!d || odn.laedt && !d.liste) return '<div class="empty-note">Vorschläge werden zusammengestellt …</div>';
     if (d.fehler) return '<div class="hintbox"><b>Das hat nicht geklappt:</b> ' + esc(d.fehler) + '</div>';
+    if (!d.google) {
+      return '<div class="google-getrennt"><b>Google ist gerade nicht verbunden.</b> Erst wieder verbinden — danach stehen hier die Vorschläge.'
+        + '<button class="tiny primary" data-act="google-neu-verbinden">Google verbinden</button></div>';
+    }
     const an = !!d.bearbeiten;
     const alle = d.liste || [];
     const zahl = {};
@@ -1350,7 +1368,7 @@
         gruppen[g].push(z);
       });
       h += '<div class="odn-liste">' + reihe.map(function (g) {
-        return '<div class="odn-obj">' + esc(g) + '</div>' + gruppen[g].slice(0, 400).map(function (z) {
+        return '<div class="odn-obj">' + esc(g) + '</div>' + gruppen[g].map(function (z) {
           const wo = odEinheitName(z.objekt, z.einheit);
           const ordner = String(z.pfad || '').split('/').filter(Boolean).slice(-2).join(' › ');
           const kopf = '<div class="odn-alt"><span>vorher</span> ' + esc(z.alt) + '</div>';
@@ -4758,7 +4776,12 @@
         postLaden().then(function () { if (ansicht === 'heute' && !modal) render(); });
       }
       if (istHeute && nutzerRolle === 'verwalter') pfStart();   // ungelesene Mails im Posteingang für die Kachel
-      const blickHtml = istHeute
+      // Nach „Recht zurückgeben“ und nicht wieder verbunden: deutlich sagen, was gerade pausiert
+      const getrenntHtml = istHeute && google.getrennt && nutzerRolle === 'verwalter'
+        ? '<div class="google-getrennt"><b>Google ist getrennt.</b> Postfach-Abruf, Anfragen, Sicherungen in Drive, Kalender und Dokumente pausieren, '
+          + 'bis du Google wieder verbindest.<button class="tiny primary" data-act="google-neu-verbinden">Google verbinden</button></div>'
+        : '';
+      const blickHtml = getrenntHtml + (istHeute
         ? '<div class="blick">'
           + (mobil ? kachel('zu-aufgaben', 'var(--messing)', 'aufgaben', alleAufgaben ? heuteFaelligZahl() : '–', 'Für heute') : '')
           + kachel('zu-mieten', '#30d158', 'mieten', miete.zahl, 'Mieten offen', mobil ? '' : (miete.zahl ? money(miete.summe) + ' stehen noch aus' : 'alle da'))
@@ -4767,7 +4790,7 @@
               ? kachel('zu-post', '#ff9f0a', 'post', pfUngelesen(), 'Ungelesen', mobil ? '' : 'im Posteingang')
               : kachel('zu-post', '#ff9f0a', 'post', postListe ? postListe.length : '–', 'Post', mobil ? '' : 'zugeordnete Mails'))
           + '</div>'
-        : '';
+        : '');
 
       if (istHeute && mobil) html += blickHtml;
       if (istHeute) html += planLeisteHtml();
@@ -9175,7 +9198,7 @@
     if (odo) odo.addEventListener('change', function () { modal.objekt = odo.value; modal.einheit = ''; modal.art = val('od-art'); render(); });
     // Namen aufräumen: Geändertes merken, ohne neu aufzubauen (sonst ginge beim Tippen der Fokus verloren); Suche beim Tippen
     root.querySelectorAll('[data-odn-name]').forEach(function (feld) {
-      feld.addEventListener('input', function () { odn.namen[feld.getAttribute('data-odn-name')] = feld.value; });
+      feld.addEventListener('input', function () { odn.namen[feld.getAttribute('data-odn-name')] = feld.value; odnFussAktualisieren(); });
     });
     const odnq = root.querySelector('#odn-q');
     if (odnq) odnq.addEventListener('input', function () { odn.suche = odnq.value; odnNeuZeichnen(); });
@@ -9990,9 +10013,16 @@
     }
     else if (act === 'odn-filter') { odn.filter = el.getAttribute('data-wert') || ''; render(); }
     else if (act === 'odn-an') {
+      // Ohne Neuaufbau: nur die Zeile und die Zahl unten — so springt nichts, auch nicht am Handy
       const id = el.getAttribute('data-id');
       if (el.checked) delete odn.ab[id]; else odn.ab[id] = true;
-      odnNeuZeichnen();
+      const zeile = el.closest('.odn-z');
+      if (zeile) zeile.classList.toggle('ab', !el.checked);
+      odnFussAktualisieren();
+    }
+    else if (act === 'google-neu-verbinden') {
+      try { window.sessionStorage.setItem('vermietung:nachGoogle', modal && modal.kind === 'od-namen' ? 'namen' : 'dokumente'); } catch (e) { /* egal */ }
+      window.location.href = '/api/google/start';
     }
     else if (act === 'odn-alle' || act === 'odn-keine') {
       odnSichtbar().forEach(function (z) { if (act === 'odn-alle') delete odn.ab[z.id]; else odn.ab[z.id] = true; });
@@ -10013,7 +10043,8 @@
           });
       } else {
         dialog({ titel: 'Recht zurückgeben?', text: 'Die App gibt das Recht zum Bearbeiten bei Google zurück. Google kennt dabei nur „alles oder nichts“ — '
-            + 'deshalb meldest du Google gleich danach mit einem Klick wieder an, nur zum Lesen. Postfach, Sicherungen und Dokumente laufen dann weiter wie bisher.',
+            + 'deshalb geht es gleich danach zu Google, um wieder zu verbinden, nur zum Lesen. Bis das erledigt ist, pausieren Postfach-Abruf, '
+            + 'Anfragen, Sicherungen in Drive, Kalender und Dokumente. Brichst du bei Google ab, zeigt die App das an, und du verbindest später.',
           knoepfe: [{ label: 'Abbrechen', wert: false }, { label: 'Zurückgeben', wert: true, art: 'primaer' }] })
           .then(function (r) {
             if (!r.wert) return;
@@ -10042,15 +10073,18 @@
             try {
               const a = await api('dokumente/namen', { method: 'PUT', body: { stapel: stapel, dateien: liste.slice(i, i + 25) } });
               fertig += a.umbenannt || 0;
+              // Geänderte Namen nur für wirklich Umbenanntes vergessen — der Rest bleibt, wie Louis ihn getippt hat
+              (a.ids || []).forEach(function (id) { delete odn.namen[id]; });
               (a.fehler || []).forEach(function (f) { fehler.push(f); });
-              if ((a.fehler || []).some(function (f) { return /Google erlaubt/.test(f.grund || ''); })) break;
+              // Nur ein fehlendes Recht hält alles an; eine einzelne gesperrte Datei nicht
+              if ((a.fehler || []).some(function (f) { return /Umbenennen erlauben/.test(f.grund || ''); })) break;
             } catch (e) { fehler.push({ grund: e.message }); break; }
           }
           odn.arbeit = '';
-          liste.forEach(function (z) { delete odn.namen[z.id]; });
           await odnLaden();
           od.dateien = null;   // Die Dokumentlisten holen die neuen Namen beim nächsten Anzeigen
-          toast(fertig + ' umbenannt' + (fehler.length ? ' · ' + fehler.length + ' nicht: ' + (fehler[0].grund || '') : ''));
+          toast(fertig + ' umbenannt' + (fehler.length ? ' · ' + fehler.length + ' nicht'
+            + (fehler[0].name ? ', z. B. „' + fehler[0].name + '“' : '') + ': ' + (fehler[0].grund || '') : ''));
           if (modal && modal.kind === 'od-namen') odnNeuZeichnen();
         });
     }
@@ -10062,7 +10096,8 @@
         .then(async function (r) {
           if (!r.wert) return;
           let rest = l.anzahl, fehler = '';
-          for (let runde = 0; rest > 0 && runde < 60; runde++) {
+          // So lange, wie es vorangeht (je Runde 25) — ohne feste Obergrenze
+          for (let runde = 0; rest > 0 && runde < 1000; runde++) {
             odn.arbeit = 'Stelle alte Namen wieder her … noch ' + rest;
             if (modal && modal.kind === 'od-namen') odnNeuZeichnen();
             try {
@@ -10075,7 +10110,7 @@
           odn.arbeit = '';
           await odnLaden();
           od.dateien = null;
-          toast(fehler ? 'Nicht alles zurück: ' + fehler : 'Alte Namen wiederhergestellt');
+          toast(fehler ? 'Nicht alles zurück: ' + fehler : (rest > 0 ? 'Noch ' + rest + ' nicht zurück — bitte noch einmal tippen' : 'Alte Namen wiederhergestellt'));
           if (modal && modal.kind === 'od-namen') odnNeuZeichnen();
         });
     }
