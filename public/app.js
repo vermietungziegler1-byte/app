@@ -1358,7 +1358,7 @@
     return odnSichtbar().filter(function (z) { return z.grund !== 'doppelt' && !odn.ab[z.id] && odnName(z).trim() && odnName(z) !== z.alt; });
   }
   // ---- Anhänge aus dem Postfach ablegen: eingeordnet nach Objekt, Art und Jahr ----
-  let anh = { daten: null, laedt: false, ab: {}, namen: {}, filter: '', suche: '', arbeit: '' };
+  let anh = { daten: null, laedt: false, ab: {}, an: {}, namen: {}, filter: '', suche: '', arbeit: '' };
   const ANH_FILTER = [['', 'Alle'], ['nk', 'Nebenkosten-Rechnungen'], ['rechnung', 'Sonstige Rechnungen'], ['abr', 'Nebenkostenabrechnungen'],
     ['vertrag', 'Verträge & Versicherung'], ['bescheid', 'Bescheide'], ['mieter', 'Mieter'], ['sonst', 'Sonstiges'], ['offen', 'Noch offen']];
   function anhLaden() {
@@ -1381,7 +1381,10 @@
   }
   function anhName(z) { return anh.namen[z.id] !== undefined ? anh.namen[z.id] : (z.dateiname || z.name); }
   function anhBereit(z) { return z.status === 'vorschlag' && z.objekt && z.ziel && !z.zielFehlt; }
-  function anhGewaehlt() { return anhSichtbar().filter(function (z) { return anhBereit(z) && !anh.ab[z.id]; }); }
+  // Unsichere Vorschläge sind nicht vorab angehakt — die nimmt Louis nur bewusst mit
+  function anhUnsicher(z) { return z.sicherheit === 'niedrig'; }
+  function anhIstAn(z) { return anhUnsicher(z) ? !!anh.an[z.id] : !anh.ab[z.id]; }
+  function anhGewaehlt() { return anhSichtbar().filter(function (z) { return anhBereit(z) && anhIstAn(z); }); }
   function anhFussAktualisieren() {
     const d = anh.daten;
     if (!d || !d.liste) return;
@@ -1421,11 +1424,12 @@
       h += '<div class="odn-liste anh-liste">' + reihe.map(function (g) {
         return '<div class="odn-obj">' + esc(g) + '</div>' + gruppen[g].map(function (z) {
           const wo = odEinheitName(z.objekt, z.einheit);
-          const bereit = anhBereit(z), ein = bereit && !anh.ab[z.id];
+          const bereit = anhBereit(z) && !anh.arbeit, ein = anhBereit(z) && anhIstAn(z);
           const datum = z.datum ? new Date(z.datum).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
           const von = String(z.von || '').replace(/\s*<[^>]*>/, '').replace(/"/g, '') || String(z.von || '');
           const gr = { nk: 'w-foto', abr: 'w-foto', rechnung: 'w-code', vertrag: 'w-klein', bescheid: 'w-klein', mieter: 'w-klein', sonst: 'w-klein', offen: 'w-dop' }[z.gruppe] || 'w-klein';
-          const art = z.status === 'neu' ? 'wird gelesen …' : (z.art || 'Sonstiges') + (z.kostenart ? ' · ' + z.kostenart : '');
+          const art = z.status === 'neu' ? 'wird gelesen …' : z.status === 'ablegen' ? 'wird abgelegt …'
+            : (z.art || 'Sonstiges') + (z.kostenart ? ' · ' + z.kostenart : '') + (anhUnsicher(z) && z.objekt ? ' · unsicher' : '');
           const zielText = z.status === 'neu' ? '' : !z.objekt ? 'Wohin? Objekt wählen' : z.zielFehlt ? z.zielFehlt
             : '→ ' + String(z.ziel || '').split('/').filter(Boolean).slice(-3).join(' › ') + (z.zielNeu && z.zielNeu.length ? ' (neu: ' + z.zielNeu.join(', ') + ')' : '');
           return '<div class="odn-z anh-z' + (ein ? '' : ' ab') + '">'
@@ -1436,9 +1440,10 @@
             + '<div class="odn-klein">' + esc(zielText) + (z.fehler ? ' · <span class="rot">' + esc(z.fehler) + '</span>' : '') + '</div></div>'
             + '<div class="anh-rechts"><span class="odn-warum ' + gr + '">' + esc(art) + '</span>'
             + '<span class="anh-wo">' + esc((z.jahr ? z.jahr + ' · ' : '') + (wo.einheit || (z.objekt ? 'ganzes Objekt' : ''))) + (z.betrag ? ' · ' + esc(money(z.betrag)) : '') + '</span>'
-            + '<span class="anh-knoepfe"><a class="tiny-link" href="/api/anhaenge/' + encodeURIComponent(z.id) + '/datei">Ansehen</a>'
-            + (z.status === 'neu' ? '' : '<button class="tiny ghost" data-act="anh-aendern" data-id="' + esc(z.id) + '">Ändern</button>')
-            + '<button class="tiny ghost" data-act="anh-weg" data-id="' + esc(z.id) + '" title="Nicht ablegen">✕</button></span></div></div>';
+            + '<span class="anh-knoepfe"><a class="tiny-link" download href="/api/anhaenge/' + encodeURIComponent(z.id) + '/datei">Ansehen</a>'
+            // Während abgelegt wird, nichts ändern — sonst würde ein schon abgelegter Anhang wieder angeboten
+            + (z.status === 'neu' || z.status === 'ablegen' || anh.arbeit ? '' : '<button class="tiny ghost" data-act="anh-aendern" data-id="' + esc(z.id) + '">Ändern</button>'
+              + '<button class="tiny ghost" data-act="anh-weg" data-id="' + esc(z.id) + '" title="Nicht ablegen">✕</button>') + '</span></div></div>';
         }).join('');
       }).join('') + '</div>';
     }
@@ -8145,7 +8150,7 @@
       body = '<h2>Anhang einordnen</h2>'
         + '<div class="od-datei">' + odSymbol({ name: z.name, mime: z.typ }) + '<div><b>' + esc(z.name || '') + '</b><div class="od-meta">'
         + esc(String(z.von || '').replace(/\s*<[^>]*>/, '')) + ' · „' + esc(z.betreff || '') + '“</div></div>'
-        + '<a class="tiny-link" href="/api/anhaenge/' + encodeURIComponent(z.id || '') + '/datei">Ansehen</a></div>'
+        + '<a class="tiny-link" download href="/api/anhaenge/' + encodeURIComponent(z.id || '') + '/datei">Ansehen</a></div>'
         + f('Objekt', '<select id="anh-objekt"><option value="">— bitte wählen —</option>'
             + data.objects.map(function (x) { return '<option value="' + esc(x.id) + '"' + (x.id === objektId ? ' selected' : '') + '>' + esc(x.name.split(',')[0]) + '</option>'; }).join('') + '</select>')
         + (o ? f('Wohnung', '<select id="anh-einheit"><option value="">Ganzes Objekt</option>'
@@ -9368,6 +9373,13 @@
       modal.kostenart = val('anh-kostenart'); modal.jahr = val('anh-jahr'); modal.dateiname = val('anh-dateiname');
     };
     if (anho) anho.addEventListener('change', function () { anhFormMerken(); modal.einheit = ''; render(); });
+    // Getipptes sofort merken — das Fenster wird auch von außen neu aufgebaut (z. B. beim Zurückkehren in die App)
+    ['anh-kostenart', 'anh-jahr', 'anh-dateiname'].forEach(function (id) {
+      const feld = root.querySelector('#' + id);
+      if (feld) feld.addEventListener('input', function () { if (modal && modal.kind === 'anh-aendern') modal[id.slice(4)] = feld.value; });
+    });
+    const anhe = root.querySelector('#anh-einheit');
+    if (anhe) anhe.addEventListener('change', function () { if (modal && modal.kind === 'anh-aendern') modal.einheit = anhe.value; });
     if (anha) anha.addEventListener('change', function () { anhFormMerken(); render(); });
     // Suchfeld im Postfach: Enter sucht, Esc beendet; das Getippte übersteht jeden Neuaufbau
     const pfq = root.querySelector('#pf-q');
@@ -10181,13 +10193,15 @@
     else if (act === 'anh-filter') { anh.filter = el.getAttribute('data-wert') || ''; render(); }
     else if (act === 'anh-an') {
       const id = el.getAttribute('data-id');
-      if (el.checked) delete anh.ab[id]; else anh.ab[id] = true;
+      if (el.checked) { delete anh.ab[id]; anh.an[id] = true; } else { anh.ab[id] = true; delete anh.an[id]; }
       const zeile = el.closest('.odn-z');
       if (zeile) zeile.classList.toggle('ab', !el.checked);
       anhFussAktualisieren();
     }
     else if (act === 'anh-alle' || act === 'anh-keine') {
-      anhSichtbar().forEach(function (z) { if (act === 'anh-alle') delete anh.ab[z.id]; else anh.ab[z.id] = true; });
+      anhSichtbar().forEach(function (z) {
+        if (act === 'anh-alle') { delete anh.ab[z.id]; anh.an[z.id] = true; } else { anh.ab[z.id] = true; delete anh.an[z.id]; }
+      });
       anhNeuZeichnen();
     }
     else if (act === 'anh-aendern') { modal = { kind: 'anh-aendern', id: el.getAttribute('data-id') }; render(); }
@@ -10220,6 +10234,9 @@
         knoepfe: [{ label: 'Abbrechen', wert: false }, { label: 'Ablegen', wert: true, art: 'primaer' }] })
         .then(async function (r) {
           if (!r.wert) return;
+          // Sofort sperren — ein zweiter Tipp startet sonst eine zweite Runde mit denselben Anhängen
+          anh.arbeit = 'Bereite vor …';
+          if (modal && modal.kind === 'anh') anhNeuZeichnen();
           // Geänderte Dateinamen zuerst übernehmen
           for (const z of liste) {
             if (anh.namen[z.id] !== undefined && anh.namen[z.id] !== z.dateiname) {
@@ -10237,7 +10254,10 @@
                 if (e.ok) { fertig++; delete anh.namen[e.id]; } else fehler.push(e);
               });
               if ((a.ergebnisse || []).some(function (e) { return /bearbeiten erlauben/.test(e.fehler || ''); })) break;
-            } catch (e) { fehler.push({ fehler: e.message }); break; }
+            } catch (e) {
+              // Verbindung weg: ob abgelegt wurde, weiß nur der Server — die Liste wird neu geladen
+              fehler.push({ fehler: 'Verbindung unterbrochen, Stand neu geladen (' + e.message + ')' }); break;
+            }
           }
           anh.arbeit = '';
           await anhLaden();

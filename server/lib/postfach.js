@@ -796,16 +796,30 @@ async function anhangListen(ordner, uids) {
     return erg;
   });
 }
-// Ein Anhang mit Inhalt — gefunden am Namen, sonst an der Reihenfolge
-async function anhangInhalt(ordner, uid, name, nr) {
+// Ein Anhang mit Inhalt: genau der Teil aus BODYSTRUCTURE (BODY.PEEK — die Mail bleibt ungelesen). Passt der Name nicht
+// oder wurde der Ordner neu nummeriert (UIDVALIDITY), lieber gar keiner als ein falscher.
+async function anhangInhalt(ordner, uid, teil, name, uidvalidity) {
   return imOrdner(ordner, async function (c) {
-    const g = await mailHolen(c, uid);
-    const liste = (g.p.attachments || []).filter(function (a) { return !a.related; });
-    // Am Namen erkennen (Unicode einheitlich); die Reihenfolge nur für namenlose Anhänge — sonst lieber gar keiner als ein falscher
+    if (uidvalidity && c.mailbox && c.mailbox.uidValidity !== undefined && String(c.mailbox.uidValidity) !== String(uidvalidity)) {
+      throw fehler('Der Ordner wurde auf dem Mailserver neu nummeriert — der Anhang wird beim nächsten Suchen neu erfasst', 409);
+    }
     const gleich = function (x) { return String(x || '').normalize('NFC') === String(name || '').normalize('NFC'); };
-    const a = liste.find(function (x) { return gleich(x.filename); }) || (liste[nr] && !liste[nr].filename ? liste[nr] : null);
-    if (!a) throw fehler('Den Anhang gibt es in der Mail nicht mehr', 404);
-    return { name: a.filename || name, typ: a.contentType || '', inhalt: a.content };
+    try {
+      const d = await c.download(String(uid), String(teil), { uid: true });
+      if (d && d.content) {
+        const stuecke = [];
+        for await (const s of d.content) stuecke.push(s);
+        const meta = d.meta || {};
+        if (meta.filename && name && !gleich(meta.filename)) throw fehler('Der Anhang passt nicht mehr zu dieser Mail', 409);
+        return { name: meta.filename || name, typ: meta.contentType || '', inhalt: Buffer.concat(stuecke) };
+      }
+    } catch (e) {
+      if (e.status === 409) throw e;   // sonst über die ganze Mail versuchen
+    }
+    const g = await mailHolen(c, uid);
+    const gleichnamig = (g.p.attachments || []).filter(function (a) { return !a.related && gleich(a.filename); });
+    if (gleichnamig.length !== 1) throw fehler('Den Anhang gibt es in der Mail nicht mehr', 404);
+    return { name: gleichnamig[0].filename || name, typ: gleichnamig[0].contentType || '', inhalt: gleichnamig[0].content };
   });
 }
 

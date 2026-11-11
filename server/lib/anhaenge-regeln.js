@@ -22,41 +22,30 @@ function taugt(a) {
   return Number(a.groesse) >= 2000;
 }
 
-// Hat eine Mail mit der Vermietung zu tun? Ein Objekt, ein Mieter oder ein typisches Wort in Betreff, Anhang oder Text
-const WORTE = ['rechnung', 'rechnungen', 'abrechnung', 'nebenkosten', 'betriebskosten', 'heizkosten', 'bescheid', 'vertrag', 'vertraege',
-  'versicherung', 'police', 'angebot', 'kostenvoranschlag', 'wartung', 'ista', 'techem', 'brunata', 'stadtwerke', 'grundsteuer', 'abwasser',
-  'kaution', 'mietvertrag', 'uebergabe', 'uebergabeprotokoll', 'protokoll', 'mahnung', 'gutschrift', 'zaehlerstand', 'schornsteinfeger',
-  'hausmeister', 'reparatur', 'auftrag', 'auftragsbestaetigung', 'lastschrift', 'jahresabrechnung', 'messdienst', 'mieterhoehung',
-  'kuendigung', 'selbstauskunft', 'gutachten', 'handwerker', 'wohnung', 'miete'];
+// Hat eine Mail mit der Vermietung zu tun?
+//  'objekt' = ein Objekt, eine Wohnung oder ein Mieter ist erkennbar → der Assistent darf den Anhang lesen
+//  'wort'   = nur ein typisches Wort (z. B. „Rechnung“) → der Assistent sieht nur Betreff, Absender und Dateiname,
+//             denn hinter „Rechnung“ steckt auch mal eine Arztrechnung
+//  ''       = nichts davon → bleibt außen vor
+// Vermietungs-Wörter, die auch in Zusammensetzungen eindeutig sind („Nebenkostenabrechnung“, „Mietvertragsentwurf“) …
+const STAEMME = ['nebenkosten', 'betriebskosten', 'heizkosten', 'grundsteuer', 'mietvertrag', 'mietkaution', 'kaution', 'wohnungsuebergabe',
+  'uebergabeprotokoll', 'hausmeister', 'schornsteinfeger', 'hausgeld', 'mieterhoehung', 'mieterselbstauskunft', 'ista', 'techem', 'brunata',
+  'messdienst', 'stadtwerke', 'abwasser', 'treppenhaus', 'winterdienst', 'gartenpflege', 'allgemeinstrom', 'stromabrechnung', 'stromrechnung',
+  'wasserabrechnung', 'wasserrechnung', 'gasabrechnung', 'abfallgebuehr', 'muellgebuehr'];
+// … und allgemeine Wörter, die nur als ganzes Wort zählen (sonst passt „Gehaltsabrechnung“ oder „Kreditkartenabrechnung“)
+const WOERTER = ['rechnung', 'rechnungen', 'abrechnung', 'jahresabrechnung', 'bescheid', 'vertrag', 'angebot', 'kostenvoranschlag', 'wartung',
+  'wartungsvertrag', 'mahnung', 'gutschrift', 'zaehlerstand', 'reparatur', 'kuendigung', 'selbstauskunft', 'gutachten', 'miete', 'wohnung', 'police'];
 function relevant(m, wb) {
-  const kopf = normal((m.betreff || '') + ' ' + (m.anhaenge || ''));
-  const text = normal(m.text || '');
-  const wort = WORTE.some(function (w) { return kopf.indexOf(w) !== -1 || (' ' + text + ' ').indexOf(' ' + w + ' ') !== -1; });
-  if (wort) return true;
   const r = regeln.zuordnen(String(m.betreff || '') + ' ' + String(m.von_name || ''), String(m.anhaenge || '') + ' ' + String(m.text || '').slice(0, 600), wb);
-  return !!(r.objekt || (r.kandidaten && r.kandidaten.length));
+  if (r.objekt || (r.kandidaten && r.kandidaten.length)) return 'objekt';
+  const kopf = normal((m.betreff || '') + ' ' + (m.anhaenge || ''));
+  const worte = kopf.split(' ').concat(normal(m.von_name || '').split(' '));
+  if (worte.some(function (w) { return STAEMME.some(function (s) { return w.indexOf(s) === 0; }); })) return 'wort';
+  if (worte.some(function (w) { return WOERTER.indexOf(w) !== -1; })) return 'wort';
+  return '';
 }
 
-// Liegt der Anhang schon in Drive? Gleicher Name (ohne Endung, Groß/klein, Zeichen) — oder gleiche Endung und fast
-// gleiche Größe (Mails tragen Anhänge in Base64, also gut ein Drittel größer)
-function driveVerzeichnis(dateien) {
-  const namenSet = new Set(), groessen = new Map();
-  (dateien || []).forEach(function (d) {
-    namenSet.add(normal(namen.stamm(d.name)));
-    const e = namen.endung(d.name).toLowerCase();
-    if (!groessen.has(e)) groessen.set(e, []);
-    if (d.groesse) groessen.get(e).push(Number(d.groesse));
-  });
-  return { namen: namenSet, groessen: groessen };
-}
-function inDrive(a, verz) {
-  const n = normal(namen.stamm(a.name));
-  if (n && verz.namen.has(n)) return true;
-  const roh = Number(a.groesse) || 0;
-  if (roh < 20000) return false;
-  const geschaetzt = roh * 0.73;
-  return (verz.groessen.get(namen.endung(a.name).toLowerCase()) || []).some(function (g) { return Math.abs(g - geschaetzt) / g < 0.03; });
-}
+// Ob ein Anhang schon in Drive liegt, entscheidet anhaenge.js an der Prüfsumme (md5) — nie am Namen oder an der Größe.
 
 // Arten, die der Assistent vergeben darf — und wohin sie in Drive gehören
 const ARTEN = ['Nebenkosten-Rechnung', 'Nebenkostenabrechnung', 'Rechnung', 'Angebot', 'Vertrag', 'Versicherung', 'Bescheid',
@@ -115,4 +104,4 @@ function dateiname(vorschlag, a, m, art) {
   return namen.sauber(s, a.name) || (namen.stamm(a.name) + e);
 }
 
-module.exports = { taugt, relevant, driveVerzeichnis, inDrive, ARTEN, MIETER, KOSTENARTEN, KATEGORIEN, kategorie, dokArt, ohneAssistent, dateiname };
+module.exports = { taugt, relevant, ARTEN, MIETER, KOSTENARTEN, KATEGORIEN, kategorie, dokArt, ohneAssistent, dateiname };

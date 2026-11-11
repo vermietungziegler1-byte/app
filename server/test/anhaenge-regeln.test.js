@@ -22,16 +22,12 @@ test('Welche Anhänge taugen', function () {
 });
 
 test('Welche Mails zur Vermietung gehören könnten', function () {
-  assert.equal(ar.relevant({ betreff: 'Rechnung – 2026110205', anhaenge: 'RE_2026110205.pdf', text: '' }, wb), true);
-  assert.equal(ar.relevant({ betreff: 'Unterlagen', anhaenge: 'scan.pdf', text: 'für das Haus Tribergle 22' }, wb), true, 'Objekt im Text');
-  assert.equal(ar.relevant({ betreff: 'Fotos vom Urlaub', anhaenge: 'IMG_1.jpg', text: 'Liebe Grüße aus Italien' }, wb), false);
-});
-
-test('Liegt schon in Drive: gleicher Name oder gleiche Größe', function () {
-  const verz = ar.driveVerzeichnis([{ name: 'Stromrechnung 2024.pdf', groesse: 100000 }, { name: 'Plan.pdf', groesse: 50000 }]);
-  assert.equal(ar.inDrive({ name: 'stromrechnung_2024.PDF', groesse: 5 }, verz), true, 'Name ohne Groß/klein und Zeichen');
-  assert.equal(ar.inDrive({ name: 'Anhang.pdf', groesse: Math.round(100000 / 0.73) }, verz), true, 'Base64 ist gut ein Drittel größer');
-  assert.equal(ar.inDrive({ name: 'Anhang.pdf', groesse: 300000 }, verz), false);
+  assert.equal(ar.relevant({ betreff: 'Rechnung – 2026110205', anhaenge: 'RE_2026110205.pdf', text: '' }, wb), 'wort', 'nur das Wort: der Assistent liest den Inhalt nicht');
+  assert.equal(ar.relevant({ betreff: 'Ihre Gehaltsabrechnung', anhaenge: 'Gehaltsabrechnung_Oktober.pdf', text: '' }, wb), '', 'Abrechnung nur als ganzes Wort');
+  assert.equal(ar.relevant({ betreff: 'Ihre Unterlagen', von_name: 'Stadtwerke Waiblingen', anhaenge: 'Dokument.pdf', text: '' }, wb), 'wort');
+  assert.equal(ar.relevant({ betreff: 'Nebenkostenabrechnung 2025', anhaenge: 'NKA.pdf', text: '' }, wb), 'wort');
+  assert.equal(ar.relevant({ betreff: 'Unterlagen', anhaenge: 'scan.pdf', text: 'für das Haus Tribergle 22' }, wb), 'objekt', 'Objekt im Text');
+  assert.equal(ar.relevant({ betreff: 'Fotos vom Urlaub', anhaenge: 'IMG_1.jpg', text: 'Liebe Grüße aus Italien' }, wb), '');
 });
 
 test('Arten, Kategorien und Ordner', function () {

@@ -66,6 +66,11 @@ try {
   db.exec('ALTER TABLE dok_dateien ADD COLUMN aufnahme TEXT');
   db.prepare("DELETE FROM einstellungen WHERE schluessel = 'dok_seite'").run();
 } catch (e) { /* gibt es schon */ }
+// Prüfsumme von Google (md5) — damit erkennt „Anhänge ablegen“ sicher, was schon in Drive liegt
+try {
+  db.exec('ALTER TABLE dok_dateien ADD COLUMN md5 TEXT');
+  db.prepare("DELETE FROM einstellungen WHERE schluessel = 'dok_seite'").run();
+} catch (e) { /* gibt es schon */ }
 // Was beim Ablegen aus dem Postfach festgelegt wurde (anhaenge.js): Jahr, Kostenart, Betrag, woher
 db.exec('CREATE TABLE IF NOT EXISTS dok_meta (id TEXT PRIMARY KEY, jahr TEXT, kostenart TEXT, betrag REAL, herkunft TEXT)');
 // Rechnungen in einem Nebenkosten-Ordner sind umlagefähige Rechnungen (neue Art) — einmalig nachziehen, was die Regeln vergeben haben
@@ -161,12 +166,12 @@ function erlaubt(id, k, a) {
 // ---------------- Dateien merken ----------------
 const dateiHolen = db.prepare('SELECT * FROM dok_dateien WHERE id = ?');
 const dateiLoeschen = db.prepare('DELETE FROM dok_dateien WHERE id = ?');
-const dateiNeu = db.prepare(`INSERT INTO dok_dateien (id, name, pfad, eltern, mime, groesse, geaendert, url, aufnahme, status, erstmals, lauf)
-  VALUES (@id, @name, @pfad, @eltern, @mime, @groesse, @geaendert, @url, @aufnahme, 'neu', @erstmals, @lauf)`);
+const dateiNeu = db.prepare(`INSERT INTO dok_dateien (id, name, pfad, eltern, mime, groesse, geaendert, url, aufnahme, md5, status, erstmals, lauf)
+  VALUES (@id, @name, @pfad, @eltern, @mime, @groesse, @geaendert, @url, @aufnahme, @md5, 'neu', @erstmals, @lauf)`);
 const dateiAuffrischen = db.prepare(`UPDATE dok_dateien SET name = @name, pfad = @pfad, eltern = @eltern, mime = @mime, groesse = @groesse,
-  geaendert = @geaendert, url = @url, aufnahme = @aufnahme, lauf = @lauf WHERE id = @id`);
+  geaendert = @geaendert, url = @url, aufnahme = @aufnahme, md5 = @md5, lauf = @lauf WHERE id = @id`);
 const dateiZuruecksetzen = db.prepare(`UPDATE dok_dateien SET name = @name, pfad = @pfad, eltern = @eltern, mime = @mime, groesse = @groesse,
-  geaendert = @geaendert, url = @url, aufnahme = @aufnahme, lauf = @lauf, status = 'neu', objekt = '', einheit = '', art = '', titel = '', datum = '', quelle = '' WHERE id = @id`);
+  geaendert = @geaendert, url = @url, aufnahme = @aufnahme, md5 = @md5, lauf = @lauf, status = 'neu', objekt = '', einheit = '', art = '', titel = '', datum = '', quelle = '' WHERE id = @id`);
 
 // Eine Datei aus Google übernehmen — oder vergessen, wenn sie nicht (mehr) in einem gewählten Ordner liegt
 function dateiMerken(f, k, a, lauf, erstmals) {
@@ -175,7 +180,7 @@ function dateiMerken(f, k, a, lauf, erstmals) {
   if (pfad === null || !erlaubt(eltern, k, a) || !regeln.kommtInFrage(pfad, f.name, f.mimeType)) { dateiLoeschen.run(f.id); return false; }
   const zeile = { id: f.id, name: String(f.name || ''), pfad: pfad || '/', eltern: eltern, mime: f.mimeType || '', groesse: Number(f.size) || 0,
     geaendert: Date.parse(f.modifiedTime || '') || 0, url: f.webViewLink || ('https://drive.google.com/file/d/' + f.id + '/view'),
-    aufnahme: (f.imageMediaMetadata && f.imageMediaMetadata.time) || '', lauf: lauf };
+    aufnahme: (f.imageMediaMetadata && f.imageMediaMetadata.time) || '', md5: f.md5Checksum || '', lauf: lauf };
   const alt = dateiHolen.get(f.id);
   if (!alt) { dateiNeu.run(Object.assign({ erstmals: erstmals }, zeile)); return true; }
   // Die Datei selbst umbenannt oder in einen anderen Ordner gelegt: neu zuordnen — außer Louis hat selbst entschieden.
@@ -206,7 +211,7 @@ async function allesEinlesen(a) {
   })();
   if (!a) return;
   const dateien = await alleSeiten('/files?pageSize=1000&spaces=drive&fields='
-    + q('nextPageToken,files(id,name,mimeType,parents,modifiedTime,size,webViewLink,imageMediaMetadata(time))')
+    + q('nextPageToken,files(id,name,mimeType,parents,modifiedTime,size,webViewLink,md5Checksum,imageMediaMetadata(time))')
     + '&q=' + q("mimeType != '" + ORDNER_TYP + "' and trashed = false"));
   if (auswahlGeaendert(auswahlVorher)) return;
   // Beim allerersten Einlesen ist nichts „neu“ — sonst stünde an jeder Datei zwei Tage lang NEU
@@ -225,7 +230,7 @@ async function allesEinlesen(a) {
 async function aenderungenHolen(a) {
   let seite = einstellung('dok_seite');
   const auswahlVorher = einstellung('dok_auswahl');
-  const felder = 'nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,parents,modifiedTime,size,webViewLink,trashed,imageMediaMetadata(time)))';
+  const felder = 'nextPageToken,newStartPageToken,changes(fileId,removed,file(id,name,mimeType,parents,modifiedTime,size,webViewLink,trashed,md5Checksum,imageMediaMetadata(time)))';
   for (let runde = 0; seite && runde < 200; runde++) {
     let r;
     try {

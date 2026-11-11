@@ -21,9 +21,11 @@ module.exports = {
     });
     return erg;
   },
-  anhangInhalt: async function (ordner, uid, name) {
+  // Wie das echte Postfach: genau der Teil (teil = Position + 2), der Name muss passen
+  anhangInhalt: async function (ordner, uid, teil, name) {
     const m = mails().find(function (x) { return x.ordner === ordner && x.uid === uid; });
-    const a = m && m.anhaenge.find(function (x) { return x.name === name; });
+    const a = m && m.anhaenge[Number(teil) - 2];
+    if (a && a.name !== name) throw new Error('Der Anhang passt nicht mehr zu dieser Mail');
     if (!a) throw new Error('Den Anhang gibt es in der Mail nicht mehr');
     return { name: a.name, typ: a.typ, inhalt: Buffer.from(a.inhalt || 'PDF-Inhalt') };
   }

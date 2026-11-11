@@ -25,8 +25,9 @@ function quelle() { return process.env.ANHANG_TESTQUELLE ? require(process.env.A
 
 const app = express.Router();
 const TAKT_MS = 10 * 60 * 1000;
-const SEIT = Date.parse('2019-01-01T00:00:00Z');
-const MAILS_JE_LAUF = 300, LESEN_JE_LAUF = 20, LESEN_JE_TAG = 250, INHALT_HOECHSTENS = 3 * 1024 * 1024;
+// Die letzten Jahre genügen — ältere Mails sind meist erledigt, und jeder gelesene Anhang kostet
+const SEIT = Date.parse('2023-01-01T00:00:00Z');
+const MAILS_JE_LAUF = 300, LESEN_JE_LAUF = 20, LESEN_JE_TAG = 250, INHALT_HOECHSTENS = 3 * 1024 * 1024, PRUEFEN_HOECHSTENS = 15 * 1024 * 1024;
 const UPLOAD = process.env.GDRIVE_UPLOAD_BASIS || 'https://www.googleapis.com/upload/drive/v3';
 const ORDNER_TYP = 'application/vnd.google-apps.folder';
 
@@ -40,11 +41,14 @@ db.exec(`
     status      TEXT,
     objekt      TEXT DEFAULT '', einheit TEXT DEFAULT '', art TEXT DEFAULT '', kostenart TEXT DEFAULT '', jahr TEXT DEFAULT '',
     betrag      REAL, dateiname TEXT DEFAULT '', quelle TEXT DEFAULT '', sicherheit TEXT DEFAULT '',
-    drive_id    TEXT, fehler TEXT, erstellt INTEGER
+    drive_id    TEXT, fehler TEXT, erstellt INTEGER, signal TEXT DEFAULT ''
   );
   CREATE INDEX IF NOT EXISTS anh_dateien_status ON anh_dateien (status);
 `);
-// status: neu (noch nicht eingeordnet) · vorschlag (wartet auf Louis) · in_drive (lag schon in Drive) · abgelegt · ignoriert · fremd
+// status: neu (noch nicht eingeordnet) · vorschlag (wartet auf Louis) · ablegen (wird gerade abgelegt) · in_drive (lag schon in
+// Drive, gleiche Prüfsumme) · abgelegt · ignoriert · fremd
+// Ist der Server mitten im Ablegen neu gestartet: diese wieder zum Ablegen anbieten
+db.prepare("UPDATE anh_dateien SET status = 'vorschlag' WHERE status = 'ablegen'").run();
 
 function fehler(text, status) { const e = new Error(text); e.status = status; return e; }
 function woerterbuch(s) {
@@ -63,7 +67,9 @@ function tageszaehler(dazu) {
 const stand = { laeuft: false, zuletzt: 0, fehler: null };
 const merkeMail = db.prepare('INSERT OR REPLACE INTO anh_mails (schluessel, geprueft) VALUES (?, ?)');
 const neuerAnhang = db.prepare(`INSERT OR IGNORE INTO anh_dateien (id, ordner, uid, uidvalidity, teil, nr, datum, von, betreff, mailtext, name, typ,
-  groesse, status, erstellt) VALUES (@id, @ordner, @uid, @uidvalidity, @teil, @nr, @datum, @von, @betreff, @mailtext, @name, @typ, @groesse, @status, @erstellt)`);
+  groesse, status, erstellt, signal) VALUES (@id, @ordner, @uid, @uidvalidity, @teil, @nr, @datum, @von, @betreff, @mailtext, @name, @typ, @groesse,
+  'neu', @erstellt, @signal)`);
+function pruefsumme(buf) { return require('crypto').createHash('md5').update(buf).digest('hex'); }
 
 async function neueAnhaenge(q) {
   const wb = woerterbuch();
@@ -74,12 +80,12 @@ async function neueAnhaenge(q) {
     const s = m.ordner + '|' + m.uidvalidity + '|' + m.uid;
     if (geprueft.has(s)) continue;
     // Hat erkennbar nichts mit der Vermietung zu tun: gar nicht erst den Mailserver fragen
-    if (!ar.relevant(m, wb)) { merkeMail.run(s, Date.now()); continue; }
-    offen.push(Object.assign({ schluessel: s }, m));
+    const signal = ar.relevant(m, wb);
+    if (!signal) { merkeMail.run(s, Date.now()); continue; }
+    offen.push(Object.assign({ schluessel: s, signal: signal }, m));
     if (offen.length >= MAILS_JE_LAUF) break;
   }
   if (!offen.length) return 0;
-  const verz = ar.driveVerzeichnis(db.prepare('SELECT name, groesse FROM dok_dateien').all());
   const proOrdner = new Map();
   offen.forEach(function (m) { if (!proOrdner.has(m.ordner)) proOrdner.set(m.ordner, []); proOrdner.get(m.ordner).push(m); });
   let gefunden = 0;
@@ -98,8 +104,7 @@ async function neueAnhaenge(q) {
             if (!ar.taugt(a)) return;
             const r = neuerAnhang.run({ id: m.schluessel + '|' + a.teil, ordner: m.ordner, uid: m.uid, uidvalidity: m.uidvalidity, teil: a.teil, nr: meineNr,
               datum: m.datum || 0, von: ((m.von_name || '') + (m.von_adresse ? ' <' + m.von_adresse + '>' : '')).trim(), betreff: m.betreff || '',
-              mailtext: String(m.text || '').slice(0, 1500), name: a.name, typ: a.typ, groesse: a.groesse,
-              status: ar.inDrive(a, verz) ? 'in_drive' : 'neu', erstellt: Date.now() });
+              mailtext: String(m.text || '').slice(0, 1500), name: a.name, typ: a.typ, groesse: a.groesse, erstellt: Date.now(), signal: m.signal });
             gefunden += r.changes;
           });
           merkeMail.run(m.schluessel, Date.now());
@@ -137,23 +142,24 @@ const SYSTEM = 'Du hilfst Louis Ziegler, einem privaten Vermieter, Mail-Anhänge
   + '- sicherheit: wie sicher Objekt und Art sind.\n'
   + 'Nichts erfinden: was nicht hervorgeht, leer lassen und sicherheit „niedrig“.';
 
-async function lesen(q, a, s) {
+// Der Assistent sieht den Inhalt (und den Anfang der Mail) nur, wenn ein Objekt, eine Wohnung oder ein Mieter erkennbar ist.
+// Sonst nur Absender, Betreff und Dateiname — hinter „Rechnung“ kann auch eine Arztrechnung stecken.
+async function lesen(a, s, inhalt) {
   const pdf = /pdf/i.test(a.typ || '') || /\.pdf$/i.test(a.name);
   const bild = /\.(jpe?g|png)$/i.test(a.name) || /^image\/(jpeg|png)$/i.test(a.typ || '');
-  let inhalt = null;
-  if ((pdf || bild) && Number(a.groesse) * 0.73 <= INHALT_HOECHSTENS) {
-    const d = await q.anhangInhalt(a.ordner, a.uid, a.name, a.nr);
-    if (d && d.inhalt && d.inhalt.length <= INHALT_HOECHSTENS) inhalt = d.inhalt;
-  }
-  const inhaltBlock = !inhalt ? [] : [pdf
+  const darfLesen = a.signal === 'objekt' && inhalt && inhalt.length <= INHALT_HOECHSTENS && (pdf || bild);
+  const inhaltBlock = !darfLesen ? [] : [pdf
     ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: inhalt.toString('base64') } }
     : { type: 'image', source: { type: 'base64', media_type: /png/i.test((a.typ || '') + a.name) ? 'image/png' : 'image/jpeg', data: inhalt.toString('base64') } }];
   const datum = a.datum ? new Date(a.datum).toISOString().slice(0, 10) : '';
+  const text = 'Mail von: ' + a.von + '\nBetreff: ' + a.betreff + '\nDatum: ' + datum + '\nAnhang: ' + a.name
+    + (darfLesen ? '\nAnfang der Mail:\n' + String(a.mailtext || '').slice(0, 1200)
+      : '\n(Inhalt und Mailtext absichtlich nicht mitgeschickt — nur nach Absender, Betreff und Dateiname urteilen; im Zweifel vermietung = false '
+        + 'bei erkennbar Privatem, sonst Objekt leer und sicherheit „niedrig“.)');
   return intern.claudeJson({
     max_tokens: 1500,
     system: SYSTEM + '\n\nObjekte und Wohnungen:\n' + intern.objektListe(s),
-    messages: [{ role: 'user', content: inhaltBlock.concat([{ type: 'text', text: 'Mail von: ' + a.von + '\nBetreff: ' + a.betreff + '\nDatum: ' + datum
-      + '\nAnhang: ' + a.name + (inhalt ? '' : ' (Inhalt nicht lesbar — nur nach Mail und Namen urteilen)') + '\nAnfang der Mail:\n' + String(a.mailtext || '').slice(0, 1200) }]) }]
+    messages: [{ role: 'user', content: inhaltBlock.concat([{ type: 'text', text: text }]) }]
   }, SCHEMA, tageszaehler);
 }
 
@@ -171,12 +177,22 @@ async function einordnen(q) {
   const s = standInhalt() || {};
   const wb = woerterbuch(s);
   const mitAssistent = !!einstellung('anthropic_token');
-  const zeilen = db.prepare("SELECT * FROM anh_dateien WHERE status = 'neu' ORDER BY datum DESC LIMIT ?").all(mitAssistent ? LESEN_JE_LAUF : 2000);
+  // Prüfsummen der Dateien in Drive: liegt der Anhang schon dort, ist er erledigt — ganz ohne Raten am Namen
+  const inDrive = new Map(db.prepare("SELECT md5, id FROM dok_dateien WHERE md5 IS NOT NULL AND md5 <> ''").all().map(function (r) { return [r.md5, r.id]; }));
+  const schonDa = db.prepare("UPDATE anh_dateien SET status = 'in_drive', drive_id = ? WHERE id = ? AND status = 'neu'");
+  const merkeFehler = db.prepare('UPDATE anh_dateien SET fehler = ? WHERE id = ?');
+  const zeilen = db.prepare("SELECT * FROM anh_dateien WHERE status = 'neu' ORDER BY datum DESC LIMIT ?").all(mitAssistent ? LESEN_JE_LAUF : 200);
   for (const a of zeilen) {
+    if (mitAssistent && tageszaehler(0) >= LESEN_JE_TAG) break;   // Tageslimit: morgen weiter
+    let inhalt = null;
+    if (Number(a.groesse) * 0.73 <= PRUEFEN_HOECHSTENS) {
+      try { inhalt = (await q.anhangInhalt(a.ordner, a.uid, a.teil, a.name, a.uidvalidity)).inhalt; }
+      catch (x) { merkeFehler.run(String(x.message).slice(0, 300), a.id); }
+    }
+    if (inhalt && inDrive.has(pruefsumme(inhalt))) { schonDa.run(inDrive.get(pruefsumme(inhalt)), a.id); continue; }
     if (!mitAssistent) { mitRegeln(a, wb); continue; }
-    if (tageszaehler(0) >= LESEN_JE_TAG) break;   // Tageslimit: morgen weiter
     let r;
-    try { r = await lesen(q, a, s); }
+    try { r = await lesen(a, s, inhalt); }
     catch (x) {
       if (abbrechen(x)) break;
       mitRegeln(a, wb);   // nicht lesbar: dann wenigstens nach Regeln
@@ -271,7 +287,8 @@ async function ziel(a, b, wb, erstellen) {
     if (vorhanden) { id = vorhanden.id; pfad += '/' + vorhanden.name; continue; }
     neu.push(s.neu);
     if (erstellen) {
-      const angelegt = await ordnerAnlegen(s.neu, id);
+      // Erst bei Google nachsehen: vielleicht gibt es den Ordner schon (von Hand angelegt, noch nicht abgeglichen)
+      const angelegt = (await ordnerBeiGoogle(s.neu, id)) || await ordnerAnlegen(s.neu, id);
       intern.ordnerMerken.run(intern.ordnerZeile({ id: angelegt.id, name: s.neu, parents: [id] }, Date.now()));
       if (!b.kinder.has(id)) b.kinder.set(id, []);
       b.kinder.get(id).push({ id: angelegt.id, name: s.neu });
@@ -299,6 +316,13 @@ async function googleAnfrage(url, optionen) {
   }
   return antwort.json();
 }
+async function ordnerBeiGoogle(name, eltern) {
+  // Hochkomma und Backslash in Drive-Abfragen maskieren
+  const maske = function (s) { return String(s).replace(/['\\]/g, '\\$&'); };
+  const q = "'" + maske(eltern) + "' in parents and name = '" + maske(name) + "' and mimeType = '" + ORDNER_TYP + "' and trashed = false";
+  const r = await googleAnfrage(intern.DRIVE + '/files?pageSize=5&fields=' + encodeURIComponent('files(id,name)') + '&q=' + encodeURIComponent(q), {});
+  return (r.files || [])[0] || null;
+}
 function ordnerAnlegen(name, eltern) {
   return googleAnfrage(intern.DRIVE + '/files?fields=id,name', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -323,7 +347,7 @@ async function ablegen(a, b, wb) {
   if (!a.objekt) throw fehler('Erst ein Objekt wählen', 400);
   const z = await ziel(a, b, wb, true);
   if (!z.id) throw fehler(z.fehlt || 'Kein Zielordner', 409);
-  const d = await quelle().anhangInhalt(a.ordner, a.uid, a.name, a.nr);
+  const d = await quelle().anhangInhalt(a.ordner, a.uid, a.teil, a.name, a.uidvalidity);
   // Gleicher Name im Zielordner? Dann eine Nummer dazu
   const e = namen.endung(a.dateiname || a.name), basis = namen.stamm(a.dateiname || a.name);
   let name = a.dateiname || a.name;
@@ -356,7 +380,7 @@ app.get('/api/anhaenge', nurAngemeldet, nurVerwalter, async function (req, res) 
   const s = standInhalt() || {};
   const wb = woerterbuch(s);
   const b = ordnerBaum();
-  const zeilen = db.prepare("SELECT * FROM anh_dateien WHERE status IN ('neu', 'vorschlag') ORDER BY datum DESC LIMIT 3000").all();
+  const zeilen = db.prepare("SELECT * FROM anh_dateien WHERE status IN ('neu', 'vorschlag', 'ablegen') ORDER BY datum DESC LIMIT 3000").all();
   const liste = [];
   for (const a of zeilen) {
     const z = zeileAus(a, b, wb);
@@ -382,7 +406,8 @@ app.put('/api/anhaenge/:id', nurAngemeldet, nurVerwalter, function (req, res) {
   if (!a) return res.status(404).json({ fehler: 'Anhang nicht gefunden' });
   const b = req.body || {};
   if (b.ignorieren) {
-    db.prepare("UPDATE anh_dateien SET status = 'ignoriert' WHERE id = ?").run(a.id);
+    const r = db.prepare("UPDATE anh_dateien SET status = 'ignoriert' WHERE id = ? AND status IN ('neu', 'vorschlag')").run(a.id);
+    if (!r.changes) return res.status(409).json({ fehler: 'Dieser Anhang ist schon abgelegt oder wird gerade abgelegt' });
     return res.json({ ok: true });
   }
   const s = standInhalt() || {};
@@ -396,7 +421,11 @@ app.put('/api/anhaenge/:id', nurAngemeldet, nurVerwalter, function (req, res) {
   const kostenart = b.kostenart !== undefined ? String(b.kostenart || '').slice(0, 60) : a.kostenart;
   const dateiname = b.dateiname !== undefined ? ar.dateiname(String(b.dateiname || ''), a, { betreff: a.betreff, von: a.von, datum: a.datum }, art) : a.dateiname;
   db.prepare(`UPDATE anh_dateien SET status = 'vorschlag', objekt = ?, einheit = ?, art = ?, jahr = ?, kostenart = ?, dateiname = ?, quelle = 'louis'
-    WHERE id = ?`).run(objekt, einheit, art, jahr, kostenart, dateiname, a.id);
+    WHERE id = ? AND status IN ('neu', 'vorschlag')`).run(objekt, einheit, art, jahr, kostenart, dateiname, a.id);
+  // Schon abgelegt (oder gerade dabei): nicht wieder anbieten, sonst landete die Datei zweimal in Drive
+  if (!db.prepare("SELECT 1 FROM anh_dateien WHERE id = ? AND status = 'vorschlag'").get(a.id)) {
+    return res.status(409).json({ fehler: 'Dieser Anhang ist schon abgelegt oder wird gerade abgelegt' });
+  }
   res.json({ ok: true });
 });
 
@@ -405,29 +434,41 @@ app.post('/api/anhaenge/ablegen', nurAngemeldet, nurVerwalter, async function (r
   if (!google.darfBearbeiten()) return res.status(409).json({ fehler: 'Ablegen ist ausgeschaltet — erst „Google Drive bearbeiten erlauben“ einschalten' });
   if (!intern.auswahl()) return res.status(409).json({ fehler: 'Erst Google Drive einrichten (Ordner wählen)' });
   const ids = (Array.isArray((req.body || {}).ids) ? req.body.ids : []).slice(0, 10).map(String);
+  // Immer nur eine Ablage zur selben Zeit (zweites Gerät, doppelter Tipp): die nächste wartet, bis die vorige fertig ist —
+  // so sieht sie auch die Jahresordner, die die vorige gerade angelegt hat
+  const lauf = ablageKette.then(function () { return ablageLauf(ids); });
+  ablageKette = lauf.catch(function () { /* die nächste trotzdem */ });
+  try { res.json({ ok: true, ergebnisse: await lauf }); }
+  catch (x) { res.status(502).json({ fehler: x.message }); }
+});
+let ablageKette = Promise.resolve();
+async function ablageLauf(ids) {
   const wb = woerterbuch();
   const b = ordnerBaum();
   const ergebnisse = [];
+  const beanspruchen = db.prepare("UPDATE anh_dateien SET status = 'ablegen' WHERE id = ? AND status = 'vorschlag'");
+  const zurueck = db.prepare("UPDATE anh_dateien SET status = 'vorschlag', fehler = ? WHERE id = ? AND status = 'ablegen'");
   for (const id of ids) {
-    const a = db.prepare("SELECT * FROM anh_dateien WHERE id = ? AND status = 'vorschlag'").get(id);
-    if (!a) { ergebnisse.push({ id: id, ok: false, fehler: 'Nicht (mehr) zum Ablegen vorgemerkt' }); continue; }
+    // Erst beanspruchen: was schon (oder gerade) abgelegt wird, fasst keine zweite Anfrage an
+    if (!beanspruchen.run(id).changes) { ergebnisse.push({ id: id, ok: false, fehler: 'Nicht (mehr) zum Ablegen vorgemerkt' }); continue; }
+    const a = db.prepare('SELECT * FROM anh_dateien WHERE id = ?').get(id);
     try {
       const r = await ablegen(a, b, wb);
       ergebnisse.push({ id: id, ok: true, pfad: r.pfad, name: r.name });
     } catch (x) {
-      db.prepare('UPDATE anh_dateien SET fehler = ? WHERE id = ?').run(String(x.message).slice(0, 300), id);
+      zurueck.run(String(x.message).slice(0, 300), id);
       ergebnisse.push({ id: id, ok: false, fehler: x.message, name: a.dateiname || a.name });
       if (x.status === 401 || x.status === 403) break;   // ohne Recht hat der Rest keinen Sinn
     }
   }
-  res.json({ ok: true, ergebnisse: ergebnisse });
-});
+  return ergebnisse;
+}
 
 // Den Anhang ansehen, bevor er abgelegt wird — immer als Datei, nie im Browser ausgeführt
 app.get('/api/anhaenge/:id/datei', nurAngemeldet, nurVerwalter, mitFehler(async function (req, res) {
   const a = db.prepare('SELECT * FROM anh_dateien WHERE id = ?').get(req.params.id);
   if (!a) throw fehler('Anhang nicht gefunden', 404);
-  const d = await quelle().anhangInhalt(a.ordner, a.uid, a.name, a.nr);
+  const d = await quelle().anhangInhalt(a.ordner, a.uid, a.teil, a.name, a.uidvalidity);
   res.setHeader('Content-Type', 'application/octet-stream');
   res.setHeader('Content-Disposition', "attachment; filename*=UTF-8''" + encodeURIComponent(d.name || a.name));
   res.setHeader('X-Content-Type-Options', 'nosniff');
