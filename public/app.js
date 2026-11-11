@@ -1119,11 +1119,12 @@
       .catch(function (e) { od.fehler = e.message; if (!od.dateien) od.dateien = []; })
       .then(function () { od.laedt = false; });
   }
-  // Beim Anzeigen: Stand und Dateien holen, wenn sie fehlen oder älter als fünf Minuten sind — danach einmal neu aufbauen
+  // Beim Anzeigen: Stand und Dateien holen, wenn sie fehlen oder älter als eine Minute sind — danach einmal neu aufbauen
+  // (eine Minute, damit am Handy auch steht, was gerade am PC abgelegt oder zugeordnet wurde)
   function odSicherstellen() {
     const laeuft = [];
     if (!od.status && !od.statusLaedt) laeuft.push(odStatusLaden());
-    if (odBereit() && !od.laedt && (!od.dateien || Date.now() - od.geholt > 5 * 60 * 1000)) laeuft.push(odLaden());
+    if (odBereit() && !od.laedt && (!od.dateien || Date.now() - od.geholt > 60 * 1000)) laeuft.push(odLaden());
     if (laeuft.length) Promise.all(laeuft).then(function () {
       if (odBereit() && !od.dateien && !od.laedt) return odLaden();
     }).then(function () {
@@ -1381,8 +1382,9 @@
   }
   function anhName(z) { return anh.namen[z.id] !== undefined ? anh.namen[z.id] : (z.dateiname || z.name); }
   function anhBereit(z) { return z.status === 'vorschlag' && z.objekt && z.ziel && !z.zielFehlt; }
-  // Unsichere Vorschläge sind nicht vorab angehakt — die nimmt Louis nur bewusst mit
-  function anhUnsicher(z) { return z.sicherheit === 'niedrig'; }
+  // Unsichere Vorschläge sind nicht vorab angehakt — die nimmt Louis nur bewusst mit.
+  // Hat er selbst das Objekt gewählt („Ändern“ → „Übernehmen“), ist es nicht mehr unsicher.
+  function anhUnsicher(z) { return z.sicherheit === 'niedrig' && z.quelle !== 'louis'; }
   function anhIstAn(z) { return anhUnsicher(z) ? !!anh.an[z.id] : !anh.ab[z.id]; }
   function anhGewaehlt() { return anhSichtbar().filter(function (z) { return anhBereit(z) && anhIstAn(z); }); }
   function anhFussAktualisieren() {
@@ -10221,8 +10223,11 @@
       if (koerper.jahr && !/^(19|20)\d{2}$/.test(koerper.jahr)) { toast('Bitte das Jahr vierstellig, z. B. 2025'); return; }
       api('anhaenge/' + encodeURIComponent(id), { method: 'PUT', body: koerper }).then(function () {
         delete anh.namen[id];
+        delete anh.ab[id];
         modal = { kind: 'anh' };
         render();
+        // Übernehmen merkt sich nur das Ziel — in Google Drive und beim Objekt landet der Anhang erst mit „Ablegen“
+        toast(koerper.objekt ? 'Übernommen — zum Ablegen unten auf „Ablegen“ tippen' : 'Übernommen');
         return anhLaden();
       }).then(function () { if (modal && modal.kind === 'anh') anhNeuZeichnen(); }).catch(function (e) { toast(e.message); });
     }

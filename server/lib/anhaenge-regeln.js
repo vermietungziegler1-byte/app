@@ -104,4 +104,18 @@ function dateiname(vorschlag, a, m, art) {
   return namen.sauber(s, a.name) || (namen.stamm(a.name) + e);
 }
 
-module.exports = { taugt, relevant, ARTEN, MIETER, KOSTENARTEN, KATEGORIEN, kategorie, dokArt, ohneAssistent, dateiname };
+// Dateityp für das Hochladen: manche Absender schreiben nur „pdf“ oder „application/octet-stream“ in die Mail —
+// Google lehnt „pdf“ ab und zeigt Octet-Stream nicht als PDF an. Dann zählt die Endung.
+const TYP_NACH_ENDUNG = { pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', heic: 'image/heic',
+  tif: 'image/tiff', tiff: 'image/tiff', txt: 'text/plain', csv: 'text/csv', doc: 'application/msword', xls: 'application/vnd.ms-excel',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', odt: 'application/vnd.oasis.opendocument.text',
+  ods: 'application/vnd.oasis.opendocument.spreadsheet', zip: 'application/zip' };
+function mimeTyp(name, typ) {
+  const t = String(typ || '').trim().toLowerCase().split(';')[0].trim();
+  if (/^[a-z]+\/[a-z0-9][a-z0-9.+-]*$/.test(t) && !/^application\/(octet-stream|x-download|force-download|unknown)$/.test(t)) return t;
+  const e = namen.endung(name || '').replace(/^\./, '').toLowerCase();
+  return TYP_NACH_ENDUNG[e] || TYP_NACH_ENDUNG[t] || 'application/octet-stream';
+}
+
+module.exports = { taugt, relevant, ARTEN, MIETER, KOSTENARTEN, KATEGORIEN, kategorie, dokArt, ohneAssistent, dateiname, mimeTyp };

@@ -310,9 +310,11 @@ async function googleAnfrage(url, optionen) {
   }));
   if (antwort.status === 401) google.googleZugriffVergessen();
   if (!antwort.ok) {
-    const grund = await antwort.text().catch(function () { return ''; });
+    let grund = await antwort.text().catch(function () { return ''; });
+    // Google schickt den Grund als JSON — nur den lesbaren Satz zeigen
+    try { grund = JSON.parse(grund).error.message || grund; } catch (x) { /* dann der Text, wie er ist */ }
     throw fehler(antwort.status === 403 ? 'Google erlaubt der App das Ablegen nicht — ist „Google Drive bearbeiten erlauben“ eingeschaltet?'
-      : 'Google antwortet mit ' + antwort.status + (grund ? ': ' + grund.slice(0, 120) : ''), antwort.status);
+      : 'Google antwortet mit ' + antwort.status + (grund ? ': ' + String(grund).slice(0, 160) : ''), antwort.status);
   }
   return antwort.json();
 }
@@ -353,7 +355,7 @@ async function ablegen(a, b, wb) {
   let name = a.dateiname || a.name;
   const belegt = db.prepare('SELECT 1 FROM dok_dateien WHERE eltern = ? AND lower(name) = lower(?)');
   for (let i = 2; belegt.get(z.id, name) && i < 1000; i++) name = basis + ' ' + i + e;
-  const f = await hochladen(name, d.typ || a.typ, d.inhalt, z.id);
+  const f = await hochladen(name, ar.mimeTyp(name, d.typ || a.typ), d.inhalt, z.id);
   const jetzt = Date.now();
   db.prepare(`INSERT OR REPLACE INTO dok_dateien (id, name, pfad, eltern, mime, groesse, geaendert, url, objekt, einheit, art, titel, datum, quelle,
     status, erstmals, lauf, aufnahme) VALUES (@id, @name, @pfad, @eltern, @mime, @groesse, @geaendert, @url, @objekt, @einheit, @art, '', '', 'ablage',

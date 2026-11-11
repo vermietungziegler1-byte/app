@@ -56,9 +56,12 @@ function fakeGoogle() {
         const text = koerper.toString('latin1');
         const meta = JSON.parse(/\r\n\r\n(\{[^\r]*\})\r\n/.exec(text)[1]);
         const inhalt = text.split('\r\n\r\n')[2].split('\r\n--')[0];
-        const d = { id: 'datei' + (++g.neu), name: meta.name, parents: meta.parents, mimeType: 'application/pdf', size: String(inhalt.length),
+        // Wie Google: ein Dateityp ohne „/“ (manche Mails sagen nur „pdf“) wird abgelehnt
+        const typ = (text.match(/Content-Type: ([^\r]*)\r\n/g) || [])[1].replace(/^Content-Type: |\r\n$/g, '');
+        if (!/^[a-z]+\/[a-z0-9.+-]+$/i.test(typ)) return json({ error: { code: 400, message: "Media type '" + typ + "' is not supported. Valid media types: [*/*]" } }, 400);
+        const d = { id: 'datei' + (++g.neu), name: meta.name, parents: meta.parents, mimeType: typ, size: String(inhalt.length),
           webViewLink: 'https://drive.example/neu', modifiedTime: '2026-11-11T10:00:00Z' };
-        g.hochgeladen.push({ name: meta.name, eltern: meta.parents[0], inhalt: inhalt });
+        g.hochgeladen.push({ name: meta.name, eltern: meta.parents[0], inhalt: inhalt, typ: typ });
         return json(d);
       }
       json({}, 404);
@@ -110,7 +113,8 @@ test('Anhänge: finden, einordnen, korrigieren, in Objekt › 02 Nebenkosten ›
     // Zwei Anhänge mit demselben Namen in einer Mail: jeder Teil für sich
     { ordner: 'INBOX', uid: 4, datum: Date.parse('2026-04-10T09:00:00Z'), von_name: 'Gemeinde', von_adresse: 'kasse@gemeinde.example',
       betreff: 'Rechnungen Tribergle 22', text: '', anhaenge: [{ name: 'Rechnung.pdf', typ: 'application/pdf', groesse: 40000, inhalt: '%PDF Wasser' },
-        { name: 'Rechnung.pdf', typ: 'application/pdf', groesse: 41000, inhalt: '%PDF Muell' }] }
+        // Manche Absender schreiben als Dateityp nur „pdf“ — Google würde das ablehnen
+        { name: 'Rechnung.pdf', typ: 'pdf', groesse: 41000, inhalt: '%PDF Muell' }] }
   ] }));
 
   const server = await serverStarten({ GOOGLE_TOKEN_URL: g.basis + '/token', GMAIL_BASIS: g.basis, GDRIVE_BASIS: g.basis + '/drive',
@@ -196,6 +200,7 @@ test('Anhänge: finden, einordnen, korrigieren, in Objekt › 02 Nebenkosten ›
     const ab2 = await louis.post('/api/anhaenge/ablegen', { ids: zwei.map(function (z) { return z.id; }) });
     assert.ok(ab2.json.ergebnisse.every(function (e) { return e.ok; }), JSON.stringify(ab2.json));
     assert.deepEqual(g.hochgeladen.slice(1).map(function (h) { return h.inhalt; }).sort(), ['%PDF Muell', '%PDF Wasser']);
+    assert.deepEqual(g.hochgeladen.map(function (h) { return h.typ; }), ['application/pdf', 'application/pdf', 'application/pdf'], 'Dateityp „pdf“ als application/pdf hochgeladen');
     assert.equal(g.angelegt.length, 3, JSON.stringify(g.angelegt));
     assert.equal(g.angelegt[1].indexOf('03 Rechnungen in tri'), 0);
     assert.equal(g.angelegt[2].indexOf('2026 in '), 0);

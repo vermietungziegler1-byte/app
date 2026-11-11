@@ -53,3 +53,14 @@ test('Ohne Assistent: Objekt aus Betreff, Art aus dem Namen, Jahr aus Datum', fu
   assert.equal(ar.dateiname('2026-03-03 Stromabrechnung 2025', { name: 'Rechnung_Strom.pdf' }, m, 'Rechnung'), '2026-03-03 Stromabrechnung 2025.pdf');
   assert.equal(ar.dateiname('', { name: 'RE_123.pdf' }, m, 'Rechnung'), '2026-03-03 Rechnung Stadtwerke RE_123.pdf');
 });
+
+test('mimeTyp: kaputte Dateitypen aus der Mail werden zur Endung passend ersetzt', function () {
+  assert.equal(ar.mimeTyp('Rechnung26002521.pdf', 'pdf'), 'application/pdf');
+  assert.equal(ar.mimeTyp('Rechnung.pdf', 'application/octet-stream'), 'application/pdf');
+  assert.equal(ar.mimeTyp('Rechnung.PDF', ''), 'application/pdf');
+  assert.equal(ar.mimeTyp('Foto.jpg', 'image/jpeg; name="Foto.jpg"'), 'image/jpeg');
+  assert.equal(ar.mimeTyp('Plan.docx', 'APPLICATION/VND.OPENXMLFORMATS-OFFICEDOCUMENT.WORDPROCESSINGML.DOCUMENT'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  assert.equal(ar.mimeTyp('ohne Endung', 'pdf'), 'application/pdf');
+  assert.equal(ar.mimeTyp('ohne Endung', ''), 'application/octet-stream');
+  assert.equal(ar.mimeTyp('Datei.xyz', 'irgendwas'), 'application/octet-stream');
+});
