@@ -114,7 +114,7 @@ test('Namen aufräumen: vorschlagen, Schalter, umbenennen, rückgängig, Recht z
     // Verbinden nur zum Lesen; der Zugang liegt verschlüsselt in der Datenbank
     const ziel = await verbinden(louis, false);
     assert.doesNotMatch(ziel.searchParams.get('scope'), /auth\/drive(\s|$)/, 'ohne Schalter kein Bearbeiten-Recht');
-    const db = new Database(path.join(server.daten, 'vermietung.db'), { readonly: true });
+    const db = new Database(path.join(server.daten, 'vermietung.db'));
     const roh = db.prepare("SELECT wert FROM einstellungen WHERE schluessel = 'google_refresh'").get().wert;
     db.close();
     assert.match(roh, /^v1:/, 'Google-Zugang verschlüsselt');

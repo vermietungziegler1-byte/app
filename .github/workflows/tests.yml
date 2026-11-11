@@ -26,4 +26,17 @@ jobs:
         run: |
           for f in server.js lib/*.js; do node --check "$f"; done
           bash -n ../werkzeuge/einspielen.sh
-      - run: npm test
+      - name: Tests
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test-ausgabe.txt
+      # Die Protokolle sieht man bei GitHub nur angemeldet — die Fehler stehen deshalb auch in der Zusammenfassung des Laufs
+      - name: Fehler in die Zusammenfassung
+        if: failure()
+        run: |
+          {
+            echo '### Fehlgeschlagene Tests'
+            echo '```'
+            grep -A45 'not ok' test-ausgabe.txt | head -400 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
