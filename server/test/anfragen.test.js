@@ -77,11 +77,11 @@ const MAILS = {
     betreff: 'Anfrage zu Ihrem Objekt 158460832', wann: JETZT - 8 * 3600000,
     text: 'Anfrage zu Objekt 158460832',
     html: '<html><body><h1>Anfrage zu Ihrem Objekt 158460832</h1><p>Guten Tag Louis Ziegler,</p>'
-      + '<p>Sie haben eine neue Anfrage erhalten. Sie können nun direkt über den <a href="https://www.immobilienscout24.de/nachrichten-manager/api/external/reference/158460832/contact-request/7f91d268?utm_medium=email&amp;utm_source=system">Nachrichten-Manager</a> antworten.</p>'
+      + '<p>Sie haben eine neue Anfrage erhalten. Sie können nun direkt über den <a href="https://www.immobilienscout24.de/nachrichten-manager/api/external/reference/158460832/contact-request/4059af1f395448edaa64e4132e84a361?utm_medium=email&amp;utm_source=system">Nachrichten-Manager</a> antworten.</p>'
       + '<h2>Daten zu Ihrer Immobilie 158460832</h2><p>Erstbezug 2025: 3-Zimmer-Wohnung mit Balkon, EBK und Tiefgarage</p>'
       + '<table><tr><td>Scout-ID:</td><td>158460832</td></tr><tr><td>Zimmer:</td><td>3,00</td></tr><tr><td>Kaltmiete:</td><td>1.347,20 €</td></tr></table>'
       + '<p>Adresse:</p><p>Bertha-von-Suttner-Weg 4,<br>71334 Waiblingen</p><p><a href="https://www.immobilienscout24.de/expose/158460832">Direkt zum Exposé</a></p>'
-      + '<p>Nachricht Ihrer Interessent:innen</p><p><a href="https://www.immobilienscout24.de/nachrichten-manager/api/external/reference/158460832/contact-request/7f91d268">Nachrichtenverlauf anzeigen</a></p></body></html>'
+      + '<p>Nachricht Ihrer Interessent:innen</p><p><a href="https://www.immobilienscout24.de/nachrichten-manager/api/external/reference/158460832/contact-request/4059af1f395448edaa64e4132e84a361">Nachrichtenverlauf anzeigen</a></p></body></html>'
   },
   // Frau Schäfer schreibt noch einmal und reicht nach, was fehlte — danach passt sie
   antwort2: {
@@ -365,11 +365,19 @@ test('Mit Postfach und Assistent: Anfragen werden gelesen, bewertet und nur einm
   assert.equal(hinweis.id, 'hinweis');
   assert.equal(hinweis.inhalt.hinweis, 'nachrichten-manager');
   assert.equal(hinweis.inhalt.name, '');
-  assert.equal(hinweis.inhalt.link, 'https://www.immobilienscout24.de/nachrichten-manager/api/external/reference/158460832/contact-request/7f91d268?utm_medium=email&utm_source=system');
+  assert.equal(hinweis.inhalt.link, 'https://www.immobilienscout24.de/nachrichten-manager/api/external/reference/158460832/contact-request/4059af1f395448edaa64e4132e84a361?utm_medium=email&utm_source=system');
   assert.equal(hinweis.inhalt.objekt, 'Erstbezug 2025: 3-Zimmer-Wohnung mit Balkon, EBK und Tiefgarage · Bertha-von-Suttner-Weg 4, 71334 Waiblingen (Scout-ID 158460832)');
   assert.equal(hinweis.bewertung.urteil, 'unklar');
   assert.equal(hinweis.fehler, null);
-  assert.equal(hinweis.person, null, 'anfrage@immobilienscout24.de ist kein Schlüssel — sonst wären alle Benachrichtigungen eine Karte');
+  // Die Kennung im Link ergibt die Weiterleitungsadresse der Person: Antwortweg und Schlüssel ihrer Karte.
+  // anfrage@immobilienscout24.de selbst ist kein Schlüssel — sonst wären alle Benachrichtigungen eine Karte
+  const HINWEIS_RELAIS = 'sucher.4059af1f395448edaa64e4132e84a361@nachrichten.immobilienscout24.de';
+  assert.equal(hinweis.inhalt.email, HINWEIS_RELAIS);
+  assert.equal(hinweis.person, HINWEIS_RELAIS);
+  // Die fertige Nachfrage: alles, was bei einer Benachrichtigung fehlt, als Aufzählung
+  assert.equal(hinweis.bewertung.fehlt.length, 5);
+  assert.match(hinweis.bewertung.antwort, /^Guten Tag,\n\nvielen Dank für Ihre Nachricht/);
+  assert.match(hinweis.bewertung.antwort, /folgende Angaben:\n- Zahl der Erwachsenen und Kinder\n- monatliches Haushaltsnettoeinkommen\n- Beruf und Art der Beschäftigung\n- Haustiere\n- gewünschter Einzugstermin$/);
   assert.match(hinweis.inhalt.original, /Daten zu Ihrer Immobilie 158460832/, 'der Wortlaut kommt aus dem HTML, nicht aus der einen Klartextzeile');
 
   // Inserate: die Anzeige mit Titel und Adresse aus der Benachrichtigung, zwei Anfragen dazu
@@ -435,6 +443,12 @@ test('Benachrichtigung und Antwortweg: die Regeln einzeln', function () {
   assert.equal(h.nr, '158460832');
   assert.equal(h.titel, '');
   assert.equal(h.link, 'https://www.immobilienscout24.de/expose/158460832', 'ohne Link in der Mail wenigstens das Exposé');
+  assert.equal(h.relais, '', 'ohne Link keine Weiterleitungsadresse');
+  const h2 = hinweisAus('anfrage@immobilienscout24.de', 'Anfrage zu Ihrem Objekt 169648839',
+    'Sie haben eine neue Anfrage erhalten.\nAdresse:\n71332 Waiblingen (Adresse wird nicht vollständig angezeigt)\n\n> Direkt zum Exposé',
+    '<a href="https://www.immobilienscout24.de/nachrichten-manager/api/external/reference/169648839/contact-request/4059AF1F395448EDAA64E4132E84A361?x=1">x</a>');
+  assert.equal(h2.relais, 'sucher.4059af1f395448edaa64e4132e84a361@nachrichten.immobilienscout24.de');
+  assert.equal(h2.adresse, '71332 Waiblingen', 'der Hinweis auf die unvollständige Adresse fällt weg');
   // Antwortadresse: die Weiterleitungsadresse zählt, auch als Absender; Portaladressen nicht
   assert.equal(antwortAdresse({ From: 'Renate <' + RELAIS + '>' }), RELAIS);
   assert.equal(antwortAdresse({ From: 'anfrage@immobilienscout24.de', 'Reply-To': 'noreply@immobilienscout24.de' }), '');

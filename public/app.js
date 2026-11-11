@@ -6130,7 +6130,7 @@
   }
   // Die Bewertung derselben Person vor dieser Mail, wenn es eine gab — für „vorher 40 Punkte“
   function anfVorher(a) {
-    return anfGruppeVon(a.id).filter(function (x) { return x.id !== a.id && x.bewertung && x.wann < a.wann; })
+    return anfGruppeVon(a.id).filter(function (x) { return x.id !== a.id && x.bewertung && x.wann < a.wann && !anfHinweis(x); })
       .sort(function (x, y) { return y.wann - x.wann; })[0] || null;
   }
   function anfGruppeVon(id) {
@@ -6417,7 +6417,9 @@
         einkommen = einkommen ? einkommen + ' (≈ ' + nettoText + ' € netto)' : '≈ ' + nettoText + ' € netto';
       }
     }
-    const kontakt = [i.email, i.telefon].filter(Boolean).join(' · ');
+    // Die Weiterleitungsadresse von ImmoScout sagt Louis nichts — er soll nur wissen, wohin die Antwort geht
+    const kontakt = [/@nachrichten\.immobilienscout24\.de$/i.test(i.email || '') ? 'über das ImmoScout-Postfach der Person' : i.email, i.telefon]
+      .filter(Boolean).join(' · ');
     // Die Adresse kommt aus der fremden Mail: nur eine schlichte Adresse wird zum Link, sonst könnte „?cc=…“ weitere
     // Empfänger in die Antwort schmuggeln — als Text unter „Kontakt“ bleibt sie trotzdem sichtbar
     const adresse = /^[^\s@<>,;?&#"'()\/]+@[^\s@<>,;?&#"'()\/]+\.[A-Za-z]{2,}$/.test(i.email || '') ? i.email : '';
@@ -6431,7 +6433,7 @@
     let urteilbox;
     if (b) {
       urteilbox = '<div class="anf-urteilbox ' + anfKlasse(a) + '">'
-        + '<div><b>' + anfUrteil(a) + '</b> · ' + b.punkte + ' Punkte</div>'
+        + '<div><b>' + anfUrteil(a) + '</b>' + (anfHinweis(a) ? '' : ' · ' + b.punkte + ' Punkte') + '</div>'
         // Neue Nachricht derselben Person: das Urteil gilt nach allen Mails zusammen, das alte steht zum Vergleich da
         + (function () {
             const v = anfVorher(a);
@@ -6482,13 +6484,16 @@
       // Der Wortlaut der Mail (gekürzt), eingeklappt — für Ton und Sorgfalt, ohne das Postfach zu öffnen
       + (i.original ? '<details class="anf-feld anf-nachricht anf-original"><summary>Wortlaut der Mail</summary><pre>' + esc(i.original) + '</pre></details>' : '')
       + '</div>'
-      + (anfHinweis(a) ? '' : f('Antwortvorschlag', '<textarea id="anf-antwort" rows="7" readonly placeholder="Noch kein Vorschlag — erst bewerten">' + esc(antwort) + '</textarea>'))
+      // Bei einer bloßen Benachrichtigung fragt der Vorschlag alles ab — was in der Nachricht bei ImmoScout schon steht, streicht Louis
+      + (anfHinweis(a) ? '<div class="hint">Die Nachricht der Person steht nur bei ImmoScout. Am besten erst dort lesen und in der Antwort '
+          + 'streichen, was sie schon geschrieben hat.</div>' : '')
+      + f('Antwortvorschlag', '<textarea id="anf-antwort" rows="7" readonly placeholder="Noch kein Vorschlag — erst bewerten">' + esc(antwort) + '</textarea>')
       + '<div class="anf-knoepfe">'
       + (scoutLink ? '<a class="kauf-link" href="' + esc(scoutLink) + '" target="_blank" rel="noopener">Im ImmoScout-Postfach öffnen</a>' : '')
       // Aus der App antworten: Mailkonto, Antwortvorschlag und Standard-Signatur — die Antwort geht über die
       // Weiterleitungsadresse von ImmoScout in den Nachrichten-Manager der Person
       + (adresse && pfBereit() ? '<button class="tiny primary" data-act="anf-antworten-app">Aus der App antworten</button>' : '')
-      + (anfHinweis(a) ? '' : '<button class="tiny" data-act="anf-kopieren">Antwort kopieren</button>')
+      + '<button class="tiny" data-act="anf-kopieren">Antwort kopieren</button>'
       + (adresse ? '<a class="kauf-link" href="' + esc(mailto) + '" data-anf-mail="1">' + (pfBereit() ? 'Im Mailprogramm' : 'Per Mail antworten') + '</a>' : '')
       + '<button class="tiny ghost" data-act="anf-interessent">Interessent vormerken</button>'
       + (anfHinweis(a) ? '' : '<button class="tiny ghost" data-act="anf-bewerten">Neu bewerten</button>')

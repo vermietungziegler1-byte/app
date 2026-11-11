@@ -182,30 +182,40 @@ function hinweisAus(von, betreff, text, html) {
       if (/^>|Expos|Login|Scout-ID/i.test(zeilen[k])) break;
       teile.push(zeilen[k]);
     }
-    adresse = teile.filter(Boolean).join(' ').replace(/\s+,/g, ',').slice(0, 160);
+    adresse = teile.filter(Boolean).join(' ').replace(/\s+,/g, ',').replace(/\s*\(Adresse wird nicht vollständig angezeigt\)/i, '').slice(0, 160);
   }
   // Der Link in den Nachrichten-Manager — nur einer auf die ImmoScout-Seite selbst
   const m = String(html || '').match(/href="(https:\/\/www\.immobilienscout24\.de\/[^"]*(?:nachrichten-manager|postfach\/redirects\/conversations)[^"]*)"/i);
   const link = m ? m[1].replace(/&amp;/g, '&').slice(0, 500) : (nr ? 'https://www.immobilienscout24.de/expose/' + nr : '');
-  return { nr: nr, titel: titel, adresse: adresse, link: link };
+  return { nr: nr, titel: titel, adresse: adresse, link: link, relais: relaisAusLink(html) };
 }
+// Die Kennung der Kontaktanfrage im Link („…/contact-request/4059af1f…“) ist dieselbe wie in der Weiterleitungsadresse
+// der Person (sucher.4059af1f…@nachrichten.immobilienscout24.de) — so kam es bei jeder Anfrage, auf die später eine
+// Antwort folgte. Darüber lässt sich gleich antworten, und die spätere Antwort der Person landet auf derselben Karte
+function relaisAusLink(text) {
+  const k = String(text || '').match(/contact-request\/([a-f0-9]{16,40})/i);
+  return k ? 'sucher.' + k[1].toLowerCase() + '@nachrichten.immobilienscout24.de' : '';
+}
+// Was bei einer Benachrichtigung immer fehlt — die Antwort fragt es ab
+const STANDARD_FEHLT = ['Zahl der Erwachsenen und Kinder', 'monatliches Haushaltsnettoeinkommen', 'Beruf und Art der Beschäftigung',
+  'Haustiere', 'gewünschter Einzugstermin'];
 // Was für so eine Benachrichtigung in der Tabelle steht — dieselbe Form wie ein Ergebnis des Assistenten
 function hinweisErgebnis(h) {
   const objekt = [h.titel, h.adresse].filter(Boolean).join(' · ') + (h.nr ? (h.titel || h.adresse ? ' ' : '') + '(Scout-ID ' + h.nr + ')' : '');
   return {
     istAnfrage: true,
     inhalt: {
-      name: '', email: '', telefon: '', objekt: objekt.trim() || 'ImmoScout-Anzeige', personen: '', erwachsene: null, kinder: null,
+      name: '', email: h.relais || '', telefon: '', objekt: objekt.trim() || 'ImmoScout-Anzeige', personen: '', erwachsene: null, kinder: null,
       haustiere: '', beruf: '', einkommen: '', einkommenNetto: null, einzug: '',
-      nachricht: 'ImmoScout hat nur eine Benachrichtigung geschickt — Name, Nachricht und Kontaktdaten der Person stehen allein '
-        + 'im Nachrichten-Manager auf der ImmoScout-Seite. Dort lesen und von dort antworten; antwortet die Person, kommt ihre '
-        + 'Nachricht hier als Anfrage mit Text an.',
+      nachricht: 'ImmoScout schickt bei einer neuen Anfrage nur diese Benachrichtigung: Name, Nachricht und Kontaktdaten stehen allein '
+        + 'im Nachrichten-Manager auf der ImmoScout-Seite. Die Antwort aus der App geht über ImmoScout an die Person; antwortet sie, '
+        + 'kommt ihre Nachricht hier mit Namen und Bewertung auf dieselbe Karte.',
       hinweis: 'nachrichten-manager', link: h.link || ''
     },
     bewertung: {
       urteil: 'unklar', punkte: 0,
-      gruende: ['Nur eine Benachrichtigung von ImmoScout — die Anfrage selbst steht im Nachrichten-Manager'],
-      fehlt: ['Nachricht im ImmoScout-Postfach lesen'], antwort: ''
+      gruende: ['Nur eine Benachrichtigung von ImmoScout, die Anfrage selbst steht im Nachrichten-Manager'],
+      fehlt: STANDARD_FEHLT.slice(), antwort: fehlendeErfragen('', STANDARD_FEHLT, 'unklar', '')
     },
     einheitId: ''
   };
@@ -471,17 +481,19 @@ function anzeigeVon(z) {
 }
 // Frühere, schon bewertete Mails derselben Person — als Zusammenhang für die Bewertung einer Nachfrage. Nur Mails von
 // vor dieser: wird eine ältere Mail neu bewertet, gehört eine spätere Nachricht nicht als „frühere“ dazu
+// Benachrichtigungen ohne Inhalt zählen dabei nicht: ihr „unklar, 0 Punkte“ ist kein Urteil über die Person
+const OHNE_HINWEIS = `(inhalt IS NULL OR inhalt NOT LIKE '%"hinweis":"nachrichten-manager"%')`;
 function fruehereVon(von, ausser, wann) {
   const p = personVon(von, null);
   if (!p) return [];
-  return db.prepare('SELECT * FROM anfragen WHERE person = ? AND id != ? AND wann < ? ORDER BY wann DESC LIMIT 3')
+  return db.prepare('SELECT * FROM anfragen WHERE person = ? AND id != ? AND wann < ? AND ' + OHNE_HINWEIS + ' ORDER BY wann DESC LIMIT 3')
     .all(p, ausser, Number(wann) || Date.now()).map(zeileLesen);
 }
 // Die letzte Bewertung derselben Person vor dieser Mail — für „vorher 40 Punkte“ in der Sofortmeldung
 function vorherigeBewertung(z) {
   if (!z || !z.person) return null;
-  const v = db.prepare('SELECT bewertung FROM anfragen WHERE person = ? AND id != ? AND wann < ? AND bewertung IS NOT NULL ORDER BY wann DESC LIMIT 1')
-    .get(z.person, z.id, z.wann);
+  const v = db.prepare('SELECT bewertung FROM anfragen WHERE person = ? AND id != ? AND wann < ? AND bewertung IS NOT NULL AND '
+    + OHNE_HINWEIS + ' ORDER BY wann DESC LIMIT 1').get(z.person, z.id, z.wann);
   try { return v ? JSON.parse(v.bewertung) : null; } catch (e) { return null; }
 }
 function fruehereText(liste) {
@@ -501,6 +513,19 @@ db.prepare('SELECT id, von, inhalt FROM anfragen WHERE person IS NULL').all().fo
   let i; try { i = JSON.parse(z.inhalt || '{}'); } catch (e) { i = {}; }
   const p = personVon(z.von, i);
   if (p) db.prepare('UPDATE anfragen SET person = ? WHERE id = ?').run(p, z.id);
+});
+// Benachrichtigungen von vor dieser Fassung nachrüsten: Weiterleitungsadresse aus dem Link (Antwortweg und Person) und
+// eine fertige Antwort, die nach den fehlenden Angaben fragt
+db.prepare(`SELECT id, inhalt FROM anfragen WHERE inhalt LIKE '%"hinweis":"nachrichten-manager"%'`).all().forEach(function (z) {
+  let i; try { i = JSON.parse(z.inhalt || '{}'); } catch (e) { return; }
+  if (i.email) return;
+  const relais = relaisAusLink(i.link);
+  if (!relais) return;
+  const neu = hinweisErgebnis({ relais: relais, link: i.link });
+  i.email = relais;
+  i.nachricht = neu.inhalt.nachricht;
+  db.prepare('UPDATE anfragen SET inhalt = ?, bewertung = ?, person = COALESCE(person, ?) WHERE id = ?')
+    .run(JSON.stringify(i), JSON.stringify(neu.bewertung), relais, z.id);
 });
 
 function zeileLesen(z) {
