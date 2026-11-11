@@ -120,7 +120,8 @@ test('Namen aufräumen: vorschlagen, Schalter, umbenennen, rückgängig, Recht z
     assert.match(roh, /^v1:/, 'Google-Zugang verschlüsselt');
     assert.doesNotMatch(roh, /dauerhaft/);
 
-    await louis.put('/api/dokumente/ordner', { ein: ['firma'] });
+    assert.equal((await louis.get('/api/dokumente/ordner')).status, 200);   // wie in der App: erst die Ordnerliste
+    assert.equal((await louis.put('/api/dokumente/ordner', { ein: ['firma'] })).status, 200);
     await warten(150);
     await fertig(louis);
 

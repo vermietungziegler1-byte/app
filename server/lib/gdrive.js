@@ -483,6 +483,8 @@ app.put('/api/dokumente/ordner', nurAngemeldet, nurVerwalter, function (req, res
     return (Array.isArray(l) ? l : []).map(String).filter(function (id, i, alle) { return id && (k.ordner.has(id) || id === k.wurzel) && alle.indexOf(id) === i; });
   };
   const ein = gueltig(b.ein), aus = gueltig(b.aus).filter(function (id) { return ein.indexOf(id) === -1; });
+  // Nichts Gültiges gewählt (z. B. Ordnerliste noch nicht gelesen): lieber ablehnen als still alles abwählen
+  if (!ein.length) return res.status(400).json({ fehler: 'Bitte mindestens einen Ordner anhaken (oder die Ordnerliste neu lesen)' });
   einstellungSetzen('dok_auswahl', JSON.stringify({ ein: ein, aus: aus }));
   // Was jetzt nicht mehr gewählt ist, sofort vergessen; der Rest kommt beim Einlesen
   const a = auswahl();
