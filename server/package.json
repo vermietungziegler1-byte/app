@@ -4,7 +4,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test \"test/*.test.js\""
+    "test": "node --test --test-timeout=180000 --test-force-exit \"test/*.test.js\""
   },
   "dependencies": {
     "better-sqlite3": "^11.0.0",
