@@ -30,13 +30,13 @@ jobs:
         run: |
           set -o pipefail
           npm test 2>&1 | tee test-ausgabe.txt
-      # Die Protokolle sieht man bei GitHub nur angemeldet — die Fehler stehen deshalb auch in der Zusammenfassung des Laufs
-      - name: Fehler in die Zusammenfassung
+      # Die Protokolle sieht man bei GitHub nur angemeldet — die Fehler stehen deshalb auch als Hinweis auf der Seite des Laufs
+      # (Hinweise sind öffentlich lesbar). Je fehlgeschlagenem Test ein Hinweis mit den ersten Zeilen.
+      - name: Fehler als Hinweis
         if: failure()
         run: |
-          {
-            echo '### Fehlgeschlagene Tests'
-            echo '```'
-            grep -A45 'not ok' test-ausgabe.txt | head -400 || true
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          [ -f test-ausgabe.txt ] || exit 0
+          grep -n '^\s*not ok' test-ausgabe.txt | head -8 | while IFS=: read -r nr rest; do
+            inhalt=$(sed -n "${nr},$((nr + 30))p" test-ausgabe.txt | sed 's/%/%25/g' | tr -d '\r' | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error title=Test fehlgeschlagen::${inhalt}"
+          done
