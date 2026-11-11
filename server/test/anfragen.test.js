@@ -82,6 +82,14 @@ const MAILS = {
       + '<table><tr><td>Scout-ID:</td><td>158460832</td></tr><tr><td>Zimmer:</td><td>3,00</td></tr><tr><td>Kaltmiete:</td><td>1.347,20 €</td></tr></table>'
       + '<p>Adresse:</p><p>Bertha-von-Suttner-Weg 4,<br>71334 Waiblingen</p><p><a href="https://www.immobilienscout24.de/expose/158460832">Direkt zum Exposé</a></p>'
       + '<p>Nachricht Ihrer Interessent:innen</p><p><a href="https://www.immobilienscout24.de/nachrichten-manager/api/external/reference/158460832/contact-request/7f91d268">Nachrichtenverlauf anzeigen</a></p></body></html>'
+  },
+  // Frau Schäfer schreibt noch einmal und reicht nach, was fehlte — danach passt sie
+  antwort2: {
+    von: 'Renate Schäfer <sucher.48cb78a3af99465aa6aad15cf5e4cef2@nachrichten.immobilienscout24.de>',
+    betreff: 'Neue Nachricht: Frau Schäfer hat Ihnen geantwortet. (Objekt 158460832)', wann: JETZT - 6.5 * 3600000,
+    text: 'Sie haben eine neue Nachricht zu Ihrem Objekt (Scout-ID: 158460832)\n\n> Guten Tag Herr Ziegler,\n'
+      + '> gern ergänze ich: Wir haben zusammen 5.200 € netto im Monat, beide unbefristet angestellt, keine Haustiere.\n'
+      + '> Einziehen würden wir gern zum 1. Februar.\n> Viele Grüße\n> Renate Schäfer'
   }
 };
 const RELAIS = 'sucher.48cb78a3af99465aa6aad15cf5e4cef2@nachrichten.immobilienscout24.de';
@@ -123,6 +131,14 @@ function ergebnisFuer(text) {
     return { istAnfrage: false, name: '', email: '', telefon: '', objekt: '', einheitId: '', personen: '',
       erwachsene: null, kinder: null, haustiere: '', beruf: '', einkommen: '', einkommenNetto: null, einzug: '',
       nachricht: '', urteil: 'unklar', punkte: 0, gruende: [], fehlt: [], antwort: '' };
+  }
+  if (text.indexOf('5.200') !== -1) {
+    return { istAnfrage: true, name: 'Renate Schäfer', email: '', telefon: '0172 1067372',
+      objekt: 'Scout-ID 158460832', einheitId: '', personen: '2 Erwachsene', erwachsene: 2, kinder: 0,
+      haustiere: 'keine', beruf: 'beide unbefristet angestellt', einkommen: '5.200 € netto im Monat', einkommenNetto: 5200,
+      einzug: '1. Februar', nachricht: 'Reicht Einkommen, Beschäftigung, Haustiere und Einzug nach.',
+      urteil: 'passt', punkte: 85, gruende: ['Zwei Erwachsene', '5.200 € netto, beide unbefristet'], fehlt: [],
+      antwort: 'Sehr geehrte Frau Schäfer,\n\nvielen Dank für die Ergänzung. Gern lade ich Sie zur Besichtigung ein, bitte nennen Sie mir zwei oder drei Terminvorschläge.' };
   }
   if (text.indexOf('Schäfer') !== -1) {
     return { istAnfrage: true, name: 'Renate Schäfer', email: '', telefon: '0172 1067372',
@@ -282,7 +298,8 @@ test('Mit Postfach und Assistent: Anfragen werden gelesen, bewertet und nur einm
   assert.equal(a.json.assistent, true);
   assert.equal(a.json.fehler, null, server.ausgabe());
   assert.ok(a.json.abgleich > 0);
-  assert.deepEqual(ids(a.json.anfragen), ['anfrage2', 'anfrage1', 'antwort1', 'hinweis'], 'nur echte Anfragen, die neueste zuerst');
+  assert.deepEqual(ids(a.json.anfragen), ['anfrage2', 'anfrage1', 'antwort2', 'antwort1', 'hinweis'], 'nur echte Anfragen, die neueste zuerst');
+  const anfrageVon = function (id) { return a.json.anfragen.find(function (x) { return x.id === id; }); };
 
   const anna = a.json.anfragen[1];
   assert.equal(anna.status, 'neu');
@@ -313,16 +330,38 @@ test('Mit Postfach und Assistent: Anfragen werden gelesen, bewertet und nur einm
   assert.deepEqual(max.bewertung.gruende, ['Hund']);
   assert.ok(max.url.endsWith('/anfrage2'));
 
+  // Bei einer Absage wird nichts erfragt, auch wenn etwas fehlt
+  assert.doesNotMatch(max.bewertung.antwort, /folgende Angaben/);
+
   // Die Antwort einer Interessentin: Antwortweg ist ihre Weiterleitungsadresse, und die hält ihre Mails zusammen
-  const renate = a.json.anfragen[2];
-  assert.equal(renate.id, 'antwort1');
+  const renate = anfrageVon('antwort1');
   assert.equal(renate.inhalt.name, 'Renate Schäfer');
   assert.equal(renate.inhalt.email, RELAIS, 'ohne eigene Adresse gilt die Weiterleitungsadresse von ImmoScout');
   assert.equal(renate.person, RELAIS);
   assert.equal(renate.bewertung.urteil, 'vielleicht');
+  assert.equal(renate.bewertung.punkte, 60);
+  // Der Vorschlag des Modells fragt nicht nach dem Einkommen — die App ergänzt die Frage, damit die Antwort fertig ist
+  assert.match(renate.bewertung.antwort, /^Sehr geehrte Frau Schäfer, ja, die Wohnung ist noch frei\.\n\nDamit ich Ihre Anfrage vollständig prüfen kann, bitte ich Sie noch um folgende Angaben:\n- Einkommen$/);
+
+  // Ihre zweite Nachricht reicht das Fehlende nach: bewertet zusammen mit der ersten, jetzt passt sie
+  const nachtrag = anfrageVon('antwort2');
+  assert.equal(nachtrag.person, RELAIS, 'dieselbe Person');
+  assert.equal(nachtrag.bewertung.urteil, 'passt');
+  assert.equal(nachtrag.bewertung.punkte, 85);
+  assert.deepEqual(nachtrag.bewertung.fehlt, []);
+  assert.doesNotMatch(nachtrag.bewertung.antwort, /folgende Angaben/, 'nichts fehlt, also wird nichts erfragt');
+  const anClaude = function (enthaelt) {
+    return anthropic.anfragen.filter(function (r) { return r.body.messages[0].content.indexOf(enthaelt) !== -1; })
+      .map(function (r) { return r.body.messages[0].content; });
+  };
+  const zweite = anClaude('5.200 € netto')[0];
+  assert.match(zweite, /Frühere Mails derselben Person, schon bewertet/);
+  assert.match(zweite, /damals: vielleicht \(60 Punkte\)/);
+  const erste = anClaude('ist die Wohnung noch zu mieten')[0];
+  assert.doesNotMatch(erste, /Frühere Mails/, 'die erste Nachricht hatte noch keine Vorgeschichte');
 
   // Die bloße Benachrichtigung: Karte ohne Bewertung durch Claude, mit dem Weg in den Nachrichten-Manager
-  const hinweis = a.json.anfragen[3];
+  const hinweis = anfrageVon('hinweis');
   assert.equal(hinweis.id, 'hinweis');
   assert.equal(hinweis.inhalt.hinweis, 'nachrichten-manager');
   assert.equal(hinweis.inhalt.name, '');
@@ -337,17 +376,18 @@ test('Mit Postfach und Assistent: Anfragen werden gelesen, bewertet und nur einm
   assert.deepEqual(a.json.inserate.map(function (x) { return x.anzeige; }), ['158460832']);
   assert.equal(a.json.inserate[0].titel, 'Erstbezug 2025: 3-Zimmer-Wohnung mit Balkon, EBK und Tiefgarage');
   assert.equal(a.json.inserate[0].adresse, 'Bertha-von-Suttner-Weg 4, 71334 Waiblingen');
-  assert.equal(a.json.inserate[0].anzahl, 2);
-  assert.equal(a.json.inserate[0].offen, 2);
+  assert.equal(a.json.inserate[0].anzahl, 3);
+  assert.equal(a.json.inserate[0].offen, 3);
   assert.equal(a.json.inserate[0].einheitId, '');
   assert.equal(a.json.inserate[0].url, 'https://www.immobilienscout24.de/expose/158460832');
 
-  // Jede Mail wurde einmal vollständig geholt; bei Claude landeten nur die vier, die der Vorfilter durchließ und die
+  // Jede Mail wurde einmal vollständig geholt; bei Claude landeten nur die fünf, die der Vorfilter durchließ und die
   // mehr als eine Benachrichtigung sind
-  assert.deepEqual(google.abrufe.slice().sort(), ['anfrage1', 'anfrage2', 'antwort1', 'hinweis', 'rueckblick', 'statistik', 'suche']);
-  assert.equal(anthropic.anfragen.length, 4);
+  assert.deepEqual(google.abrufe.slice().sort(), ['anfrage1', 'anfrage2', 'antwort1', 'antwort2', 'hinweis', 'rueckblick', 'statistik', 'suche']);
+  assert.equal(anthropic.anfragen.length, 5);
   assert.deepEqual(anthropic.anfragen.map(function (r) { return r.body.messages[0].content.split('\n')[0]; }),
-    ['Betreff: ' + MAILS.anfrage1.betreff, 'Betreff: ' + MAILS.anfrage2.betreff, 'Betreff: ' + MAILS.rueckblick.betreff, 'Betreff: ' + MAILS.antwort1.betreff]);
+    ['Betreff: ' + MAILS.anfrage1.betreff, 'Betreff: ' + MAILS.anfrage2.betreff, 'Betreff: ' + MAILS.rueckblick.betreff,
+      'Betreff: ' + MAILS.antwort1.betreff, 'Betreff: ' + MAILS.antwort2.betreff]);
 
   // So sieht jede Anfrage an Claude aus
   anthropic.anfragen.forEach(function (r) {
@@ -369,6 +409,8 @@ test('Mit Postfach und Assistent: Anfragen werden gelesen, bewertet und nur einm
     assert.equal(r.body.messages[0].role, 'user');
     assert.match(r.body.messages[0].content, /^Betreff: .*\nVon: .*immobilienscout24\.de>\nEingang: /);
     assert.match(r.body.system, /ohne Grußformel und ohne Unterschrift/, 'den Gruß bringt die Signatur mit');
+    assert.match(r.body.system, /bittet die Antwort um genau diese Angaben, jede als eigener Punkt/, 'Fehlendes wird erfragt');
+    assert.match(r.body.system, /Das alte Urteil ist kein Maßstab/, 'Nachträge können das Urteil ändern');
   });
   // Die HTML-Mail kam als Text an, ohne Tags und ohne Stilangaben
   const text = anthropic.anfragen[1].body.messages[0].content;
@@ -379,9 +421,9 @@ test('Mit Postfach und Assistent: Anfragen werden gelesen, bewertet und nur einm
 
   // Noch einmal: schon geprüfte Mails werden weder geholt noch bewertet
   a = await louis.get('/api/anfragen?neu=1');
-  assert.equal(google.abrufe.length, 7, 'schon geprüfte Mails werden nicht nochmal geholt');
-  assert.equal(anthropic.anfragen.length, 4);
-  assert.deepEqual(ids(a.json.anfragen), ['anfrage2', 'anfrage1', 'antwort1', 'hinweis']);
+  assert.equal(google.abrufe.length, 8, 'schon geprüfte Mails werden nicht nochmal geholt');
+  assert.equal(anthropic.anfragen.length, 5);
+  assert.deepEqual(ids(a.json.anfragen), ['anfrage2', 'anfrage1', 'antwort2', 'antwort1', 'hinweis']);
 });
 
 test('Benachrichtigung und Antwortweg: die Regeln einzeln', function () {
@@ -464,16 +506,23 @@ test('Neu bewerten: eine Anfrage, dann alle offenen', async function () {
   assert.deepEqual(a.json.anfragen, []);
   assert.equal(anthropic.anfragen.length, bewertet + 1);
 
+  // Die erste Nachricht von Frau Schäfer noch einmal: die spätere Nachricht gehört nicht als „frühere“ dazu
+  a = await louis.post('/api/anfragen/bewerten', { id: 'antwort1' });
+  assert.equal(a.json.anfragen[0].bewertung.urteil, 'vielleicht');
+  assert.equal(anthropic.anfragen.length, bewertet + 2);
+  assert.doesNotMatch(anthropic.anfragen[anthropic.anfragen.length - 1].body.messages[0].content, /Frühere Mails/);
+
   // Alle offenen (neu und gemerkt), die neueste zuerst — die Sammelrunde kostet bis zu 30 Aufrufe und ist dem Verwalter vorbehalten
   assert.equal((await papa.post('/api/anfragen/bewerten', {})).status, 403);
-  assert.equal(anthropic.anfragen.length, bewertet + 1, 'ohne Recht wird Claude nicht gefragt');
+  assert.equal(anthropic.anfragen.length, bewertet + 2, 'ohne Recht wird Claude nicht gefragt');
   a = await louis.post('/api/anfragen/bewerten', {});
   assert.equal(a.status, 200);
-  assert.deepEqual(ids(a.json.anfragen), ['anfrage2', 'anfrage1', 'antwort1', 'hinweis']);
+  assert.deepEqual(ids(a.json.anfragen), ['anfrage2', 'anfrage1', 'antwort2', 'antwort1', 'hinweis']);
   assert.equal(a.json.anfragen[0].inhalt.haustiere, 'Hund');
   assert.equal(a.json.anfragen[0].bewertung.urteil, 'passt nicht');
-  assert.equal(a.json.anfragen[3].inhalt.hinweis, 'nachrichten-manager', 'die Benachrichtigung bleibt eine — ohne Claude');
-  assert.equal(anthropic.anfragen.length, bewertet + 4);
+  assert.equal(a.json.anfragen[2].bewertung.urteil, 'passt', 'der Nachtrag passt auch nach dem Neubewerten');
+  assert.equal(a.json.anfragen[4].inhalt.hinweis, 'nachrichten-manager', 'die Benachrichtigung bleibt eine — ohne Claude');
+  assert.equal(anthropic.anfragen.length, bewertet + 6);
 });
 
 test('Löschen nur der Verwalter', async function () {
@@ -482,11 +531,11 @@ test('Löschen nur der Verwalter', async function () {
   assert.equal(a.status, 200);
   assert.deepEqual(a.json, { ok: true });
   a = await louis.get('/api/anfragen');
-  assert.deepEqual(ids(a.json.anfragen), ['anfrage1', 'antwort1', 'hinweis']);
+  assert.deepEqual(ids(a.json.anfragen), ['anfrage1', 'antwort2', 'antwort1', 'hinweis']);
 
   // Die Mail bleibt als geprüft vermerkt — beim nächsten Abgleich kommt sie nicht zurück
   const geholt = google.abrufe.length;
   a = await louis.get('/api/anfragen?neu=1');
-  assert.deepEqual(ids(a.json.anfragen), ['anfrage1', 'antwort1', 'hinweis']);
+  assert.deepEqual(ids(a.json.anfragen), ['anfrage1', 'antwort2', 'antwort1', 'hinweis']);
   assert.equal(google.abrufe.length, geholt);
 });

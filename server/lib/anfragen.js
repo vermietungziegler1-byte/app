@@ -276,25 +276,37 @@ function anweisung(kriterien) {
     + '"Sorgfalt und Ton" heißt: Sind die Angaben vollständig, ist die Nachricht höflich und erkennbar an genau diese '
     + 'Wohnung gerichtet? Rechtschreibung, Grammatik, einfaches oder fehlerhaftes Deutsch und eine andere Sprache als '
     + 'Deutsch sind kein Minus und tauchen nicht in den Gründen auf.\n'
-    + '- Was die Mail nicht hergibt, erfindest du nicht: Textfelder bleiben dann leer, Zahlen null, und unter '
-    + '"fehlt" nennst du, was noch zu erfragen wäre. Fehlen die wichtigsten Angaben, ist das Urteil "unklar".\n'
+    + '- Was die Mail nicht hergibt, erfindest du nicht: Textfelder bleiben dann leer, Zahlen null. Fehlen die '
+    + 'wichtigsten Angaben, ist das Urteil "unklar".\n'
+    + '- "fehlt": Prüfe immer diese Angaben — Zahl der Erwachsenen und Kinder, monatliches Haushaltsnettoeinkommen, '
+    + 'Beruf und Art der Beschäftigung (z. B. unbefristet angestellt), Haustiere, gewünschter Einzugstermin — und dazu '
+    + 'alles, was Louis’ Kriterien sonst verlangen. Was davon in keiner der Mails steht, kommt unter "fehlt", jeweils als '
+    + 'kurze Bezeichnung, die so in einer Aufzählung in der Antwort stehen kann (z. B. "monatliches Haushaltsnettoeinkommen", '
+    + '"gewünschter Einzugstermin"). Steht es in einer früheren Mail derselben Person, fehlt es nicht.\n'
     + '- istAnfrage ist false bei allem, was keine Anfrage einer Person zu einer Mietwohnung ist (Angebote aus '
     + 'Suchaufträgen, Werbung, Rechnungen, Statistiken, Systemmeldungen). Dann bleiben die übrigen Felder leer '
     + 'und das Urteil ist "unklar".\n'
     + '- Stehen unter der Mail frühere Mails derselben Person, bewerte alle zusammen: Angaben aus früheren Mails gelten '
     + 'weiter, und eine kurze Nachfrage ohne neue Angaben ist keine „unklare“ Anfrage, sondern führt die frühere Bewertung '
-    + 'fort (istAnfrage bleibt true).\n'
+    + 'fort (istAnfrage bleibt true). Urteil und Punkte gelten für die Person nach allen Mails zusammen: Liefert die '
+    + 'neue Mail fehlende Angaben nach, die die Kriterien erfüllen, steigen Urteil und Punkte (etwa von "unklar" auf '
+    + '"passt"); verrät sie einen Ausschlussgrund, sinken sie. Das alte Urteil ist kein Maßstab.\n'
     + '- Lässt die Mail erkennen, um welche Wohnung es geht, und steht eine passende Einheit in der Liste unten, '
     + 'trage deren id in einheitId ein, sonst einen leeren Text.\n'
     + '- urteil: "passt" erfüllt die Kriterien klar; "vielleicht" weitgehend, mit einem offenen Punkt; '
     + '"passt nicht" verstößt gegen ein hartes Kriterium (zu viele Personen, Hund, zu geringes Einkommen); '
     + '"unklar" bei zu wenig Angaben. punkte drückt dasselbe als Zahl von 0 bis 100 aus.\n'
     + '- gruende: zwei bis vier kurze Stichpunkte, die das Urteil tragen, konkret aus der Mail.\n'
-    + '- antwort: Vorschlag für eine kurze, freundliche Antwort auf Deutsch an die Person (Sie-Form), ohne Grußformel '
-    + 'und ohne Unterschrift am Ende — die hängt die App als Signatur selbst an. '
-    + 'Bei "passt" eine Einladung zur Besichtigung mit der Bitte um Terminvorschläge, bei '
-    + '"vielleicht" oder "unklar" eine freundliche Nachfrage zu den fehlenden Angaben, bei "passt nicht" eine '
-    + 'höfliche Absage ohne Begründung.\n\n'
+    + '- antwort: eine fertige, kurze, freundliche Mail auf Deutsch an die Person (Sie-Form), die Louis so abschicken '
+    + 'kann: Anrede mit Namen ("Sehr geehrte Frau …" oder "Sehr geehrter Herr …" nur, wenn die Person ihre Anrede selbst '
+    + 'angibt, sonst "Guten Tag" und der volle Name), dann der Text — ohne Grußformel und ohne Unterschrift am Ende, die '
+    + 'hängt die App als Signatur selbst an. Bei "passt" eine Einladung zur Besichtigung mit der Bitte um '
+    + 'Terminvorschläge. Bei "vielleicht" oder "unklar" Dank für die Nachricht und die Bitte um die fehlenden Angaben. '
+    + 'Bei "passt nicht" eine höfliche Absage ohne Begründung und ohne Fragen. Steht unter "fehlt" etwas und das Urteil '
+    + 'ist nicht "passt nicht", bittet die Antwort um genau diese Angaben, jede als eigener Punkt einer Aufzählung mit '
+    + '"- " am Zeilenanfang und mit derselben Bezeichnung wie unter "fehlt" — auch bei "passt", dann mit der Bitte, sie '
+    + 'vor der Besichtigung zu schicken. Hat die Person schon etwas nachgereicht, bedankt sich die Antwort dafür und '
+    + 'fragt nur noch, was dann noch fehlt.\n\n'
     + 'Wohnungen von Louis (id: Beschreibung):\n' + wohnungsliste();
 }
 
@@ -322,8 +334,8 @@ const SCHEMA = {
     urteil: { type: 'string', enum: URTEILE },
     punkte: { type: 'integer', description: '0 bis 100: wie gut die Person zu den Kriterien passt' },
     gruende: { type: 'array', items: { type: 'string' } },
-    fehlt: { type: 'array', items: { type: 'string' }, description: 'Angaben, die für ein sicheres Urteil noch fehlen' },
-    antwort: { type: 'string', description: 'Vorschlag für die Antwort an die Person' }
+    fehlt: { type: 'array', items: { type: 'string' }, description: 'Angaben, die noch fehlen, als kurze Bezeichnungen für die Aufzählung in der Antwort' },
+    antwort: { type: 'string', description: 'Fertige Antwort an die Person, ohne Gruß und Unterschrift am Ende' }
   }
 };
 
@@ -384,13 +396,33 @@ async function bewerten(mail, zeitlimit) {
   return ergebnisBereinigen(e);
 }
 
+// Fragt die Antwort nach allem, was fehlt? Was sie nicht erwähnt, kommt als Aufzählung dazu — damit die Antwort fertig
+// ist, auch wenn das Modell einen Punkt vergisst. Erwähnt gilt ein Punkt, wenn eines seiner längeren Wörter im Text
+// steht. Bei einer Absage wird nichts erfragt. Ohne Antwort entsteht eine schlichte Nachfrage mit Anrede
+function fehlendeErfragen(antwort, fehlt, urteil, name) {
+  if (urteil === 'passt nicht' || !fehlt.length) return antwort;
+  const klein = antwort.toLowerCase();
+  const offen = fehlt.filter(function (f) {
+    const worte = f.toLowerCase().split(/[^a-z0-9äöüß]+/).filter(function (w) { return w.length >= 5; });
+    if (!worte.length) return klein.indexOf(f.toLowerCase()) === -1;
+    return !worte.some(function (w) { return klein.indexOf(w) !== -1; });
+  });
+  if (!offen.length) return antwort;
+  const block = 'Damit ich Ihre Anfrage vollständig prüfen kann, bitte ich Sie noch um folgende Angaben:\n'
+    + offen.map(function (f) { return '- ' + f; }).join('\n');
+  if (antwort) return antwort.replace(/\s+$/, '') + '\n\n' + block;
+  return 'Guten Tag' + (name ? ' ' + name : '') + ',\n\nvielen Dank für Ihre Nachricht und Ihr Interesse an der Wohnung.\n\n' + block;
+}
+
 function ergebnisBereinigen(e) {
   const s = function (v, n) { return String(v == null ? '' : v).trim().slice(0, n || 300); };
   const liste = function (v) { return Array.isArray(v) ? v.map(function (x) { return s(x, 200); }).filter(Boolean).slice(0, 6) : []; };
   const ganz = function (v) { return Number.isInteger(v) ? v : null; };
+  const urteil = URTEILE.indexOf(e.urteil) !== -1 ? e.urteil : 'unklar';
+  const fehlt = liste(e.fehlt);
   // Zweite Schicht neben der Regel in der Anweisung: Links und Kontonummern haben im Antwortvorschlag nichts
   // verloren — auch dann nicht, wenn eine Mail sie dem Modell unterschieben wollte
-  const antwortText = s(e.antwort, 3000)
+  const antwortText = fehlendeErfragen(s(e.antwort, 3000), fehlt, urteil, s(e.name, 120))
     .replace(/https?:\/\/\S+|www\.\S+/gi, '[Link entfernt]')
     .replace(/\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){3,7}(?:\s?[A-Z0-9]{1,4})?\b/g, '[Kontonummer entfernt]');
   const punkte = Math.max(0, Math.min(100, Math.round(Number(e.punkte) || 0)));
@@ -404,8 +436,8 @@ function ergebnisBereinigen(e) {
       einzug: s(e.einzug, 120), nachricht: s(e.nachricht, 1500)
     },
     bewertung: {
-      urteil: URTEILE.indexOf(e.urteil) !== -1 ? e.urteil : 'unklar',
-      punkte: punkte, gruende: liste(e.gruende), fehlt: liste(e.fehlt), antwort: antwortText
+      urteil: urteil,
+      punkte: punkte, gruende: liste(e.gruende), fehlt: fehlt, antwort: antwortText
     },
     einheitId: s(e.einheitId, 60)
   };
@@ -437,11 +469,20 @@ function anzeigeVon(z) {
   const m = [i.objekt, z.betreff, i.original].filter(Boolean).join(' ').match(/\b(\d{8,10})\b/);
   return m ? m[1] : '';
 }
-// Frühere, schon bewertete Mails derselben Person — als Zusammenhang für die Bewertung einer Nachfrage
-function fruehereVon(von, ausser) {
+// Frühere, schon bewertete Mails derselben Person — als Zusammenhang für die Bewertung einer Nachfrage. Nur Mails von
+// vor dieser: wird eine ältere Mail neu bewertet, gehört eine spätere Nachricht nicht als „frühere“ dazu
+function fruehereVon(von, ausser, wann) {
   const p = personVon(von, null);
   if (!p) return [];
-  return db.prepare('SELECT * FROM anfragen WHERE person = ? AND id != ? ORDER BY wann DESC LIMIT 3').all(p, ausser).map(zeileLesen);
+  return db.prepare('SELECT * FROM anfragen WHERE person = ? AND id != ? AND wann < ? ORDER BY wann DESC LIMIT 3')
+    .all(p, ausser, Number(wann) || Date.now()).map(zeileLesen);
+}
+// Die letzte Bewertung derselben Person vor dieser Mail — für „vorher 40 Punkte“ in der Sofortmeldung
+function vorherigeBewertung(z) {
+  if (!z || !z.person) return null;
+  const v = db.prepare('SELECT bewertung FROM anfragen WHERE person = ? AND id != ? AND wann < ? AND bewertung IS NOT NULL ORDER BY wann DESC LIMIT 1')
+    .get(z.person, z.id, z.wann);
+  try { return v ? JSON.parse(v.bewertung) : null; } catch (e) { return null; }
 }
 function fruehereText(liste) {
   if (!liste || !liste.length) return '';
@@ -608,7 +649,7 @@ async function abgleichen() {
 
       bewertet++;
       let ergebnis = null, fehler = null;
-      m.fruehere = fruehereVon(m.von, id);   // Nachfragen im Zusammenhang mit früheren Mails der Person bewerten
+      m.fruehere = fruehereVon(m.von, id, m.wann);   // Nachfragen im Zusammenhang mit früheren Mails der Person bewerten
       try { ergebnis = await bewerten(m, BEWERTUNG_ZEITLIMIT_MS); }
       catch (e) {
         const zeitlimit = e.name === 'TimeoutError' || e.name === 'AbortError';
@@ -681,7 +722,7 @@ async function neuBewerten(id) {
     return zeile();
   }
   let ergebnis = null, fehler = null;
-  m.fruehere = fruehereVon(m.von, id);
+  m.fruehere = fruehereVon(m.von, id, m.wann);
   try { ergebnis = await bewerten(m); }
   catch (e) {
     const grund = voruebergehend(e);
@@ -720,12 +761,18 @@ async function sofortMelden(ids) {
       titel: 'Neue Anfrage bei ImmoScout',
       text: ('Nachricht und Kontakt stehen im Nachrichten-Manager von ImmoScout' + (wo ? ' · ' + wo : '')).slice(0, 300),
       url: '/?anfragen=1', tag: 'anfrage-' + id
-    } : {
-      titel: 'Neue Anfrage: ' + (a.inhalt.name || 'ohne Namen'),
-      text: ((URTEIL_KURZ[b.urteil] || 'unklar') + (typeof b.punkte === 'number' ? ' · ' + b.punkte + ' Punkte' : '')
-        + (wo ? ' · ' + wo : '') + ((b.gruende || [])[0] ? ' — ' + b.gruende[0] : '')).slice(0, 300),
-      url: '/?anfragen=1', tag: 'anfrage-' + id
-    });
+    } : (function () {
+      // Eine weitere Nachricht derselben Person: dann zählt, wie sich die Bewertung verändert hat
+      const vorher = vorherigeBewertung(z);
+      const anders = vorher && typeof vorher.punkte === 'number' && vorher.punkte !== b.punkte;
+      return {
+        titel: (vorher ? 'Neue Nachricht: ' : 'Neue Anfrage: ') + (a.inhalt.name || 'ohne Namen'),
+        text: ((vorher && vorher.urteil !== b.urteil ? 'jetzt ' : '') + (URTEIL_KURZ[b.urteil] || 'unklar')
+          + (typeof b.punkte === 'number' ? ' · ' + b.punkte + ' Punkte' + (anders ? ' (vorher ' + vorher.punkte + ')' : '') : '')
+          + (wo ? ' · ' + wo : '') + ((b.gruende || [])[0] ? ' — ' + b.gruende[0] : '')).slice(0, 300),
+        url: '/?anfragen=1', tag: 'anfrage-' + id
+      };
+    })());
   }
   if (ids.length > 5) {
     await mitteilungSenden(abos, { titel: 'Anfragen', text: 'und ' + (ids.length - 5) + ' weitere neue Anfragen', url: '/?anfragen=1', tag: 'anfragen-mehr' });

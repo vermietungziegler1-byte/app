@@ -6109,21 +6109,29 @@
   function anfVon(id) {
     return anfragen.daten ? anfragen.daten.anfragen.find(function (a) { return a.id === id; }) : null;
   }
-  // Eine Karte je Person: alle Mails derselben Person zusammen. Vorn steht, was noch offen ist (eine neue Antwort
-  // vor längst Erledigtem), darunter die am besten bewertete, bei gleichen Punkten die neuere
+  // Eine Karte je Person: alle Mails derselben Person zusammen. Vorn steht die jüngste bewertete Mail — sie wurde mit
+  // allen früheren zusammen bewertet, ihr Urteil gilt also für die Person, auch wenn es schlechter ist als ein altes.
+  // Nur eine neue, noch unbearbeitete Mail ohne Bewertung (Fehler) rückt davor, damit sie nicht untergeht
   function anfGruppen(liste) {
     const nach = {};
     const reihen = [];
-    const punkte = function (x) { return x.bewertung ? x.bewertung.punkte : -1; };
-    const rang = function (x) { return x.status === 'neu' ? 2 : x.status === 'gemerkt' ? 1 : 0; };
     (liste || []).forEach(function (a) {
       const k = a.person || a.id;
-      if (!nach[k]) { nach[k] = { haupt: a, alle: [] }; reihen.push(nach[k]); }
+      if (!nach[k]) { nach[k] = { haupt: null, alle: [] }; reihen.push(nach[k]); }
       nach[k].alle.push(a);
-      const h = nach[k].haupt;
-      if (rang(a) > rang(h) || (rang(a) === rang(h) && (punkte(a) > punkte(h) || (punkte(a) === punkte(h) && a.wann > h.wann)))) nach[k].haupt = a;
+    });
+    reihen.forEach(function (g) {
+      const sortiert = g.alle.slice().sort(function (x, y) { return y.wann - x.wann; });
+      let haupt = sortiert.find(function (x) { return x.bewertung; }) || sortiert[0];
+      if (sortiert[0].status === 'neu' && haupt.status !== 'neu') haupt = sortiert[0];
+      g.haupt = haupt;
     });
     return reihen;
+  }
+  // Die Bewertung derselben Person vor dieser Mail, wenn es eine gab — für „vorher 40 Punkte“
+  function anfVorher(a) {
+    return anfGruppeVon(a.id).filter(function (x) { return x.id !== a.id && x.bewertung && x.wann < a.wann; })
+      .sort(function (x, y) { return y.wann - x.wann; })[0] || null;
   }
   function anfGruppeVon(id) {
     const a = anfVon(id);
@@ -6335,9 +6343,11 @@
       const i = a.inhalt || {};
       const b = a.bewertung;
       const wann = new Date(a.wann);
+      const vorher = anfVorher(a);
       const meta = [einheitKurz(a.einheitId) || i.objekt || '',
         wann.toLocaleDateString('de-DE', { day: 'numeric', month: 'numeric' }) + ' ' + anfUhrzeit(a.wann),
-        g.alle.length > 1 ? g.alle.length + ' Mails' : ''].filter(Boolean).join(' · ');
+        g.alle.length > 1 ? g.alle.length + ' Mails' : '',
+        vorher && b && vorher.bewertung.punkte !== b.punkte ? 'vorher ' + vorher.bewertung.punkte + ' Punkte' : ''].filter(Boolean).join(' · ');
       const profil = anfProfil(i);
       const gruende = b ? (b.gruende || []).slice(0, 2).join(' · ') : '';
       html += '<div class="anf-karte klickbar ' + anfKlasse(a) + '" data-act="anf-oeffnen" data-id="' + esc(a.id) + '">'
@@ -6422,8 +6432,17 @@
     if (b) {
       urteilbox = '<div class="anf-urteilbox ' + anfKlasse(a) + '">'
         + '<div><b>' + anfUrteil(a) + '</b> · ' + b.punkte + ' Punkte</div>'
+        // Neue Nachricht derselben Person: das Urteil gilt nach allen Mails zusammen, das alte steht zum Vergleich da
+        + (function () {
+            const v = anfVorher(a);
+            return v && v.bewertung.punkte !== b.punkte
+              ? '<div class="anf-fehlt">Nach der neuen Nachricht neu bewertet, vorher ' + esc(ANF_URTEIL[v.bewertung.urteil] || 'Unklar')
+                + ' mit ' + v.bewertung.punkte + ' Punkten</div>'
+              : '';
+          })()
         + ((b.gruende || []).length ? '<ul>' + b.gruende.map(function (g) { return '<li>' + esc(g) + '</li>'; }).join('') + '</ul>' : '')
-        + ((b.fehlt || []).length ? '<div class="anf-fehlt">Noch offen: ' + esc(b.fehlt.join(', ')) + '</div>' : '')
+        + ((b.fehlt || []).length ? '<div class="anf-fehlt">' + (b.urteil === 'passt nicht' ? 'Noch offen: ' : 'Noch offen, wird in der Antwort erfragt: ')
+            + esc(b.fehlt.join(', ')) + '</div>' : '')
         // Misslungene Neubewertung: der Server behält das alte Urteil und trägt nur den Fehler ein
         + (a.fehler ? '<div class="anf-gruende neg">Die letzte Neubewertung hat nicht geklappt: ' + esc(a.fehler) + ' — das Urteil oben ist der Stand davor.</div>' : '')
         + '</div>';
