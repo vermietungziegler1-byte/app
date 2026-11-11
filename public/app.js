@@ -903,10 +903,43 @@
       }).catch(function () { /* beim nächsten Tastendruck */ });
     }, 180);
   }
+  // Signaturen: mehrere mit Namen, eine ist der Standard (eigene Seite „Signaturen“)
+  let sig = { daten: null, laedt: false, fehler: null };
+  function sigStandardText() {
+    const d = sig.daten;
+    if (!d) return '';
+    const s = d.signaturen.find(function (x) { return x.id === d.standard; });
+    return s ? s.text : '';
+  }
+  function sigLaden(leise) {
+    sig.laedt = true;
+    return (leise ? apiRoh : api)('postfach/signaturen')
+      .then(function (r) { sig.daten = r; sig.fehler = null; pf.signatur = sigStandardText(); })
+      .catch(function (e) { sig.fehler = e.message; })
+      .then(function () { sig.laedt = false; });
+  }
+  function sigSpeichern(liste, standard) {
+    return api('postfach/signaturen', { method: 'PUT', body: { signaturen: liste, standard: standard } })
+      .then(function (r) { sig.daten = r; sig.fehler = null; pf.signatur = sigStandardText(); return r; });
+  }
+  // Die Standard-Signatur für eine neue Mail. Ist noch keine hinterlegt, liest der Server einmal die zuletzt
+  // gesendeten Mails und legt den Fund als Standard an
   function pfSignatur() {
-    if (pf.signatur !== undefined) return Promise.resolve(pf.signatur);
-    return api('postfach/signatur').then(function (r) { pf.signatur = r.signatur || ''; return pf.signatur; })
-      .catch(function () { return ''; });
+    if (sig.daten) return Promise.resolve(sigStandardText());
+    return sigLaden(true).then(function () {
+      if (!sig.daten) return pf.signatur || '';
+      if (sig.daten.signaturen.length) return sigStandardText();
+      return api('postfach/signatur')
+        .then(function (r) { return sigLaden(true).then(function () { return sigStandardText() || r.signatur || ''; }); })
+        .catch(function () { return ''; });
+    });
+  }
+  // Der Antwortvorschlag endete früher mit Gruß und „Louis Ziegler“ — die Signatur bringt beides mit, also weg damit
+  function anfOhneUnterschrift(text) {
+    const GRUSS = /^\s*(louis ziegler|mit freundlichen grüßen|mit freundlichem gruß|freundliche grüße|beste grüße|viele grüße|herzliche grüße|liebe grüße|schöne grüße|grüße|gruß|mfg)[,!.]?\s*$/i;
+    const zeilen = String(text || '').replace(/\r/g, '').replace(/\s+$/, '').split('\n');
+    while (zeilen.length && GRUSS.test(zeilen[zeilen.length - 1])) zeilen.pop();
+    return zeilen.join('\n').replace(/[\s,]*(mit freundlichen grüßen|beste grüße|viele grüße|freundliche grüße)?[,\s]*louis ziegler\s*$/i, '').replace(/\s+$/, '');
   }
   function pfSuchen(q) {
     q = String(q || '').trim();
@@ -1027,9 +1060,9 @@
     // Erst die Signatur holen (beim ersten Mal aus den gesendeten Mails gelesen), dann das Fenster öffnen
     pfSignatur().then(function (sig) { pfSchreibenOeffnen(art, m, ort, uid, sig); });
   }
-  function pfSchreibenOeffnen(art, m, ort, uid, sig) {
+  function pfSchreibenOeffnen(art, m, ort, uid, signatur) {
     const ich = String((pf.status && pf.status.benutzer) || '').toLowerCase();
-    const unten = sig ? '\n\n' + sig : '';
+    const unten = signatur ? '\n\n' + signatur : '';
     const e = { an: '', cc: '', betreff: '', text: '\n' + unten };
     if (m) {
       const datum = m.datum ? new Date(m.datum).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' }) : '';
@@ -1053,7 +1086,8 @@
       }
     }
     modal = { kind: 'pf-schreiben', art: art, bezug: m ? { ordner: ort, uid: uid } : null,
-      anhaenge: art === 'weiter' && m ? m.anhaenge.length : 0, entwurf: e };
+      anhaenge: art === 'weiter' && m ? m.anhaenge.length : 0, entwurf: e,
+      sigText: signatur || '', sigId: sig.daten ? sig.daten.standard : '' };
     render();
     fensterGeoeffnet();
     const feld = root.querySelector(art === 'neu' || art === 'weiter' ? '#pf-an' : '#pf-text');
@@ -1069,12 +1103,25 @@
       .then(function (r) {
         if (war.bezug && war.art !== 'weiter') pfZeilen(war.bezug.ordner, war.bezug.uid).forEach(function (z) { z.beantwortet = true; });
         if (modal === war) modal = null;
+        // Antwort auf eine Anfrage: zurück zur Anfrage, mit der Frage, ob sie damit erledigt ist
+        if (war.anfrageId && anfVon(war.anfrageId)) modal = { kind: 'anfrage', id: war.anfrageId, nachMail: 'gesendet' };
         const g = pfSpezialPfad('gesendet');
         if (g) delete pf.listen[g];
         toast(r.abgelegt ? 'Gesendet' : 'Gesendet — die Kopie in „Gesendet“ hat nicht geklappt');
         render();
       })
       .catch(function (fehler) { war.sendet = false; toast(fehler.message); render(); });
+  }
+  // Ergebnis der Verbindungsprüfung: Posteingang und jeder Weg zum Postausgang in einer Zeile
+  function pfPruefungHtml(p) {
+    const zeile = function (name, r) {
+      if (!r) return '';
+      return '<div><b>' + name + ' (Port ' + r.port + ')</b>'
+        + (r.ok ? '<span class="ok">erreichbar, angemeldet' + (r.ms ? ' · ' + (r.ms / 1000).toFixed(1).replace('.', ',') + ' s' : '') + '</span>'
+          : '<span class="neg">' + esc(r.fehler || 'fehlgeschlagen') + (r.code ? ' (' + esc(r.code) + ')' : '') + '</span>') + '</div>';
+    };
+    return '<div class="pf-pruefung">' + zeile('Posteingang IMAP', p.eingang)
+      + (p.ausgang || []).map(function (r) { return zeile('Postausgang SMTP', r); }).join('') + '</div>';
   }
   // Adressen zum Vorschlagen: Mieter, Interessenten und wer zuletzt geschrieben hat
   function pfAdressListe() {
@@ -2047,9 +2094,11 @@
       if (an) modal.entwurf = { an: an.value, cc: val('pf-cc'), betreff: val('pf-betreff'), text: val('pf-text') };
       return;
     }
-    if (modal && modal.kind === 'pf-einrichten') {
-      const sig = root.querySelector('.modal[data-fenster="pf-einrichten"] #pf-signatur');
-      if (sig) modal.signatur = sig.value;
+    if (modal && modal.kind === 'signatur') {
+      const n = root.querySelector('.modal[data-fenster="signatur"] #sig-name');
+      const t = root.querySelector('.modal[data-fenster="signatur"] #sig-text');
+      const s = root.querySelector('.modal[data-fenster="signatur"] #sig-standard');
+      if (n && t) modal.entwurf = { name: n.value, text: t.value, standard: !!(s && s.checked) };
       return;
     }
     if (modal && modal.entwurf && modal.kind.indexOf('kauf') === 0) {
@@ -4478,7 +4527,10 @@
 
   // Die Bereiche der App — oben als Reiter (Tablet), links in der Seitenleiste (PC), in der Suche als „Seiten“
   const SEITEN = [['heute', 'Heute'], ['aufgaben', 'Aufgaben'], ['objekte', 'Objekte'], ['mieten', 'Mieten'],
-    ['interessenten', 'Interessenten'], ['anfragen', 'Anfragen'], ['post', 'Post'], ['rechnungen', 'Abrechnungen'], ['kaufen', 'Kaufen']];
+    ['interessenten', 'Interessenten'], ['anfragen', 'Anfragen'], ['post', 'Post'], ['rechnungen', 'Abrechnungen'], ['kaufen', 'Kaufen'],
+    ['signaturen', 'Signaturen']];
+  // Signaturen gehören zum Mailkonto — das sieht nur der Verwalter
+  function seitenSichtbar() { return SEITEN.filter(function (t) { return t[0] !== 'signaturen' || nutzerRolle === 'verwalter'; }); }
 
   // Strichsymbole (24er Raster) für Seitenleiste und Kacheln
   const SYM = {
@@ -4491,6 +4543,7 @@
     interessenten: '<circle cx="9" cy="8.5" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 5.2a3.5 3.5 0 0 1 0 6.6M18.5 14.5a6.5 6.5 0 0 1 3 5.5"/>',
     rechnungen: '<path d="M6 3h9l4 4v14H6z"/><path d="M14.5 3v4.5H19M9 12h7M9 16h5"/>',
     kaufen: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21M8 10.5h5M10.5 8v5"/>',
+    signaturen: '<path d="m4 20 4.5-1L19 8.5a2.1 2.1 0 0 0-3-3L5.5 16z"/><path d="m14 7.5 3 3M4 20h16"/>',
     suche: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5 21 21"/>',
     zahnrad: '<circle cx="12" cy="12" r="3"/><path d="M12 2.5v2.2M12 19.3v2.2M4.6 4.6l1.6 1.6M17.8 17.8l1.6 1.6M2.5 12h2.2M19.3 12h2.2M4.6 19.4l1.6-1.6M17.8 6.2l1.6-1.6"/>'
   };
@@ -4550,6 +4603,7 @@
       + '<div class="al-gruppe">Abrechnung</div>'
       + eintrag('rechnungen', 'Abrechnungen')
       + eintrag('kaufen', 'Kaufen')
+      + (nutzerRolle === 'verwalter' ? '<div class="al-gruppe">Mail</div>' + eintrag('signaturen', 'Signaturen') : '')
       + '<div class="al-fuss"><button class="al-eintrag al-ich" data-act="seite" title="Menü und Einstellungen">'
       + '<span class="al-kuerzel">' + esc(kuerzel) + '</span><span class="al-name">' + esc(nutzerName || '') + '</span>'
       + sym('zahnrad', 17) + '</button></div>'
@@ -4618,7 +4672,7 @@
       + '</div></div>';
 
     html += '<div class="seitennav">'
-      + SEITEN.map(function (t) {
+      + seitenSichtbar().map(function (t) {
           const zahl = t[0] === 'anfragen' ? anfNeuZahl() : 0;   // wie viele Anfragen noch niemand angesehen hat
           return '<button class="' + (ansicht === t[0] ? 'aktiv' : '') + '" data-act="zu-' + t[0] + '">' + t[1]
             + (zahl ? '<span class="zahl">' + zahl + '</span>' : '') + '</button>';
@@ -4646,6 +4700,7 @@
               + eintrag('zu-anfragen', 'Anfragen', anfNeuZahl() ? String(anfNeuZahl()) : '')
               + eintrag('zu-rechnungen', 'Abrechnungen')
               + eintrag('zu-kaufen', 'Kaufen')
+              + (nutzerRolle === 'verwalter' ? eintrag('zu-signaturen', 'Signaturen') : '')
               + '</div>'
             : '')
 
@@ -4738,6 +4793,11 @@
     // ---- Eigene Seite: Anfragen ----
     if (ansicht === 'anfragen') {
       html += anfragenAbschnitt();
+    }
+
+    // ---- Eigene Seite: Signaturen ----
+    if (ansicht === 'signaturen') {
+      html += signaturenAbschnitt();
     }
 
     // ---- Eigene Seite: Rechnungen ----
@@ -6049,17 +6109,19 @@
   function anfVon(id) {
     return anfragen.daten ? anfragen.daten.anfragen.find(function (a) { return a.id === id; }) : null;
   }
-  // Eine Karte je Person: alle Mails derselben Person zusammen, die am besten bewertete steht vorn
+  // Eine Karte je Person: alle Mails derselben Person zusammen. Vorn steht, was noch offen ist (eine neue Antwort
+  // vor längst Erledigtem), darunter die am besten bewertete, bei gleichen Punkten die neuere
   function anfGruppen(liste) {
     const nach = {};
     const reihen = [];
     const punkte = function (x) { return x.bewertung ? x.bewertung.punkte : -1; };
+    const rang = function (x) { return x.status === 'neu' ? 2 : x.status === 'gemerkt' ? 1 : 0; };
     (liste || []).forEach(function (a) {
       const k = a.person || a.id;
       if (!nach[k]) { nach[k] = { haupt: a, alle: [] }; reihen.push(nach[k]); }
       nach[k].alle.push(a);
       const h = nach[k].haupt;
-      if (punkte(a) > punkte(h) || (punkte(a) === punkte(h) && a.wann > h.wann)) nach[k].haupt = a;
+      if (rang(a) > rang(h) || (rang(a) === rang(h) && (punkte(a) > punkte(h) || (punkte(a) === punkte(h) && a.wann > h.wann)))) nach[k].haupt = a;
     });
     return reihen;
   }
@@ -6071,10 +6133,16 @@
   function anfInteressant(a) {
     return !!(a.bewertung && (a.bewertung.urteil === 'passt' || a.bewertung.urteil === 'vielleicht'));
   }
-  // Neue Anfragen, die passen oder vielleicht passen — eine je Person; Nachfragen und Unklares zählen nicht
+  // Nur eine Benachrichtigung von ImmoScout — die Nachricht selbst wartet im Nachrichten-Manager
+  function anfHinweis(a) { return !!(a && a.inhalt && a.inhalt.hinweis); }
+  // Neue Anfragen, die etwas von Louis wollen — eine je Person: passende und vielleicht passende, neue Nachrichten
+  // von Leuten, die schon Interessenten sind, und Benachrichtigungen, deren Inhalt bei ImmoScout wartet
   function anfNeuZahl() {
     if (!anfragen.daten) return 0;
-    return anfGruppen(anfragen.daten.anfragen).filter(function (g) { return g.haupt.status === 'neu' && anfInteressant(g.haupt) && !anfIstInteressent(g.haupt); }).length;
+    return anfGruppen(anfragen.daten.anfragen).filter(function (g) {
+      const a = g.haupt;
+      return a.status === 'neu' && (anfInteressant(a) || anfIstInteressent(a) || anfHinweis(a));
+    }).length;
   }
   // Absender ohne die Weiterleitungsadresse des Portals: nur der Name, sonst der Teil vor dem @
   function anfAbsender(von) {
@@ -6111,7 +6179,14 @@
   }
   // Farbe nach Urteil — ohne Bewertung ist etwas schiefgegangen
   function anfKlasse(a) { return a.bewertung ? (ANF_KLASSE[a.bewertung.urteil] || 'a-unklar') : 'a-fehler'; }
-  function anfUrteil(a) { return a.bewertung ? (ANF_URTEIL[a.bewertung.urteil] || 'Unklar') : 'Nicht bewertet'; }
+  function anfUrteil(a) {
+    if (anfHinweis(a)) return 'Bei ImmoScout lesen';
+    return a.bewertung ? (ANF_URTEIL[a.bewertung.urteil] || 'Unklar') : 'Nicht bewertet';
+  }
+  function anfName(a) {
+    const i = (a && a.inhalt) || {};
+    return i.name || (anfHinweis(a) ? 'Neue Anfrage bei ImmoScout' : 'Ohne Namen');
+  }
   // Schon als Interessent übernommen? Dann gehört die Anfrage nicht mehr zu den offenen — erkannt an Mailadresse oder Name
   function anfIstInteressent(a) {
     const i = (a && a.inhalt) || {};
@@ -6124,12 +6199,14 @@
       return name.length > 4 && String(x.name || '').trim().toLowerCase() === name;
     });
   }
-  function anfOffen(a) { return (a.status === 'neu' || a.status === 'gemerkt') && !anfIstInteressent(a); }
+  // Offen ist, was neu ist — auch eine neue Nachricht von jemandem, der schon Interessent ist (die will gelesen
+  // werden) — und Gemerktes, solange die Person nicht als Interessent übernommen wurde
+  function anfOffen(a) { return a.status === 'neu' || (a.status === 'gemerkt' && !anfIstInteressent(a)); }
   function anfImFilter(a, f) {
     if (f === 'offen') return anfOffen(a);
     if (f === 'passt') return anfOffen(a) && !!a.bewertung && a.bewertung.urteil === 'passt';
     if (f === 'gemerkt') return a.status === 'gemerkt' && !anfIstInteressent(a);
-    return a.status === 'abgelehnt' || a.status === 'erledigt' || anfIstInteressent(a);
+    return a.status === 'abgelehnt' || a.status === 'erledigt' || (a.status === 'gemerkt' && anfIstInteressent(a));
   }
   // Was die Person über sich sagt, in einer Zeile
   function anfProfil(i) {
@@ -6213,6 +6290,25 @@
         }).join('')
       + '</div></div>';
 
+    // Inserate: jede Anzeige, zu der Anfragen kamen — mit der Wohnung, die ihr zugeordnet ist
+    if (nutzerRolle === 'verwalter' && (d.inserate || []).length) {
+      html += '<div class="tafel anf-inserate"><h3>Inserate <span class="anzahl">' + d.inserate.length + '</span></h3>'
+        + '<div class="anf-info">Jede Anzeige, zu der Anfragen kamen. Ordne ihr die Wohnung zu — dann landen alle Anfragen dazu, '
+        + 'auch die künftigen, gleich bei der richtigen Wohnung.</div>';
+      d.inserate.forEach(function (x) {
+        const meta = [x.titel ? 'Scout-ID ' + x.anzeige : '', x.adresse,
+          x.anzahl + (x.anzahl === 1 ? ' Anfrage' : ' Anfragen') + (x.offen ? ', ' + x.offen + ' offen' : ''),
+          x.zuletzt ? 'zuletzt ' + new Date(x.zuletzt).toLocaleDateString('de-DE', { day: 'numeric', month: 'numeric' }) : ''].filter(Boolean).join(' · ');
+        html += '<div class="anf-inserat">'
+          + '<div class="fgrow"><div class="anf-titel">' + esc(x.titel || 'Scout-ID ' + x.anzeige) + '</div>'
+          + '<div class="anf-meta">' + esc(meta) + ' · <a href="' + esc(x.url) + '" target="_blank" rel="noopener">Exposé</a></div></div>'
+          + '<div class="anf-zuordnen"><select data-inserat="' + esc(x.anzeige) + '">' + anfEinheitOptionen(x.einheitId) + '</select>'
+          + '<button class="tiny ghost" data-act="anf-inserat-zuordnen" data-anzeige="' + esc(x.anzeige) + '">Zuordnen</button></div>'
+          + '</div>';
+      });
+      html += '</div>';
+    }
+
     if (!alle.length) {
       html += '<div class="tafel"><h3>So kommen Anfragen hierher</h3>'
         + '<div class="anf-schritte">'
@@ -6245,10 +6341,10 @@
       const profil = anfProfil(i);
       const gruende = b ? (b.gruende || []).slice(0, 2).join(' · ') : '';
       html += '<div class="anf-karte klickbar ' + anfKlasse(a) + '" data-act="anf-oeffnen" data-id="' + esc(a.id) + '">'
-        + '<div class="anf-punkte">' + (b ? b.punkte : '?') + '<small>Punkte</small></div>'
+        + '<div class="anf-punkte">' + (anfHinweis(a) ? '…' : (b ? b.punkte : '?')) + '<small>Punkte</small></div>'
         + '<div class="fgrow">'
-        + '<div class="anf-titel">' + esc(i.name || 'Ohne Namen') + ' <span class="anzahl">'
-        + (anfIstInteressent(a) ? 'Interessent' : esc(a.status)) + '</span></div>'
+        + '<div class="anf-titel">' + esc(anfName(a)) + ' <span class="anzahl">'
+        + (anfIstInteressent(a) ? (a.status === 'neu' ? 'Interessent · neue Nachricht' : 'Interessent') : esc(a.status)) + '</span></div>'
         + '<div class="anf-meta">' + esc(meta) + '</div>'
         + (profil ? '<div class="anf-profil">' + esc(profil) + '</div>' : '')
         + (gruende ? '<div class="anf-gruende">' + esc(gruende) + '</div>' : '')
@@ -6345,7 +6441,9 @@
             + (x.bewertung ? ' · ' + x.bewertung.punkte + ' Punkte' : '') + '</button>';
         }).join('') + '</div>'
       : '';
-    return '<h2>' + esc(i.name || 'Anfrage') + '</h2>'
+    // Nur eine ImmoScout-Benachrichtigung: der Weg in den Nachrichten-Manager, nur auf die ImmoScout-Seite selbst
+    const scoutLink = anfHinweis(a) && /^https:\/\/www\.immobilienscout24\.de\//.test(i.link || '') ? i.link : '';
+    return '<h2>' + esc(i.name || (anfHinweis(a) ? 'Neue Anfrage bei ImmoScout' : 'Anfrage')) + '</h2>'
       + '<div class="hint">' + esc([a.betreff, anfAbsender(a.von),
           new Date(a.wann).toLocaleString('de-DE', { day: 'numeric', month: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })]
           .filter(Boolean).join(' · '))
@@ -6365,15 +6463,19 @@
       // Der Wortlaut der Mail (gekürzt), eingeklappt — für Ton und Sorgfalt, ohne das Postfach zu öffnen
       + (i.original ? '<details class="anf-feld anf-nachricht anf-original"><summary>Wortlaut der Mail</summary><pre>' + esc(i.original) + '</pre></details>' : '')
       + '</div>'
-      + f('Antwortvorschlag', '<textarea id="anf-antwort" rows="7" readonly placeholder="Noch kein Vorschlag — erst bewerten">' + esc(antwort) + '</textarea>')
+      + (anfHinweis(a) ? '' : f('Antwortvorschlag', '<textarea id="anf-antwort" rows="7" readonly placeholder="Noch kein Vorschlag — erst bewerten">' + esc(antwort) + '</textarea>'))
       + '<div class="anf-knoepfe">'
-      + '<button class="tiny" data-act="anf-kopieren">Antwort kopieren</button>'
-      + (adresse ? '<a class="kauf-link" href="' + esc(mailto) + '" data-anf-mail="1">Per Mail antworten</a>' : '')
+      + (scoutLink ? '<a class="kauf-link" href="' + esc(scoutLink) + '" target="_blank" rel="noopener">Im ImmoScout-Postfach öffnen</a>' : '')
+      // Aus der App antworten: Mailkonto, Antwortvorschlag und Standard-Signatur — die Antwort geht über die
+      // Weiterleitungsadresse von ImmoScout in den Nachrichten-Manager der Person
+      + (adresse && pfBereit() ? '<button class="tiny primary" data-act="anf-antworten-app">Aus der App antworten</button>' : '')
+      + (anfHinweis(a) ? '' : '<button class="tiny" data-act="anf-kopieren">Antwort kopieren</button>')
+      + (adresse ? '<a class="kauf-link" href="' + esc(mailto) + '" data-anf-mail="1">' + (pfBereit() ? 'Im Mailprogramm' : 'Per Mail antworten') + '</a>' : '')
       + '<button class="tiny ghost" data-act="anf-interessent">Interessent vormerken</button>'
-      + '<button class="tiny ghost" data-act="anf-bewerten">Neu bewerten</button>'
+      + (anfHinweis(a) ? '' : '<button class="tiny ghost" data-act="anf-bewerten">Neu bewerten</button>')
       + '</div>'
-      // Nach dem Klick auf „Per Mail antworten“: gleich ablegen, statt es später zu vergessen
-      + (modal.nachMail ? '<div class="anf-nachfrage">Mailprogramm geöffnet — Anfrage als erledigt ablegen?'
+      // Nach dem Antworten: gleich ablegen, statt es später zu vergessen
+      + (modal.nachMail ? '<div class="anf-nachfrage">' + (modal.nachMail === 'gesendet' ? 'Antwort gesendet' : 'Mailprogramm geöffnet') + ' — Anfrage als erledigt ablegen?'
           + ' <button class="tiny primary" data-act="anf-status" data-st="erledigt">Ja, erledigt</button>'
           + ' <button class="tiny ghost" data-act="anf-nachfrage-weg">Noch nicht</button></div>' : '')
       // Wohnung von Hand zuordnen oder korrigieren
@@ -6451,6 +6553,38 @@
         render();
       }
       else if (act === 'anf-nachfrage-weg') { if (modal) modal.nachMail = false; render(); }
+      else if (act === 'anf-antworten-app') {
+        // Antwort aus der App: Empfänger, Betreff, Antwortvorschlag (ohne den alten Gruß) und die Standard-Signatur
+        const a = anfVon(modal.id);
+        if (!a) return;
+        const i = a.inhalt || {}, b = a.bewertung || {};
+        const an = /^[^\s@<>,;?&#"'()\/]+@[^\s@<>,;?&#"'()\/]+\.[A-Za-z]{2,}$/.test(i.email || '') ? i.email : '';
+        if (!an) { toast('Die Anfrage nennt keine Mailadresse'); return; }
+        el.disabled = true;
+        const sigText = await pfSignatur();
+        const text = anfOhneUnterschrift(b.antwort || '');
+        modal = {
+          kind: 'pf-schreiben', art: 'neu', bezug: null, anhaenge: 0, anfrageId: a.id,
+          sigText: sigText || '', sigId: sig.daten ? sig.daten.standard : '',
+          entwurf: {
+            an: i.name ? '"' + String(i.name).replace(/"/g, '') + '" <' + an + '>' : an, cc: '',
+            betreff: /^(aw|re):/i.test(a.betreff || '') ? a.betreff : 'AW: ' + (a.betreff || 'Ihre Anfrage'),
+            text: text + (sigText ? '\n\n' + sigText : '')
+          }
+        };
+        render();
+        fensterGeoeffnet();
+        const feld = root.querySelector('#pf-text');
+        if (feld) { feld.focus(); feld.setSelectionRange(0, 0); feld.scrollTop = 0; }
+      }
+      else if (act === 'anf-inserat-zuordnen') {
+        const nr = el.getAttribute('data-anzeige');
+        const feld = root.querySelector('select[data-inserat="' + nr + '"]');
+        const r = await api('anfragen/inserate/' + encodeURIComponent(nr), { method: 'PUT', body: { einheitId: feld ? feld.value : '' } });
+        if (anfragen.daten) { anfragen.daten.inserate = r.inserate; anfragen.daten.anfragen = r.anfragen; }
+        toast(feld && feld.value ? 'Wohnung zugeordnet — gilt für alle Anfragen zu dieser Anzeige' : 'Zuordnung entfernt');
+        render();
+      }
       else if (act === 'anf-zuordnen') {
         const feld = root.querySelector('#anf-einheit');
         const r = await api('anfragen/' + encodeURIComponent(modal.id), { method: 'PUT', body: { einheitId: feld ? feld.value : '' } });
@@ -6531,6 +6665,99 @@
             } else toast('Gespeichert — ' + gut + ' neu bewertet' + (schlecht ? ', ' + schlecht + ' fehlgeschlagen (mit rotem Hinweis in der Liste)' : ''));
           } else toast('Gespeichert');
           modal = null;
+          render();
+        } finally { el.disabled = false; }
+      }
+    } catch (fehler) { toast(fehler.message); }
+  }
+
+  // ---------------------------------------------------------------
+  //  Signaturen — mehrere mit Namen, eine ist der Standard unter jeder Mail aus der App
+  // ---------------------------------------------------------------
+  function signaturenAbschnitt() {
+    const d = sig.daten;
+    let html = '<div class="tafel anf-kopf"><h3>Signaturen'
+      + '<span class="zeitraum">'
+      + (pfBereit() ? '<button class="tiny ghost" data-act="sig-holen">Aus gesendeten Mails holen</button>' : '')
+      + '<button class="tiny primary" data-act="sig-neu">+ Neue Signatur</button></span></h3>'
+      + '<div class="anf-info">Die <b>Standard</b>-Signatur steht unter jeder Mail aus der App — bei Antworten auf Anfragen, '
+      + 'im Postfach und beim Weiterleiten. Im Schreibfenster lässt sich zwischen den Signaturen umschalten.</div></div>';
+    if (!d) {
+      if (!sig.laedt && !sig.fehler) sigLaden().then(function () { if (ansicht === 'signaturen') render(); });
+      return html + '<div class="tafel"><div class="unit-type">' + (sig.fehler ? esc(sig.fehler) : 'Signaturen werden geladen …') + '</div></div>';
+    }
+    if (!d.signaturen.length) {
+      return html + '<div class="tafel"><h3>Noch keine Signatur</h3><div class="unit-type">Mit „+ Neue Signatur“ eine anlegen'
+        + (pfBereit() ? ' — oder „Aus gesendeten Mails holen“: dann liest die App den Gruß aus deinen letzten Mails in Outlook.' : '.')
+        + '</div></div>';
+    }
+    html += '<div class="tafel anf-liste">';
+    d.signaturen.forEach(function (s) {
+      html += '<div class="anf-karte klickbar sig-karte" data-act="sig-bearbeiten" data-id="' + esc(s.id) + '">'
+        + '<div class="fgrow"><div class="anf-titel">' + esc(s.name) + (s.id === d.standard ? ' <span class="anzahl">Standard</span>' : '') + '</div>'
+        + '<pre class="sig-vorschau">' + esc(s.text || '(leer)') + '</pre></div>'
+        + '</div>';
+    });
+    html += '</div>';
+    return html;
+  }
+  function sigFenster() {
+    const d = sig.daten || { signaturen: [], standard: '' };
+    const e = modal.entwurf || {};
+    const istStandard = !!modal.id && modal.id === d.standard;
+    const vorgewaehlt = istStandard || (modal.isNew && !d.signaturen.length) || e.standard;
+    return '<h2>' + (modal.isNew ? 'Neue Signatur' : esc(e.name || 'Signatur')) + '</h2>'
+      + '<div class="hint">Der Name ist nur für dich (z. B. „Vermietung“, „Kurz“). Der Text steht unter der Mail — Grußformel, Name, '
+      + 'Anschrift, Telefon.</div>'
+      + f('Name', '<input type="text" id="sig-name" value="' + esc(e.name || '') + '" placeholder="z. B. Vermietung">')
+      + f('Text', '<textarea id="sig-text" class="pf-signatur" rows="8" placeholder="Beste Grüße&#10;Louis Ziegler">' + esc(e.text || '') + '</textarea>')
+      + '<div class="field"><label class="anf-schalter"><input type="checkbox" id="sig-standard"' + (vorgewaehlt ? ' checked' : '')
+      + (istStandard ? ' disabled' : '') + '> Als Standard verwenden</label></div>'
+      + '<div class="modal-actions">'
+      + (modal.isNew ? '' : '<button class="anf-loeschen" data-act="sig-loeschen">' + (modal.loeschen ? 'Wirklich löschen?' : 'Löschen') + '</button>')
+      + '<div class="spacer"></div><button data-act="close">Abbrechen</button>'
+      + '<button class="primary" data-act="sig-speichern">Speichern</button></div>';
+  }
+  async function sigKlick(act, el) {
+    try {
+      const d = sig.daten || { signaturen: [], standard: '' };
+      if (act === 'sig-neu') {
+        modal = { kind: 'signatur', isNew: true, id: null, entwurf: { name: '', text: '' } }; render();
+      }
+      else if (act === 'sig-bearbeiten') {
+        const s = d.signaturen.find(function (x) { return x.id === el.getAttribute('data-id'); });
+        if (!s) return;
+        modal = { kind: 'signatur', isNew: false, id: s.id, entwurf: { name: s.name, text: s.text } }; render();
+      }
+      else if (act === 'sig-speichern') {
+        const name = val('sig-name');
+        const textFeld = root.querySelector('#sig-text');
+        const text = textFeld ? textFeld.value.replace(/\r/g, '').replace(/\s+$/, '') : '';
+        const alsStandard = !!(root.querySelector('#sig-standard') || {}).checked;
+        if (!name) { toast('Bitte einen Namen eintragen'); return; }
+        const liste = d.signaturen.map(function (x) { return { id: x.id, name: x.name, text: x.text }; });
+        let id = modal.id;
+        if (id) {
+          const i = liste.findIndex(function (x) { return x.id === id; });
+          if (i === -1) liste.push({ id: id, name: name, text: text }); else liste[i] = { id: id, name: name, text: text };
+        } else { id = 's' + Date.now().toString(36); liste.push({ id: id, name: name, text: text }); }
+        el.disabled = true;
+        try { await sigSpeichern(liste, alsStandard || !d.standard ? id : d.standard); } finally { el.disabled = false; }
+        modal = null; toast('Signatur gespeichert'); render();
+      }
+      else if (act === 'sig-loeschen') {
+        if (!modal.loeschen) { modal.loeschen = true; render(); return; }   // erst der zweite Klick löscht wirklich
+        const liste = d.signaturen.filter(function (x) { return x.id !== modal.id; });
+        await sigSpeichern(liste, d.standard === modal.id ? (liste[0] ? liste[0].id : '') : d.standard);
+        modal = null; toast('Signatur gelöscht'); render();
+      }
+      else if (act === 'sig-holen') {
+        el.disabled = true;
+        try {
+          const r = await api('postfach/signatur?neu=1');
+          if (!r.signatur) { toast('In den letzten gesendeten Mails habe ich keine Signatur gefunden'); return; }
+          modal = { kind: 'signatur', isNew: true, id: null, entwurf: { name: 'Aus Outlook', text: r.signatur } };
+          toast('Aus deinen gesendeten Mails gelesen — mit „Speichern“ behalten');
           render();
         } finally { el.disabled = false; }
       }
@@ -7924,7 +8151,7 @@
     const gruppe = function (name, liste) { if (liste.length) gruppen.push({ name: name, liste: liste.slice(0, 5), mehr: liste.length - 5 }); };
 
     // Seiten zuerst: „mie“ + Enter springt zu den Mieten
-    gruppe('Seiten', SEITEN.filter(function (t) { return passt(t[1]); })
+    gruppe('Seiten', seitenSichtbar().filter(function (t) { return passt(t[1]); })
       .map(function (t) { return { typ: 'seite', id: t[0], titel: t[1], unten: 'Bereich öffnen' }; }));
 
     gruppe('Objekte', data.objects.filter(function (o) { return passt(o.name, o.note); }).map(function (o) {
@@ -8062,7 +8289,14 @@
     } else if (modal.kind === 'pf-schreiben') {
       const e = modal.entwurf || {};
       const s = pf.status || {};
-      body = '<h2>' + ({ neu: 'Neue Mail', antworten: 'Antworten', allen: 'Allen antworten', weiter: 'Weiterleiten' }[modal.art] || 'Mail') + '</h2>'
+      // Mehr als eine Signatur: unter dem Text umschalten — der Block im Text wird getauscht
+      const sigs = (sig.daten && sig.daten.signaturen) || [];
+      const sigWahl = sigs.length > 1
+        ? '<div class="pf-sig-wahl"><span>Signatur:</span>' + sigs.map(function (x) {
+            return '<button class="tiny ghost' + (x.id === modal.sigId ? ' aktiv' : '') + '" data-act="pf-sig-wahl" data-id="' + esc(x.id) + '">' + esc(x.name) + '</button>';
+          }).join('') + '</div>'
+        : '';
+      body = '<h2>' + (modal.anfrageId ? 'Antwort auf die Anfrage' : ({ neu: 'Neue Mail', antworten: 'Antworten', allen: 'Allen antworten', weiter: 'Weiterleiten' }[modal.art] || 'Mail')) + '</h2>'
         + '<div class="pf-von">Von <b>' + esc(s.name || '') + '</b> &lt;' + esc(s.benutzer || '') + '&gt;</div>'
         + '<datalist id="pf-adressen">' + pfAdressListe().map(function (a) { return '<option value="' + esc(a) + '">'; }).join('') + '</datalist>'
         + '<div class="pf-felder">'
@@ -8071,6 +8305,7 @@
         + '<label><span>Betreff</span><input type="text" id="pf-betreff" value="' + esc(e.betreff || '') + '"></label>'
         + '</div>'
         + '<textarea id="pf-text" class="pf-text" rows="16">' + esc(e.text || '') + '</textarea>'
+        + sigWahl
         + (modal.anhaenge ? '<div class="hint">📎 ' + modal.anhaenge + (modal.anhaenge === 1 ? ' Anhang wird' : ' Anhänge werden') + ' mitgeschickt.</div>' : '')
         + '<div class="modal-actions"><button data-act="close">Verwerfen</button><div class="spacer"></div>'
         + '<button class="primary" data-act="pf-senden"' + (modal.sendet ? ' disabled' : '') + '>' + (modal.sendet ? 'Wird gesendet …' : 'Senden') + '</button></div>';
@@ -8195,14 +8430,18 @@
         + f('Absendername', '<input type="text" id="pf-name" value="' + esc(w.name || s.name || 'Louis Ziegler') + '">')
         + '</div>'
         + (s.pakete === false ? '<div class="hintbox">Auf dem Server fehlen noch die Pakete fürs Postfach — einmal „einspielen“ ausführen.</div>' : '')
-        // Signatur: steht unter jeder Mail aus der App; beim ersten Mal aus den gesendeten Mails gelesen
+        // Verbindung prüfen: Posteingang und jeder Weg zum Postausgang einzeln, mit dem Fehler im Wortlaut
         + (s.eingerichtet
-            ? '<div class="divider"></div><h3 class="pf-sig-titel">Signatur</h3>'
-              + '<div class="hint">Steht unter jeder neuen Mail, Antwort und Weiterleitung aus der App.</div>'
-              + '<textarea id="pf-signatur" class="pf-signatur" rows="7" placeholder="z. B. Beste Grüße, Louis Ziegler">'
-              + esc(modal.signatur !== undefined ? modal.signatur : (pf.signatur || '')) + '</textarea>'
-              + '<div class="pf-sig-knoepfe"><button data-act="pf-sig-holen">Aus gesendeten Mails holen</button>'
-              + '<button class="primary" data-act="pf-sig-speichern">Signatur speichern</button></div>'
+            ? '<div class="divider"></div><h3 class="pf-sig-titel">Verbindung</h3>'
+              + '<div class="hint">Klemmt das Senden („Der Mailserver antwortet nicht“), zeigt die Prüfung, welcher Weg betroffen ist: '
+              + 'Posteingang (IMAP, Port 993) oder Postausgang (SMTP, Port 465 bzw. 587).</div>'
+              + (modal.pruefung ? pfPruefungHtml(modal.pruefung) : '')
+              + '<div class="pf-sig-knoepfe"><button data-act="pf-pruefen"' + (modal.prueftVerbindung ? ' disabled' : '') + '>'
+              + (modal.prueftVerbindung ? 'Wird geprüft …' : 'Verbindung prüfen') + '</button></div>'
+              // Die Signaturen haben eine eigene Seite — mehrere mit Namen, eine als Standard
+              + '<div class="divider"></div><h3 class="pf-sig-titel">Signaturen</h3>'
+              + '<div class="hint">Mehrere Signaturen mit Namen, eine davon Standard — auf der Seite „Signaturen“.</div>'
+              + '<div class="pf-sig-knoepfe"><button data-act="zu-signaturen">Signaturen verwalten</button></div>'
               + '<div class="divider"></div>'
             : '')
         + '<div class="modal-actions">'
@@ -8266,6 +8505,8 @@
       body = kaufFenster();
     } else if (modal.kind === 'anfrage' || modal.kind === 'anf-kriterien') {
       body = anfFenster();
+    } else if (modal.kind === 'signatur') {
+      body = sigFenster();
     } else if (modal.kind === 'interessent') {
       const inter = modal.i;
       const auswahl = [['', '— noch offen —']].concat(
@@ -9277,7 +9518,7 @@
       schreiben: 'Schreiben', nk: 'Betriebskosten', auszug: 'Kontoauszug', beleg: 'Beleg ablegen',
       schnell: 'Aufgabe hinzufügen', suche: 'Suchen', absender: 'Einstellungen',
       kauf: 'Durchgerechnet', 'kauf-neu': 'Angebot eintragen', 'kauf-annahmen': 'Annahmen',
-      anfrage: 'Anfrage', 'anf-kriterien': 'Kriterien',
+      anfrage: 'Anfrage', 'anf-kriterien': 'Kriterien', signatur: 'Signatur',
       'pf-schreiben': 'Mail', 'pf-mail': 'Mail', 'pf-ziel': 'Verschieben', 'pf-einrichten': 'Mailkonto',
       'od-einrichten': 'Google Drive', 'od-zuordnen': 'Zuordnen', 'od-namen': 'Namen aufräumen', anh: 'Anhänge ablegen', 'anh-aendern': 'Anhang einordnen'
     }[modal.kind] || '';
@@ -10056,20 +10297,31 @@
       pfAktion(z && z.markiert ? 'entmarkieren' : 'markieren');
     }
     else if (act === 'pf-suche-ende') { pfSucheEnde(); }
-    else if (act === 'pf-sig-holen') {
-      el.disabled = true;
-      api('postfach/signatur?neu=1').then(function (r) {
-        const feld = root.querySelector('#pf-signatur');
-        if (!r.signatur) { toast('In den letzten gesendeten Mails habe ich keine Signatur gefunden'); return; }
-        if (feld) feld.value = r.signatur;
-        toast('Aus deinen gesendeten Mails übernommen — mit „Signatur speichern“ behalten');
-      }).catch(function (e) { toast(e.message); }).then(function () { el.disabled = false; });
+    else if (act === 'pf-sig-wahl') {
+      // Andere Signatur unter die Mail: den bisherigen Block im Text ersetzen, sonst unten anhängen
+      modalEntwurfMerken();
+      const s = sig.daten && sig.daten.signaturen.find(function (x) { return x.id === el.getAttribute('data-id'); });
+      if (!s || !modal || modal.kind !== 'pf-schreiben') return;
+      const e = modal.entwurf;
+      const alt = modal.sigText || '';
+      if (alt && e.text.indexOf(alt) !== -1) e.text = e.text.replace(alt, s.text);
+      else e.text = e.text.replace(/\s+$/, '') + '\n\n' + s.text;
+      modal.sigText = s.text; modal.sigId = s.id;
+      render();
     }
-    else if (act === 'pf-sig-speichern') {
-      api('postfach/signatur', { method: 'PUT', body: { signatur: val('pf-signatur') } })
-        .then(function (r) { pf.signatur = r.signatur; if (modal) modal.signatur = r.signatur; toast('Signatur gespeichert'); })
-        .catch(function (e) { toast(e.message); });
+    else if (act === 'pf-pruefen') {
+      if (!modal) return;
+      modal.prueftVerbindung = true; modal.pruefung = null; render();
+      api('postfach/pruefen')
+        .then(function (r) { if (modal && modal.kind === 'pf-einrichten') { modal.pruefung = r; modal.prueftVerbindung = false; render(); } })
+        .catch(function (e) { if (modal && modal.kind === 'pf-einrichten') { modal.prueftVerbindung = false; render(); } toast(e.message); });
     }
+    else if (act === 'zu-signaturen') {
+      modal = null; seiteOffen = false;
+      ansicht = 'signaturen'; render(); window.scrollTo(0, 0);
+      if (!sig.daten && !sig.laedt) sigLaden().then(function () { if (ansicht === 'signaturen') render(); });
+    }
+    else if (act.indexOf('sig-') === 0) { sigKlick(act, el); }
     else if (act === 'pf-ziel') { modal = { kind: 'pf-ziel' }; render(); }
     else if (act === 'pf-verschieben') { pfAktion('verschieben', el.getAttribute('data-pfad')); }
     else if (act === 'pf-aufgabe') {
@@ -10088,14 +10340,6 @@
       seiteOffen = false;
       modal = { kind: 'pf-einrichten' }; render();
       if (!pf.status) { pfStart(); setTimeout(function () { if (modal && modal.kind === 'pf-einrichten') render(); }, 800); }
-      if (pfBereit() && pf.signatur === undefined) {
-        // Die Signatur kommt etwas später — ins Feld setzen, solange dort noch nichts getippt ist
-        pfSignatur().then(function (s) {
-          if (!modal || modal.kind !== 'pf-einrichten') return;
-          const feld = root.querySelector('#pf-signatur');
-          if (feld && !feld.value) { feld.value = s; modal.signatur = s; }
-        });
-      }
     }
     else if (act === 'pf-verbinden') {
       const koerper = { benutzer: val('pf-benutzer'), passwort: val('pf-passwort'), server: val('pf-server'), name: val('pf-name') };

@@ -42,7 +42,7 @@ test('Oberfläche: alle Ansichten ohne Programmfehler', { skip: pw ? false : 'Pl
       await seite.reload();
       await seite.waitForSelector('[data-act="zu-objekte"]', { state: 'attached' });
 
-      for (const ziel of ['zu-heute', 'zu-aufgaben', 'zu-objekte', 'zu-mieten', 'zu-interessenten', 'zu-anfragen', 'zu-post', 'zu-rechnungen', 'zu-kaufen']) {
+      for (const ziel of ['zu-heute', 'zu-aufgaben', 'zu-objekte', 'zu-mieten', 'zu-interessenten', 'zu-anfragen', 'zu-post', 'zu-rechnungen', 'zu-kaufen', 'zu-signaturen']) {
         await seite.evaluate(function (z) {
           const el = document.querySelector('[data-act="' + z + '"]');
           if (el) el.click();

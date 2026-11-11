@@ -439,6 +439,56 @@ app.post('/api/postfach/aktion', nurAngemeldet, nurVerwalter, mitFehler(async fu
   res.json({ ok: true, endgueltig: endgueltig });
 }));
 
+// ---------------- Postausgang ----------------
+// Erst der eingestellte Weg (465, TLS von Anfang an), bei Verbindungsfehlern 587 mit STARTTLS — manche Anbieter
+// und manche Netze lassen nur einen der beiden durch. Ein abgelehntes Passwort wird nicht noch einmal probiert
+function smtpWege(z) {
+  const wege = [{ port: SMTP_PORT, secure: MIT_TLS && SMTP_PORT === 465 }];
+  if (MIT_TLS && SMTP_PORT === 465) wege.push({ port: 587, secure: false });
+  return wege.map(function (w) {
+    return {
+      host: z.server, port: w.port, secure: w.secure, requireTLS: MIT_TLS && !w.secure, ignoreTLS: !MIT_TLS,
+      auth: { user: z.benutzer, pass: z.passwort }, connectionTimeout: 20000, greetingTimeout: 15000, socketTimeout: 60000
+    };
+  });
+}
+function verbindungsfehler(e) {
+  return /ECONNREFUSED|ETIMEDOUT|ECONNRESET|EHOSTUNREACH|ENETUNREACH|ESOCKET|ETIMEOUT|Greeting never received|Connection timeout/i
+    .test(String((e && e.code) || '') + ' ' + String((e && e.message) || ''));
+}
+async function smtpSenden(z, nachricht) {
+  let letzter = null;
+  for (const o of smtpWege(z)) {
+    try { return await nodemailer.createTransport(o).sendMail(nachricht); }
+    catch (e) {
+      e.port = o.port;
+      letzter = e;
+      if (!verbindungsfehler(e)) break;
+    }
+  }
+  throw letzter;
+}
+
+// Verbindung prüfen: Posteingang (IMAP) und jeder Weg zum Postausgang (SMTP) einzeln, mit dem Fehler im Wortlaut —
+// wenn das Senden nur „antwortet nicht“ sagt, steht hier, welcher Weg klemmt
+app.get('/api/postfach/pruefen', nurAngemeldet, nurVerwalter, mitFehler(async function (req, res) {
+  if (!ImapFlow || !nodemailer) throw fehler(PAKETE_FEHLEN, 500);
+  const z = zugang();
+  if (!z) throw fehler('Das Postfach ist noch nicht eingerichtet', 409);
+  const ergebnis = { server: z.server, benutzer: z.benutzer, eingang: null, ausgang: [] };
+  const t0 = Date.now();
+  const c = new ImapFlow(imapOptionen(z));
+  c.on('error', function () { /* steht im Ergebnis */ });
+  try { await c.connect(); await c.logout().catch(function () { /* egal */ }); ergebnis.eingang = { port: IMAP_PORT, ok: true, ms: Date.now() - t0 }; }
+  catch (e) { ergebnis.eingang = { port: IMAP_PORT, ok: false, fehler: anmeldeFehler(e), code: String(e.code || ''), ms: Date.now() - t0 }; }
+  for (const o of smtpWege(z)) {
+    const t1 = Date.now();
+    try { await nodemailer.createTransport(o).verify(); ergebnis.ausgang.push({ port: o.port, ok: true, ms: Date.now() - t1 }); }
+    catch (e) { ergebnis.ausgang.push({ port: o.port, ok: false, fehler: anmeldeFehler(e), code: String(e.code || ''), ms: Date.now() - t1 }); }
+  }
+  res.json(ergebnis);
+}));
+
 // Schreiben, antworten, weiterleiten — als louis.ziegler@mzer.de, Kopie landet in „Gesendet“
 app.post('/api/postfach/senden', nurAngemeldet, nurVerwalter, mitFehler(async function (req, res) {
   if (!nodemailer) throw fehler(PAKETE_FEHLEN, 500);
@@ -459,7 +509,17 @@ app.post('/api/postfach/senden', nurAngemeldet, nurVerwalter, mitFehler(async fu
   let bezug = null;
   if (b.bezug && b.bezug.ordner && Number(b.bezug.uid)) {
     bezug = { ordner: String(b.bezug.ordner), uid: Number(b.bezug.uid) };
-    const p = (await imOrdner(bezug.ordner, function (c) { return mailHolen(c, bezug.uid); })).p;
+    const holen = function () { return imOrdner(bezug.ordner, function (c) { return mailHolen(c, bezug.uid); }); };
+    let p;
+    try { p = (await holen()).p; }
+    catch (e) {
+      if (e.status === 404) throw e;
+      // Die seit Minuten gehaltene Verbindung war wohl tot — einmal frisch verbinden, dann erst aufgeben,
+      // und dann so, dass klar ist: der Posteingang klemmt, nicht der Versand
+      trennen();
+      try { p = (await holen()).p; }
+      catch (e2) { throw fehler('Die Originalmail ließ sich nicht aus dem Posteingang holen (' + z.server + '): ' + (e2.status ? e2.message : anmeldeFehler(e2)), 502); }
+    }
     if (b.art === 'weiter') {
       nachricht.attachments = (p.attachments || []).filter(function (a) { return !a.related; })
         .map(function (a) { return { filename: a.filename, content: a.content, contentType: a.contentType }; });
@@ -469,12 +529,12 @@ app.post('/api/postfach/senden', nurAngemeldet, nurVerwalter, mitFehler(async fu
     }
   }
 
-  const transport = nodemailer.createTransport({
-    host: z.server, port: SMTP_PORT, secure: MIT_TLS && SMTP_PORT === 465, ignoreTLS: !MIT_TLS,
-    auth: { user: z.benutzer, pass: z.passwort }, connectionTimeout: 20000, greetingTimeout: 15000, socketTimeout: 60000
-  });
-  try { await transport.sendMail(nachricht); }
-  catch (e) { throw fehler('Senden fehlgeschlagen: ' + anmeldeFehler(e), 502); }
+  try { await smtpSenden(z, nachricht); }
+  catch (e) {
+    // Mit Server, Port und Fehlercode — „antwortet nicht“ allein hilft bei der Suche nicht weiter
+    throw fehler('Senden fehlgeschlagen: ' + anmeldeFehler(e) + ' (Postausgang ' + z.server + ', Port ' + (e.port || SMTP_PORT)
+      + (e.code ? ', ' + e.code : '') + ')', 502);
+  }
 
   // Kopie in „Gesendet“ ablegen, damit sie auch in Outlook dort steht
   let abgelegt = false;
@@ -518,21 +578,79 @@ async function signaturVorschlag() {
   return Object.keys(zaehler).sort(function (a, b) { return zaehler[b] - zaehler[a]; })[0] || '';
 }
 
+// Mehrere Signaturen mit Namen („Vermietung“, „Kurz“ …); eine ist der Standard und steht unter jeder Mail aus der App,
+// im Schreibfenster lässt sich umschalten. Gespeichert als Liste in den Einstellungen; die alte Einzelsignatur
+// (postfach_signatur) wird beim ersten Lesen übernommen und für ältere Oberflächen weiter mitgeschrieben
+function signaturenLesen() {
+  let liste = null;
+  try { liste = JSON.parse(einstellung('postfach_signaturen') || 'null'); } catch (e) { liste = null; }
+  if (!Array.isArray(liste)) {
+    const alt = einstellung('postfach_signatur');
+    liste = alt ? [{ id: 's1', name: 'Standard', text: alt }] : [];
+  }
+  liste = liste.filter(function (s) { return s && typeof s === 'object' && s.id; }).map(function (s) {
+    return { id: String(s.id).slice(0, 40), name: String(s.name || '').slice(0, 80), text: String(s.text || '').slice(0, 3000) };
+  });
+  let standard = einstellung('postfach_signatur_standard') || '';
+  if (!liste.some(function (s) { return s.id === standard; })) standard = liste.length ? liste[0].id : '';
+  return { signaturen: liste, standard: standard };
+}
+function signaturenSchreiben(liste, standard) {
+  einstellungSetzen('postfach_signaturen', JSON.stringify(liste));
+  einstellungSetzen('postfach_signatur_standard', standard || '');
+  const s = liste.find(function (x) { return x.id === standard; });
+  einstellungSetzen('postfach_signatur', s ? s.text : '');
+}
+function standardSignatur() {
+  const s = signaturenLesen();
+  const t = s.signaturen.find(function (x) { return x.id === s.standard; });
+  return t ? t.text : '';
+}
+
+app.get('/api/postfach/signaturen', nurAngemeldet, nurVerwalter, function (req, res) { res.json(signaturenLesen()); });
+
+app.put('/api/postfach/signaturen', nurAngemeldet, nurVerwalter, function (req, res) {
+  const b = req.body || {};
+  if (!Array.isArray(b.signaturen)) return res.status(400).json({ fehler: 'Signaturen müssen eine Liste sein' });
+  if (b.signaturen.length > 20) return res.status(400).json({ fehler: 'Höchstens 20 Signaturen' });
+  const gesehen = {};
+  const liste = [];
+  for (const s of b.signaturen) {
+    if (!s || typeof s !== 'object') return res.status(400).json({ fehler: 'Eine Signatur ist kein Eintrag' });
+    const name = String(s.name || '').trim().slice(0, 80);
+    const text = String(s.text || '').replace(/\r/g, '').trim().slice(0, 3000);
+    if (!name) return res.status(400).json({ fehler: 'Jede Signatur braucht einen Namen' });
+    let id = String(s.id || '').replace(/[^a-z0-9_-]/gi, '').slice(0, 40) || ('s' + crypto.randomUUID().slice(0, 8));
+    while (gesehen[id]) id += 'x';
+    gesehen[id] = true;
+    liste.push({ id: id, name: name, text: text });
+  }
+  let standard = String(b.standard || '');
+  if (!liste.some(function (s) { return s.id === standard; })) standard = liste.length ? liste[0].id : '';
+  signaturenSchreiben(liste, standard);
+  res.json(signaturenLesen());
+});
+
+// Die Standard-Signatur allein (ältere Oberflächen); ohne eine hinterlegte wird einmal aus den gesendeten Mails gelesen
 app.get('/api/postfach/signatur', nurAngemeldet, nurVerwalter, mitFehler(async function (req, res) {
-  const gespeichert = einstellung('postfach_signatur');
   const neu = req.query.neu === '1';
-  if (gespeichert !== null && !neu) return res.json({ signatur: gespeichert });
+  const s = signaturenLesen();
+  if (s.signaturen.length && !neu) return res.json({ signatur: standardSignatur() });
   let vorschlag = '';
   try { vorschlag = await signaturVorschlag(); } catch (e) { vorschlag = ''; }
-  // Beim ersten Mal gleich übernehmen — unter Mehr → Mailkonto lässt sie sich ändern
-  if (gespeichert === null && !neu && vorschlag) einstellungSetzen('postfach_signatur', vorschlag);
+  // Beim ersten Mal gleich als Standard übernehmen — auf der Seite „Signaturen“ lässt sie sich ändern
+  if (!s.signaturen.length && !neu && vorschlag) signaturenSchreiben([{ id: 's1', name: 'Standard', text: vorschlag }], 's1');
   res.json({ signatur: vorschlag, vorschlag: true });
 }));
 
 app.put('/api/postfach/signatur', nurAngemeldet, nurVerwalter, function (req, res) {
-  const s = String((req.body || {}).signatur || '').replace(/\r/g, '').slice(0, 3000);
-  einstellungSetzen('postfach_signatur', s);
-  res.json({ signatur: s });
+  const t = String((req.body || {}).signatur || '').replace(/\r/g, '').slice(0, 3000);
+  const s = signaturenLesen();
+  const liste = s.signaturen.slice();
+  const i = liste.findIndex(function (x) { return x.id === s.standard; });
+  if (i === -1) liste.push({ id: 's1', name: 'Standard', text: t }); else liste[i] = { id: liste[i].id, name: liste[i].name, text: t };
+  signaturenSchreiben(liste, i === -1 ? 's1' : s.standard);
+  res.json({ signatur: t });
 });
 
 // ---------------- Suche, die mitdenkt ----------------

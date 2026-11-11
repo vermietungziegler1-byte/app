@@ -86,10 +86,39 @@ test('Postfach: nur der Verwalter, Anmeldung wird geprüft, Passwort liegt versc
     assert.equal(wert.indexOf(PASSWORT), -1);
     assert.equal(fs.readFileSync(path.join(server.daten, 'postfach.schluessel')).length, 32);
 
+    // Signaturen: mehrere mit Namen, eine ist der Standard; die alte Einzelsignatur bleibt für ältere Oberflächen gleich
+    assert.equal((await papa.get('/api/postfach/signaturen')).status, 403);
+    a = await louis.get('/api/postfach/signaturen');
+    assert.equal(a.status, 200);
+    assert.deepEqual(a.json, { signaturen: [], standard: '' });
+    assert.equal((await louis.put('/api/postfach/signaturen', { signaturen: 'Gruß' })).status, 400);
+    assert.equal((await louis.put('/api/postfach/signaturen', { signaturen: [{ name: '', text: 'ohne Namen' }] })).status, 400);
+    a = await louis.put('/api/postfach/signaturen', {
+      signaturen: [{ id: 'a', name: 'Vermietung', text: 'Beste Grüße\nLouis Ziegler\nVermietung\r\n' }, { id: 'b', name: 'Kurz', text: 'Viele Grüße\nLouis' }],
+      standard: 'b'
+    });
+    assert.equal(a.status, 200);
+    assert.deepEqual(a.json.signaturen.map(function (s) { return s.id + ':' + s.name; }), ['a:Vermietung', 'b:Kurz']);
+    assert.equal(a.json.signaturen[0].text, 'Beste Grüße\nLouis Ziegler\nVermietung', 'Wagenrücklauf und Leerraum am Ende sind weg');
+    assert.equal(a.json.standard, 'b');
+    assert.equal((await louis.get('/api/postfach/signatur')).json.signatur, 'Viele Grüße\nLouis', 'die Einzelsignatur ist der Standard');
+    // Ohne gültigen Standard gilt die erste; ohne id bekommt der Eintrag eine
+    a = await louis.put('/api/postfach/signaturen', { signaturen: [{ name: 'Neu', text: 'Gruß\nL.' }], standard: 'gibtsnicht' });
+    assert.equal(a.json.signaturen.length, 1);
+    assert.ok(a.json.signaturen[0].id);
+    assert.equal(a.json.standard, a.json.signaturen[0].id);
+    // Die alte Schnittstelle schreibt in den Standard
+    a = await louis.put('/api/postfach/signatur', { signatur: 'Gruß\nLouis Ziegler' });
+    assert.equal(a.json.signatur, 'Gruß\nLouis Ziegler');
+    a = await louis.get('/api/postfach/signaturen');
+    assert.equal(a.json.signaturen[0].text, 'Gruß\nLouis Ziegler');
+    assert.equal(a.json.signaturen[0].name, 'Neu');
+
     // Trennen löscht die Zugangsdaten
     assert.equal((await papa.del('/api/postfach')).status, 403);
     assert.equal((await louis.del('/api/postfach')).status, 200);
     assert.equal((await louis.get('/api/postfach')).json.eingerichtet, false);
+    assert.equal((await louis.get('/api/postfach/pruefen')).status, 409, 'ohne Einrichtung gibt es nichts zu prüfen');
   } finally {
     await server.stoppen();
     imap.stoppen();

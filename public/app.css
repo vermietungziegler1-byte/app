@@ -1855,3 +1855,20 @@
     #app .anf-urteil { display: none; }
     #app .anf-punkte { width: 46px; height: 46px; font-size: 16px; }
   }
+
+  /* --- Inserate (Anfragen-Seite) und Signaturen --- */
+  #app .anf-inserat { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 10px 0; border-bottom: 1px solid var(--line-soft); }
+  #app .anf-inserat:last-child { border-bottom: none; }
+  #app .anf-inserat .fgrow { flex: 1 1 240px; min-width: 0; }
+  #app .anf-inserat .anf-zuordnen { margin: 0; flex: 0 1 340px; }
+  #app .sig-vorschau {
+    margin: 4px 0 0; font: inherit; font-size: 12.5px; line-height: 1.4; color: var(--muted);
+    white-space: pre-wrap; overflow-wrap: anywhere; max-height: 7.2em; overflow: hidden;
+  }
+  #app .pf-sig-wahl { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0 2px; font-size: 12.5px; color: var(--muted); }
+  #app .pf-sig-wahl button.aktiv { color: var(--messing); border-color: var(--messing); }
+  #app .pf-pruefung { margin: 6px 0 8px; font-size: 13px; line-height: 1.5; }
+  #app .pf-pruefung div { display: flex; gap: 8px; align-items: baseline; }
+  #app .pf-pruefung b { flex: none; min-width: 150px; }
+  #app .pf-pruefung .ok { color: #4f9d69; }
+  #app .pf-pruefung .neg { color: var(--sperr); }

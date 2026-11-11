@@ -20,7 +20,8 @@ server/
   server.js        startet die Anwendung und bindet die Bausteine ein
   lib/             Bausteine: kern, anmeldung, daten, todoist, google, push,
                    stimme, assistent, kalender, rechnungen, sicherung, kaufen,
-                   anfragen
+                   anfragen (Mietanfragen, Inserate), postfach (IMAP/SMTP,
+                   Signaturen, Verbindungsprüfung), gdrive, anhaenge
   test/            automatische Tests
 werkzeuge/
   einspielen.sh    Update auf dem Server einspielen (mit Sicherung und Rücknahme)

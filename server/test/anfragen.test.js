@@ -61,8 +61,30 @@ const MAILS = {
   rueckblick: {
     betreff: 'Ihr Wochenrückblick', wann: JETZT - 6 * 3600000,
     text: 'Ihre Wochenstatistik: 120 Aufrufe, 4 Merklisten, 2 Kontaktanfragen. Verlängern Sie jetzt Ihre Anzeige.'
+  },
+  // Antwort einer Interessentin über ImmoScout: Absender ist ihre Weiterleitungsadresse, der Text steht in der Mail
+  antwort1: {
+    von: 'Renate Schäfer <sucher.48cb78a3af99465aa6aad15cf5e4cef2@nachrichten.immobilienscout24.de>',
+    betreff: 'Neue Nachricht: Frau Schäfer hat Ihnen geantwortet. (Objekt 158460832)', wann: JETZT - 7 * 3600000,
+    text: 'Sie haben eine neue Nachricht zu Ihrem Objekt (Scout-ID: 158460832)\n\n> Guten Morgen Herr Ziegler,\n'
+      + '> ist die Wohnung noch zu mieten? Wir sind zu zweit, beide berufstätig.\n> Viele Grüße\n> Renate Schäfer\n\n'
+      + 'Der Interessent\nAnrede: Frau\nVorname: Renate\nNachname: Schäfer\nPhone: 0172 1067372\n\nScout-ID: 158460832\nAdresse: 71334 Waiblingen'
+  },
+  // Nur eine Benachrichtigung: ImmoScout nennt die Anzeige, aber weder Person noch Nachricht — die stehen im Nachrichten-Manager.
+  // Der Klartext-Teil hat eine Zeile, alles Weitere steht im HTML
+  hinweis: {
+    von: 'anfrage@immobilienscout24.de', replyTo: 'noreply@immobilienscout24.de',
+    betreff: 'Anfrage zu Ihrem Objekt 158460832', wann: JETZT - 8 * 3600000,
+    text: 'Anfrage zu Objekt 158460832',
+    html: '<html><body><h1>Anfrage zu Ihrem Objekt 158460832</h1><p>Guten Tag Louis Ziegler,</p>'
+      + '<p>Sie haben eine neue Anfrage erhalten. Sie können nun direkt über den <a href="https://www.immobilienscout24.de/nachrichten-manager/api/external/reference/158460832/contact-request/7f91d268?utm_medium=email&amp;utm_source=system">Nachrichten-Manager</a> antworten.</p>'
+      + '<h2>Daten zu Ihrer Immobilie 158460832</h2><p>Erstbezug 2025: 3-Zimmer-Wohnung mit Balkon, EBK und Tiefgarage</p>'
+      + '<table><tr><td>Scout-ID:</td><td>158460832</td></tr><tr><td>Zimmer:</td><td>3,00</td></tr><tr><td>Kaltmiete:</td><td>1.347,20 €</td></tr></table>'
+      + '<p>Adresse:</p><p>Bertha-von-Suttner-Weg 4,<br>71334 Waiblingen</p><p><a href="https://www.immobilienscout24.de/expose/158460832">Direkt zum Exposé</a></p>'
+      + '<p>Nachricht Ihrer Interessent:innen</p><p><a href="https://www.immobilienscout24.de/nachrichten-manager/api/external/reference/158460832/contact-request/7f91d268">Nachrichtenverlauf anzeigen</a></p></body></html>'
   }
 };
+const RELAIS = 'sucher.48cb78a3af99465aa6aad15cf5e4cef2@nachrichten.immobilienscout24.de';
 
 function fakeGoogle() {
   const abrufe = [];   // welche Mails vollständig geholt wurden, in Reihenfolge
@@ -78,11 +100,11 @@ function fakeGoogle() {
       const teile = [];
       if (m.text) teile.push({ mimeType: 'text/plain', body: { data: b64(m.text) } });
       if (m.html) teile.push({ mimeType: 'text/html', body: { data: b64(m.html) } });
+      const kopf = [{ name: 'From', value: m.von || ABSENDER }, { name: 'Subject', value: m.betreff }];
+      if (m.replyTo) kopf.push({ name: 'Reply-To', value: m.replyTo });
       return res.end(JSON.stringify({
         id: eine[1], internalDate: String(m.wann),
-        payload: { mimeType: 'multipart/alternative',
-          headers: [{ name: 'From', value: ABSENDER }, { name: 'Subject', value: m.betreff }],
-          parts: teile }
+        payload: { mimeType: 'multipart/alternative', headers: kopf, parts: teile }
       }));
     }
     res.statusCode = 404; res.end('{}');
@@ -101,6 +123,14 @@ function ergebnisFuer(text) {
     return { istAnfrage: false, name: '', email: '', telefon: '', objekt: '', einheitId: '', personen: '',
       erwachsene: null, kinder: null, haustiere: '', beruf: '', einkommen: '', einkommenNetto: null, einzug: '',
       nachricht: '', urteil: 'unklar', punkte: 0, gruende: [], fehlt: [], antwort: '' };
+  }
+  if (text.indexOf('Schäfer') !== -1) {
+    return { istAnfrage: true, name: 'Renate Schäfer', email: '', telefon: '0172 1067372',
+      objekt: 'Scout-ID 158460832', einheitId: '', personen: '2 Erwachsene', erwachsene: 2, kinder: null,
+      haustiere: '', beruf: 'beide berufstätig', einkommen: '', einkommenNetto: null, einzug: '',
+      nachricht: 'Fragt, ob die Wohnung noch frei ist; zwei Berufstätige.',
+      urteil: 'vielleicht', punkte: 60, gruende: ['Zwei Erwachsene', 'Einkommen fehlt'], fehlt: ['Einkommen'],
+      antwort: 'Sehr geehrte Frau Schäfer, ja, die Wohnung ist noch frei.' };
   }
   if (text.indexOf('Hund') !== -1) {
     return { istAnfrage: true, name: 'Max Beispiel', email: 'max.beispiel@example.org', telefon: '0151 2345678',
@@ -252,7 +282,7 @@ test('Mit Postfach und Assistent: Anfragen werden gelesen, bewertet und nur einm
   assert.equal(a.json.assistent, true);
   assert.equal(a.json.fehler, null, server.ausgabe());
   assert.ok(a.json.abgleich > 0);
-  assert.deepEqual(ids(a.json.anfragen), ['anfrage2', 'anfrage1'], 'nur echte Anfragen, die neueste zuerst');
+  assert.deepEqual(ids(a.json.anfragen), ['anfrage2', 'anfrage1', 'antwort1', 'hinweis'], 'nur echte Anfragen, die neueste zuerst');
 
   const anna = a.json.anfragen[1];
   assert.equal(anna.status, 'neu');
@@ -283,11 +313,41 @@ test('Mit Postfach und Assistent: Anfragen werden gelesen, bewertet und nur einm
   assert.deepEqual(max.bewertung.gruende, ['Hund']);
   assert.ok(max.url.endsWith('/anfrage2'));
 
-  // Jede Mail wurde einmal vollständig geholt; bei Claude landeten nur die drei, die der Vorfilter durchließ
-  assert.deepEqual(google.abrufe.slice().sort(), ['anfrage1', 'anfrage2', 'rueckblick', 'statistik', 'suche']);
-  assert.equal(anthropic.anfragen.length, 3);
+  // Die Antwort einer Interessentin: Antwortweg ist ihre Weiterleitungsadresse, und die hält ihre Mails zusammen
+  const renate = a.json.anfragen[2];
+  assert.equal(renate.id, 'antwort1');
+  assert.equal(renate.inhalt.name, 'Renate Schäfer');
+  assert.equal(renate.inhalt.email, RELAIS, 'ohne eigene Adresse gilt die Weiterleitungsadresse von ImmoScout');
+  assert.equal(renate.person, RELAIS);
+  assert.equal(renate.bewertung.urteil, 'vielleicht');
+
+  // Die bloße Benachrichtigung: Karte ohne Bewertung durch Claude, mit dem Weg in den Nachrichten-Manager
+  const hinweis = a.json.anfragen[3];
+  assert.equal(hinweis.id, 'hinweis');
+  assert.equal(hinweis.inhalt.hinweis, 'nachrichten-manager');
+  assert.equal(hinweis.inhalt.name, '');
+  assert.equal(hinweis.inhalt.link, 'https://www.immobilienscout24.de/nachrichten-manager/api/external/reference/158460832/contact-request/7f91d268?utm_medium=email&utm_source=system');
+  assert.equal(hinweis.inhalt.objekt, 'Erstbezug 2025: 3-Zimmer-Wohnung mit Balkon, EBK und Tiefgarage · Bertha-von-Suttner-Weg 4, 71334 Waiblingen (Scout-ID 158460832)');
+  assert.equal(hinweis.bewertung.urteil, 'unklar');
+  assert.equal(hinweis.fehler, null);
+  assert.equal(hinweis.person, null, 'anfrage@immobilienscout24.de ist kein Schlüssel — sonst wären alle Benachrichtigungen eine Karte');
+  assert.match(hinweis.inhalt.original, /Daten zu Ihrer Immobilie 158460832/, 'der Wortlaut kommt aus dem HTML, nicht aus der einen Klartextzeile');
+
+  // Inserate: die Anzeige mit Titel und Adresse aus der Benachrichtigung, zwei Anfragen dazu
+  assert.deepEqual(a.json.inserate.map(function (x) { return x.anzeige; }), ['158460832']);
+  assert.equal(a.json.inserate[0].titel, 'Erstbezug 2025: 3-Zimmer-Wohnung mit Balkon, EBK und Tiefgarage');
+  assert.equal(a.json.inserate[0].adresse, 'Bertha-von-Suttner-Weg 4, 71334 Waiblingen');
+  assert.equal(a.json.inserate[0].anzahl, 2);
+  assert.equal(a.json.inserate[0].offen, 2);
+  assert.equal(a.json.inserate[0].einheitId, '');
+  assert.equal(a.json.inserate[0].url, 'https://www.immobilienscout24.de/expose/158460832');
+
+  // Jede Mail wurde einmal vollständig geholt; bei Claude landeten nur die vier, die der Vorfilter durchließ und die
+  // mehr als eine Benachrichtigung sind
+  assert.deepEqual(google.abrufe.slice().sort(), ['anfrage1', 'anfrage2', 'antwort1', 'hinweis', 'rueckblick', 'statistik', 'suche']);
+  assert.equal(anthropic.anfragen.length, 4);
   assert.deepEqual(anthropic.anfragen.map(function (r) { return r.body.messages[0].content.split('\n')[0]; }),
-    ['Betreff: ' + MAILS.anfrage1.betreff, 'Betreff: ' + MAILS.anfrage2.betreff, 'Betreff: ' + MAILS.rueckblick.betreff]);
+    ['Betreff: ' + MAILS.anfrage1.betreff, 'Betreff: ' + MAILS.anfrage2.betreff, 'Betreff: ' + MAILS.rueckblick.betreff, 'Betreff: ' + MAILS.antwort1.betreff]);
 
   // So sieht jede Anfrage an Claude aus
   anthropic.anfragen.forEach(function (r) {
@@ -307,7 +367,8 @@ test('Mit Postfach und Assistent: Anfragen werden gelesen, bewertet und nur einm
     assert.match(r.body.system, /Gleichbehandlungsgesetz/);
     assert.equal(r.body.messages.length, 1);
     assert.equal(r.body.messages[0].role, 'user');
-    assert.match(r.body.messages[0].content, /^Betreff: .*\nVon: ImmobilienScout24 <noreply@immobilienscout24\.de>\nEingang: /);
+    assert.match(r.body.messages[0].content, /^Betreff: .*\nVon: .*immobilienscout24\.de>\nEingang: /);
+    assert.match(r.body.system, /ohne Grußformel und ohne Unterschrift/, 'den Gruß bringt die Signatur mit');
   });
   // Die HTML-Mail kam als Text an, ohne Tags und ohne Stilangaben
   const text = anthropic.anfragen[1].body.messages[0].content;
@@ -318,9 +379,29 @@ test('Mit Postfach und Assistent: Anfragen werden gelesen, bewertet und nur einm
 
   // Noch einmal: schon geprüfte Mails werden weder geholt noch bewertet
   a = await louis.get('/api/anfragen?neu=1');
-  assert.equal(google.abrufe.length, 5, 'schon geprüfte Mails werden nicht nochmal geholt');
-  assert.equal(anthropic.anfragen.length, 3);
-  assert.deepEqual(ids(a.json.anfragen), ['anfrage2', 'anfrage1']);
+  assert.equal(google.abrufe.length, 7, 'schon geprüfte Mails werden nicht nochmal geholt');
+  assert.equal(anthropic.anfragen.length, 4);
+  assert.deepEqual(ids(a.json.anfragen), ['anfrage2', 'anfrage1', 'antwort1', 'hinweis']);
+});
+
+test('Benachrichtigung und Antwortweg: die Regeln einzeln', function () {
+  const { hinweisAus, antwortAdresse, mailText } = require('../lib/anfragen');
+  // Nur Benachrichtigungen von anfrage@immobilienscout24.de ohne Angaben zur Person
+  assert.equal(hinweisAus(ABSENDER, 'Neue Kontaktanfrage', 'Name: Anna\nE-Mail: a@b.de\nNachrichten-Manager', ''), null);
+  assert.equal(hinweisAus('anfrage@immobilienscout24.de', 'Anfrage zu Ihrem Objekt 1', 'Sie haben eine neue Anfrage erhalten.\nE-Mail: a@b.de', ''), null, 'mit Adresse ist es eine volle Anfrage');
+  const h = hinweisAus('anfrage@immobilienscout24.de', 'Anfrage zu Ihrem Objekt 158460832', 'Sie haben eine neue Anfrage erhalten. Nachrichten-Manager', '');
+  assert.equal(h.nr, '158460832');
+  assert.equal(h.titel, '');
+  assert.equal(h.link, 'https://www.immobilienscout24.de/expose/158460832', 'ohne Link in der Mail wenigstens das Exposé');
+  // Antwortadresse: die Weiterleitungsadresse zählt, auch als Absender; Portaladressen nicht
+  assert.equal(antwortAdresse({ From: 'Renate <' + RELAIS + '>' }), RELAIS);
+  assert.equal(antwortAdresse({ From: 'anfrage@immobilienscout24.de', 'Reply-To': 'noreply@immobilienscout24.de' }), '');
+  assert.equal(antwortAdresse({ From: 'ImmoScout <noreply@immobilienscout24.de>', 'Reply-To': 'Anna <anna@example.org>' }), 'anna@example.org');
+  assert.equal(antwortAdresse({ From: 'ImmoScout <noreply@immobilienscout24.de>' }), '');
+  // Kurzer Klartext neben HTML: der Text kommt aus dem HTML
+  const b64 = function (t) { return Buffer.from(t, 'utf8').toString('base64'); };
+  assert.equal(mailText({ parts: [{ mimeType: 'text/plain', body: { data: b64('Anfrage zu Objekt 1') } }, { mimeType: 'text/html', body: { data: b64('<p>Guten Tag,</p><p>viel Text</p>') } }] }), 'Guten Tag,\nviel Text');
+  assert.equal(mailText({ parts: [{ mimeType: 'text/plain', body: { data: b64('Nur Klartext.') } }] }), 'Nur Klartext.');
 });
 
 test('Stand ändern: merken, absagen, Unsinn abgewiesen', async function () {
@@ -349,6 +430,22 @@ test('Stand ändern: merken, absagen, Unsinn abgewiesen', async function () {
   assert.equal(a.json.anfragen[1].einheitId, 'u1');
 });
 
+test('Inserate: eine Anzeige der Wohnung zuordnen gilt für alle Anfragen dazu', async function () {
+  let a = await papa.put('/api/anfragen/inserate/158460832', { einheitId: 'u2' });
+  assert.equal(a.status, 200);
+  assert.equal(a.json.inserate[0].einheitId, 'u2');
+  const nach = {};
+  a.json.anfragen.forEach(function (x) { nach[x.id] = x.einheitId; });
+  assert.equal(nach.antwort1, 'u2');
+  assert.equal(nach.hinweis, 'u2');
+  assert.equal(nach.anfrage1, 'u1', 'Anfragen zu anderen Anzeigen bleiben, wie sie sind');
+  assert.equal((await papa.put('/api/anfragen/inserate/abc', { einheitId: 'u2' })).status, 400);
+
+  a = await papa.put('/api/anfragen/inserate/158460832', { einheitId: '' });
+  assert.equal(a.json.inserate[0].einheitId, '');
+  a.json.anfragen.forEach(function (x) { if (x.id === 'hinweis' || x.id === 'antwort1') assert.equal(x.einheitId, ''); });
+});
+
 test('Neu bewerten: eine Anfrage, dann alle offenen', async function () {
   const bewertet = anthropic.anfragen.length;
   const geholt = google.abrufe.length;
@@ -372,10 +469,11 @@ test('Neu bewerten: eine Anfrage, dann alle offenen', async function () {
   assert.equal(anthropic.anfragen.length, bewertet + 1, 'ohne Recht wird Claude nicht gefragt');
   a = await louis.post('/api/anfragen/bewerten', {});
   assert.equal(a.status, 200);
-  assert.deepEqual(ids(a.json.anfragen), ['anfrage2', 'anfrage1']);
+  assert.deepEqual(ids(a.json.anfragen), ['anfrage2', 'anfrage1', 'antwort1', 'hinweis']);
   assert.equal(a.json.anfragen[0].inhalt.haustiere, 'Hund');
   assert.equal(a.json.anfragen[0].bewertung.urteil, 'passt nicht');
-  assert.equal(anthropic.anfragen.length, bewertet + 3);
+  assert.equal(a.json.anfragen[3].inhalt.hinweis, 'nachrichten-manager', 'die Benachrichtigung bleibt eine — ohne Claude');
+  assert.equal(anthropic.anfragen.length, bewertet + 4);
 });
 
 test('Löschen nur der Verwalter', async function () {
@@ -384,11 +482,11 @@ test('Löschen nur der Verwalter', async function () {
   assert.equal(a.status, 200);
   assert.deepEqual(a.json, { ok: true });
   a = await louis.get('/api/anfragen');
-  assert.deepEqual(ids(a.json.anfragen), ['anfrage1']);
+  assert.deepEqual(ids(a.json.anfragen), ['anfrage1', 'antwort1', 'hinweis']);
 
   // Die Mail bleibt als geprüft vermerkt — beim nächsten Abgleich kommt sie nicht zurück
   const geholt = google.abrufe.length;
   a = await louis.get('/api/anfragen?neu=1');
-  assert.deepEqual(ids(a.json.anfragen), ['anfrage1']);
+  assert.deepEqual(ids(a.json.anfragen), ['anfrage1', 'antwort1', 'hinweis']);
   assert.equal(google.abrufe.length, geholt);
 });

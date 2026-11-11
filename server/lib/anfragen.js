@@ -44,6 +44,12 @@ db.exec(`
     anzeige  TEXT PRIMARY KEY,               -- Nummer der Anzeige (z. B. Scout-ID), wie sie in den Mails steht
     einheit  TEXT NOT NULL                   -- die Wohnung, die dieser Anzeige einmal von Hand zugeordnet wurde
   );
+  CREATE TABLE IF NOT EXISTS anfragen_inserate (
+    anzeige  TEXT PRIMARY KEY,               -- Scout-ID der Anzeige, zu der Anfragen kamen
+    titel    TEXT,                           -- Überschrift des Inserats, wie ImmoScout sie in der Mail nennt
+    adresse  TEXT,
+    zuletzt  INTEGER                         -- Eingang der letzten Mail dazu
+  );
 `);
 try { db.exec('ALTER TABLE anfragen ADD COLUMN person TEXT'); } catch (e) { /* gibt es schon */ }   // Schlüssel: Mails derselben Person
 
@@ -111,7 +117,22 @@ function mailText(teil) {
     (t.parts || []).forEach(durchgehen);
   };
   durchgehen(teil);
-  return (klar.trim() ? klar : htmlZuText(html)).trim();
+  // ImmoScout schreibt in den Klartext-Teil nur noch eine Zeile („Anfrage zu Objekt 158460832“) und alles Weitere
+  // ins HTML — ein kurzer Klartext neben einem HTML-Teil zählt darum nicht als der Text der Mail
+  const klarText = klar.trim();
+  if (klarText && (klarText.length >= 80 || !html.trim())) return klarText;
+  return (htmlZuText(html) || klarText).trim();
+}
+// Der HTML-Teil einer Mail (für Links, die der Text nicht mehr hat)
+function mailHtml(teil) {
+  let html = '';
+  const durchgehen = function (t) {
+    if (!t) return;
+    if (t.body && t.body.data && t.mimeType === 'text/html' && !html) html = b64(t.body.data);
+    (t.parts || []).forEach(durchgehen);
+  };
+  durchgehen(teil);
+  return html;
 }
 function kopfzeilen(mail) {
   const h = {};
@@ -119,27 +140,102 @@ function kopfzeilen(mail) {
   return h;
 }
 
-// Antwortadresse aus dem Reply-To: die Portale schreiben von noreply@…, die Adresse der Person steht meist im
-// Reply-To. Nur eine schlichte Adresse, und keine des Portals selbst — sonst lieber keine
+// Die Weiterleitungsadresse, die ImmoScout jedem Interessenten gibt (sucher.<kennung>@nachrichten.immobilienscout24.de):
+// eine Mail dorthin landet im Nachrichten-Manager der Person. Sie ist der Antwortweg, wenn die Mail keine eigene
+// Adresse nennt — und zugleich der Schlüssel, der die Mails einer Person zusammenhält
+const RELAIS_ADRESSE = /^sucher\.[a-z0-9]+@nachrichten\.immobilienscout24\.de$/i;
+// Antwortadresse: Reply-To, sonst der Absender, wenn er die Weiterleitungsadresse einer Person ist. Die Portale
+// schreiben sonst von noreply@…, da bleibt die Antwort an den Portalabsender lieber weg
 function antwortAdresse(h) {
-  const roh = String(h['Reply-To'] || h['reply-to'] || '');
-  const m = roh.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
-  if (!m || /immobilienscout24|immowelt|immonet|kleinanzeigen|no-?reply/i.test(m[0])) return '';
-  return m[0];
+  const aus = function (feld) {
+    const m = String(feld || '').match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
+    return m ? m[0] : '';
+  };
+  const replyTo = aus(h['Reply-To'] || h['reply-to']);
+  const von = aus(h.From || h.from);
+  if (RELAIS_ADRESSE.test(replyTo)) return replyTo;
+  if (RELAIS_ADRESSE.test(von)) return von;
+  if (!replyTo || /immobilienscout24|immowelt|immonet|kleinanzeigen|no-?reply/i.test(replyTo)) return '';
+  return replyTo;
+}
+
+// ImmoScout schickt seit Herbst 2026 zu jeder Kontaktanfrage nur noch eine Benachrichtigung: Anzeige und Scout-ID, aber
+// weder Name, Nachricht noch Kontaktdaten — die stehen allein im Nachrichten-Manager auf der ImmoScout-Seite. So eine
+// Mail gibt dem Assistenten nichts zu bewerten; sie bekommt eine Karte mit dem Weg dorthin, ohne Bewertung.
+// Erst wenn die Person auf Louis’ Nachricht antwortet, kommt eine Mail mit Text („Neue Nachricht: … hat Ihnen geantwortet“).
+const HINWEIS_ABSENDER = /anfrage@immobilienscout24\.de/i;
+function hinweisAus(von, betreff, text, html) {
+  if (!HINWEIS_ABSENDER.test(String(von || ''))) return null;
+  const t = String(text || '');
+  if (!/neue Anfrage erhalten|Nachrichten-Manager/i.test(t)) return null;
+  if (/\b(E-Mail|Telefon|Nachricht)\s*:/i.test(t)) return null;   // steht doch etwas drin: dann bewertet der Assistent
+  const nr = (String(betreff || '').match(/\b(\d{6,10})\b/) || t.match(/Scout-ID:?\s*(\d{6,10})/i) || [])[1] || '';
+  const zeilen = t.split('\n').map(function (z) { return z.trim(); });
+  let titel = '', adresse = '';
+  const i = zeilen.findIndex(function (z) { return /^Daten zu Ihrer Immobilie/i.test(z); });
+  if (i !== -1) titel = (zeilen.slice(i + 1).find(Boolean) || '').replace(/^Scout-ID.*$/i, '').slice(0, 160);
+  const j = zeilen.findIndex(function (z) { return /^Adresse:/i.test(z); });
+  if (j !== -1) {
+    const teile = [zeilen[j].replace(/^Adresse:\s*/i, '')];
+    for (let k = j + 1; k < zeilen.length && teile.join(' ').length < 120; k++) {
+      if (!zeilen[k]) { if (teile.filter(Boolean).length) break; continue; }
+      if (/^>|Expos|Login|Scout-ID/i.test(zeilen[k])) break;
+      teile.push(zeilen[k]);
+    }
+    adresse = teile.filter(Boolean).join(' ').replace(/\s+,/g, ',').slice(0, 160);
+  }
+  // Der Link in den Nachrichten-Manager — nur einer auf die ImmoScout-Seite selbst
+  const m = String(html || '').match(/href="(https:\/\/www\.immobilienscout24\.de\/[^"]*(?:nachrichten-manager|postfach\/redirects\/conversations)[^"]*)"/i);
+  const link = m ? m[1].replace(/&amp;/g, '&').slice(0, 500) : (nr ? 'https://www.immobilienscout24.de/expose/' + nr : '');
+  return { nr: nr, titel: titel, adresse: adresse, link: link };
+}
+// Was für so eine Benachrichtigung in der Tabelle steht — dieselbe Form wie ein Ergebnis des Assistenten
+function hinweisErgebnis(h) {
+  const objekt = [h.titel, h.adresse].filter(Boolean).join(' · ') + (h.nr ? (h.titel || h.adresse ? ' ' : '') + '(Scout-ID ' + h.nr + ')' : '');
+  return {
+    istAnfrage: true,
+    inhalt: {
+      name: '', email: '', telefon: '', objekt: objekt.trim() || 'ImmoScout-Anzeige', personen: '', erwachsene: null, kinder: null,
+      haustiere: '', beruf: '', einkommen: '', einkommenNetto: null, einzug: '',
+      nachricht: 'ImmoScout hat nur eine Benachrichtigung geschickt — Name, Nachricht und Kontaktdaten der Person stehen allein '
+        + 'im Nachrichten-Manager auf der ImmoScout-Seite. Dort lesen und von dort antworten; antwortet die Person, kommt ihre '
+        + 'Nachricht hier als Anfrage mit Text an.',
+      hinweis: 'nachrichten-manager', link: h.link || ''
+    },
+    bewertung: {
+      urteil: 'unklar', punkte: 0,
+      gruende: ['Nur eine Benachrichtigung von ImmoScout — die Anfrage selbst steht im Nachrichten-Manager'],
+      fehlt: ['Nachricht im ImmoScout-Postfach lesen'], antwort: ''
+    },
+    einheitId: ''
+  };
+}
+// Anzeigen, zu denen Anfragen kamen, mit Titel und Adresse aus den Mails merken — die Übersicht „Inserate“
+function inseratMerken(h, wann) {
+  if (!h || !h.nr) return;
+  db.prepare(`INSERT INTO anfragen_inserate (anzeige, titel, adresse, zuletzt) VALUES (?,?,?,?)
+              ON CONFLICT(anzeige) DO UPDATE SET
+                titel = CASE WHEN excluded.titel <> '' THEN excluded.titel ELSE anfragen_inserate.titel END,
+                adresse = CASE WHEN excluded.adresse <> '' THEN excluded.adresse ELSE anfragen_inserate.adresse END,
+                zuletzt = MAX(COALESCE(anfragen_inserate.zuletzt, 0), excluded.zuletzt)`)
+    .run(h.nr, h.titel || '', h.adresse || '', Number(wann) || Date.now());
 }
 
 // Mails, die sicher keine Anfrage einer Person sind, kosten keine Bewertung. Die Muster treffen bewusst auch Teilwörter
 // („Wochenstatistik“, „Jahresabrechnung“) — deutsche Komposita lassen sich mit Wortgrenzen nicht sortieren …
-const KEINE_ANFRAGE = /^\d+ (neue? )?(angebote?|treffer)\b|suchauftrag|suchagent|newsletter|tipps für|statistik|rechnung|zahlungsbest|ihr inserat|exposé wurde|passwort|anmeldung|bestätigen sie/i;
+const KEINE_ANFRAGE = /^\d+ (neue? )?(angebote?|treffer)\b|suchauftrag|suchagent|newsletter|tipps für|statistik|rechnung|zahlungsbest|ihr inserat|exposé wurde|passwort|anmeldung|bestätigen sie|gefällt deine immobilie|aktiv ansprechen|top-inserat|energieausweis|verifizierungscode|finanzierungsangebot|preisvorstellung/i;
 // … darum hat ein Betreff, der selbst nach Anfrage klingt („Kontaktanfrage: … NK-Abrechnung inklusive“, „Anfrage zu Ihrer
-// Wohnung – Voranmeldung Besichtigung“), Vorrang vor dem Vorfilter: dann entscheidet Claude (istAnfrage), nicht das Muster
-const IST_ANFRAGE = /anfrage|interessent/i;
+// Wohnung – Voranmeldung Besichtigung“, „Neue Nachricht: … hat Ihnen geantwortet“), Vorrang vor dem Vorfilter: dann
+// entscheidet Claude (istAnfrage), nicht das Muster
+const IST_ANFRAGE = /anfrage|interessent|neue nachricht|geantwortet/i;
 // Eigene Antworten („Re: Neue Kontaktanfrage …“) in Gesendet und angefangene Entwürfe sind keine Anfragen —
-// ohne die Ausschlüsse durchsucht Gmail alle Nachrichten, auch diese
+// ohne die Ausschlüsse durchsucht Gmail alle Nachrichten, auch diese. Antworten der Interessenten kommen von
+// sucher.…@nachrichten.immobilienscout24.de mit dem Betreff „Neue Nachricht: … hat Ihnen geantwortet“
 const SUCHE = 'newer_than:' + TAGE_ZURUECK + 'd -in:trash -in:sent -in:drafts ('
-  + 'from:immobilienscout24.de OR from:immowelt.de OR from:immonet.de'
+  + 'from:immobilienscout24.de OR from:nachrichten.immobilienscout24.de OR from:immowelt.de OR from:immonet.de'
   + ' OR from:kleinanzeigen.de OR from:ebay-kleinanzeigen.de'
-  + ' OR subject:Kontaktanfrage OR subject:Mietinteressent OR subject:"Anfrage zu Ihrer"'
+  + ' OR subject:Kontaktanfrage OR subject:Mietinteressent OR subject:"Anfrage zu Ihrer" OR subject:"Anfrage zu Ihrem"'
+  + ' OR subject:"Neue Nachricht" OR subject:"hat Ihnen geantwortet"'
   + ')';
 
 // ---------------- Bewerten ----------------
@@ -194,8 +290,9 @@ function anweisung(kriterien) {
     + '"passt nicht" verstößt gegen ein hartes Kriterium (zu viele Personen, Hund, zu geringes Einkommen); '
     + '"unklar" bei zu wenig Angaben. punkte drückt dasselbe als Zahl von 0 bis 100 aus.\n'
     + '- gruende: zwei bis vier kurze Stichpunkte, die das Urteil tragen, konkret aus der Mail.\n'
-    + '- antwort: Vorschlag für eine kurze, freundliche Antwort auf Deutsch an die Person (Sie-Form), unterschrieben '
-    + 'mit "Louis Ziegler". Bei "passt" eine Einladung zur Besichtigung mit der Bitte um Terminvorschläge, bei '
+    + '- antwort: Vorschlag für eine kurze, freundliche Antwort auf Deutsch an die Person (Sie-Form), ohne Grußformel '
+    + 'und ohne Unterschrift am Ende — die hängt die App als Signatur selbst an. '
+    + 'Bei "passt" eine Einladung zur Besichtigung mit der Bitte um Terminvorschläge, bei '
     + '"vielleicht" oder "unklar" eine freundliche Nachfrage zu den fehlenden Angaben, bei "passt nicht" eine '
     + 'höfliche Absage ohne Begründung.\n\n'
     + 'Wohnungen von Louis (id: Beschreibung):\n' + wohnungsliste();
@@ -317,8 +414,10 @@ function ergebnisBereinigen(e) {
 // ---------------- Person und Anzeige ----------------
 // Mehrere Mails derselben Person gehören zusammen. Schlüssel: die Absenderadresse, wenn sie eine persönliche ist —
 // ImmoScout gibt jedem Interessenten eine eigene Weiterleitungsadresse —, sonst die in der Mail genannte Adresse,
-// sonst der Name. Allgemeine Absender (noreply, info@ …) taugen nicht, dahinter stecken viele verschiedene Leute
-const ALLGEMEINE_ADRESSE = /no-?reply|^(info|kontakt|service|mail|post|office|hallo|hello|newsletter|support)@/i;
+// sonst der Name. Allgemeine Absender (noreply, info@, anfrage@ …) taugen nicht, dahinter stecken viele verschiedene
+// Leute — anfrage@immobilienscout24.de etwa schickt jede Benachrichtigung über eine neue Anfrage, egal von wem.
+// Fehlt ein Schlüssel, steht jede Mail für sich (sonst wären alle Anfragen eine einzige Karte)
+const ALLGEMEINE_ADRESSE = /no-?reply|^(info|kontakt|service|mail|post|office|hallo|hello|newsletter|support|anfrage|anfragen|kontaktanfrage|nachricht|nachrichten|notification|benachrichtigung)@/i;
 function adresseAus(text) {
   const m = String(text || '').match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
   return m ? m[0].toLowerCase() : '';
@@ -397,10 +496,12 @@ function ablegen(id, mail, ergebnis, fehler) {
     inhalt = { original: wortlaut };
   }
   let einheit = ergebnis ? ergebnis.einheitId : '';
-  if (ergebnis && !einheit) {
-    // Wurde die Anzeige schon einmal von Hand einer Wohnung zugeordnet, gilt dieselbe Wohnung
+  if (ergebnis) {
     const anzeige = anzeigeVon({ inhalt: inhalt, betreff: mail.betreff });
-    const bekannt = anzeige ? db.prepare('SELECT einheit FROM anfragen_anzeigen WHERE anzeige = ?').get(anzeige) : null;
+    // Die Anzeige für die Übersicht „Inserate“ merken — Titel und Adresse, wenn die Mail sie nennt
+    if (anzeige) inseratMerken({ nr: anzeige, titel: mail.hinweis ? mail.hinweis.titel : '', adresse: mail.hinweis ? mail.hinweis.adresse : '' }, mail.wann);
+    // Wurde die Anzeige schon einmal von Hand einer Wohnung zugeordnet, gilt dieselbe Wohnung
+    const bekannt = anzeige && !einheit ? db.prepare('SELECT einheit FROM anfragen_anzeigen WHERE anzeige = ?').get(anzeige) : null;
     if (bekannt) einheit = bekannt.einheit;
   }
   db.prepare(`INSERT INTO anfragen (id, wann, von, betreff, inhalt, bewertung, einheit, fehler, person)
@@ -494,6 +595,17 @@ async function abgleichen() {
       }
       if (!m.text) { erledigt.run(id, Date.now()); continue; }
 
+      // Nur eine Benachrichtigung von ImmoScout (ohne Nachricht und Kontaktdaten): Karte mit dem Weg in den
+      // Nachrichten-Manager, ohne den Assistenten zu fragen — es gäbe nichts zu bewerten
+      const hinweis = hinweisAus(m.von, m.betreff, m.text, mailHtml(mail.payload));
+      if (hinweis) {
+        m.hinweis = hinweis;
+        ablegen(id, m, hinweisErgebnis(hinweis), null);
+        erledigt.run(id, Date.now());
+        neu.push(id);
+        continue;
+      }
+
       bewertet++;
       let ergebnis = null, fehler = null;
       m.fruehere = fruehereVon(m.von, id);   // Nachfragen im Zusammenhang mit früheren Mails der Person bewerten
@@ -561,6 +673,13 @@ async function neuBewerten(id) {
   const m = { von: z.von, betreff: z.betreff, wann: z.wann, text: '', antwortAn: antwortAdresse(kopfzeilen(mail)) };
   try { m.text = mailText(mail.payload); }
   catch (e) { nurFehler.run('Die Mail ließ sich nicht lesen: ' + e.message, id); return zeile(); }
+  const hinweis = hinweisAus(m.von, m.betreff, m.text, mailHtml(mail.payload));
+  if (hinweis) {
+    // Eine Benachrichtigung ohne Inhalt bleibt eine — der Assistent bekäme nur den Hinweis auf den Nachrichten-Manager
+    m.hinweis = hinweis;
+    ablegen(id, m, hinweisErgebnis(hinweis), null);
+    return zeile();
+  }
   let ergebnis = null, fehler = null;
   m.fruehere = fruehereVon(m.von, id);
   try { ergebnis = await bewerten(m); }
@@ -596,7 +715,12 @@ async function sofortMelden(ids) {
     const a = zeileLesen(z);
     const b = a.bewertung || {};
     const wo = einheitKurz(a.einheitId) || a.inhalt.objekt || '';
-    await mitteilungSenden(abos, {
+    await mitteilungSenden(abos, a.inhalt.hinweis ? {
+      // Benachrichtigung ohne Inhalt: die Nachricht wartet bei ImmoScout
+      titel: 'Neue Anfrage bei ImmoScout',
+      text: ('Nachricht und Kontakt stehen im Nachrichten-Manager von ImmoScout' + (wo ? ' · ' + wo : '')).slice(0, 300),
+      url: '/?anfragen=1', tag: 'anfrage-' + id
+    } : {
       titel: 'Neue Anfrage: ' + (a.inhalt.name || 'ohne Namen'),
       text: ((URTEIL_KURZ[b.urteil] || 'unklar') + (typeof b.punkte === 'number' ? ' · ' + b.punkte + ' Punkte' : '')
         + (wo ? ' · ' + wo : '') + ((b.gruende || [])[0] ? ' — ' + b.gruende[0] : '')).slice(0, 300),
@@ -627,7 +751,7 @@ function meldungText(neue) {
   const namen = function (liste) {
     return liste.slice(0, 3).map(function (a) {
       const wo = einheitKurz(a.einheitId);
-      return (a.inhalt.name || 'ohne Namen') + (wo ? ' (' + wo + ')' : '');
+      return (a.inhalt.name || (a.inhalt.hinweis ? 'bei ImmoScout lesen' : 'ohne Namen')) + (wo ? ' (' + wo + ')' : '');
     }).join(', ') + (liste.length > 3 ? ' …' : '');
   };
   const teile = [];
@@ -695,6 +819,50 @@ setInterval(function () {
   melden(berlinJetzt()).catch(function (e) { console.log('Anfragen-Meldung fehlgeschlagen:', e.message); });
 }, Number(process.env.PUSH_TAKT_MS) || 60000).unref();
 
+// ---------------- Inserate ----------------
+// Jede Anzeige (Scout-ID), zu der Anfragen kamen: wie viele, wie viele offen, welche Wohnung zugeordnet ist.
+// Die Zuordnung gilt für alle Anfragen zu der Anzeige — auch für die, die noch kommen
+function inserateListe() {
+  const zaehler = {};
+  db.prepare('SELECT id, betreff, inhalt, wann, status FROM anfragen').all().forEach(function (z) {
+    const nr = anzeigeVon(z);
+    if (!nr) return;
+    const e = zaehler[nr] || (zaehler[nr] = { anzahl: 0, offen: 0, zuletzt: 0 });
+    e.anzahl++;
+    if (z.status === 'neu' || z.status === 'gemerkt') e.offen++;
+    if (z.wann > e.zuletzt) e.zuletzt = z.wann;
+  });
+  const zuordnung = {};
+  db.prepare('SELECT anzeige, einheit FROM anfragen_anzeigen').all().forEach(function (z) { zuordnung[z.anzeige] = z.einheit; });
+  const bekannt = {};
+  db.prepare('SELECT * FROM anfragen_inserate').all().forEach(function (z) { bekannt[z.anzeige] = z; });
+  const alle = Object.keys(zaehler);
+  Object.keys(bekannt).forEach(function (nr) { if (alle.indexOf(nr) === -1) alle.push(nr); });
+  return alle.map(function (nr) {
+    const b = bekannt[nr] || {}, z = zaehler[nr] || { anzahl: 0, offen: 0, zuletzt: 0 };
+    return {
+      anzeige: nr, titel: b.titel || '', adresse: b.adresse || '', einheitId: zuordnung[nr] || '',
+      anzahl: z.anzahl, offen: z.offen, zuletzt: Math.max(z.zuletzt, b.zuletzt || 0) || null,
+      url: 'https://www.immobilienscout24.de/expose/' + nr
+    };
+  }).sort(function (a, b) { return (b.zuletzt || 0) - (a.zuletzt || 0); });
+}
+// Eine Anzeige einer Wohnung zuordnen. alle = auch Anfragen umhängen, die schon eine andere Wohnung haben
+function anzeigeZuordnen(anzeige, einheit, alle) {
+  if (einheit) {
+    db.prepare('INSERT INTO anfragen_anzeigen (anzeige, einheit) VALUES (?,?) ON CONFLICT(anzeige) DO UPDATE SET einheit = excluded.einheit')
+      .run(anzeige, einheit);
+    db.prepare(alle ? 'SELECT * FROM anfragen' : "SELECT * FROM anfragen WHERE einheit IS NULL OR einheit = ''").all().forEach(function (w) {
+      if (anzeigeVon(w) === anzeige) db.prepare('UPDATE anfragen SET einheit = ? WHERE id = ?').run(einheit, w.id);
+    });
+  } else {
+    db.prepare('DELETE FROM anfragen_anzeigen WHERE anzeige = ?').run(anzeige);
+    if (alle) db.prepare('SELECT * FROM anfragen').all().forEach(function (w) {
+      if (anzeigeVon(w) === anzeige) db.prepare("UPDATE anfragen SET einheit = '' WHERE id = ?").run(w.id);
+    });
+  }
+}
+
 // ---------------- Schnittstellen ----------------
 function antwort() {
   const b = bereit();
@@ -704,6 +872,7 @@ function antwort() {
     neuFehler: neuFehler,   // woran die letzte Sammelrunde scheiterte, nachdem ihre Antwort schon draußen war
     laeuft: !!(laeuft || neuLaeuft),   // Abgleich oder Sammelrunde arbeiten noch im Hintergrund — die Oberfläche lädt dann nach
     einstellungen: einstellungen(),
+    inserate: inserateListe(),
     anfragen: alleLesen()
   };
 }
@@ -752,6 +921,14 @@ app.post('/api/anfragen/ablegen', nurAngemeldet, nurVerwalter, function (req, re
   res.json({ ok: true, anzahl: anzahl, anfragen: alleLesen() });
 });
 
+// Ein Inserat (Scout-ID) einer Wohnung zuordnen — für alle Anfragen dazu, vorhandene wie künftige
+app.put('/api/anfragen/inserate/:anzeige', nurAngemeldet, function (req, res) {
+  const anzeige = String(req.params.anzeige || '').replace(/\D/g, '').slice(0, 12);
+  if (!anzeige) return res.status(400).json({ fehler: 'Anzeige fehlt' });
+  anzeigeZuordnen(anzeige, String((req.body || {}).einheitId || '').slice(0, 60), true);
+  res.json({ ok: true, inserate: inserateListe(), anfragen: alleLesen() });
+});
+
 app.put('/api/anfragen/:id', nurAngemeldet, function (req, res) {
   const z = db.prepare('SELECT * FROM anfragen WHERE id = ?').get(req.params.id);
   if (!z) return res.status(404).json({ fehler: 'Anfrage nicht gefunden' });
@@ -765,15 +942,7 @@ app.put('/api/anfragen/:id', nurAngemeldet, function (req, res) {
     db.prepare('UPDATE anfragen SET einheit = ? WHERE id = ?').run(einheit, z.id);
     // Die Anzeige merken: alle Anfragen zu derselben Anzeige bekommen dieselbe Wohnung, auch die schon vorhandenen
     const anzeige = anzeigeVon(z);
-    if (anzeige && einheit) {
-      db.prepare('INSERT INTO anfragen_anzeigen (anzeige, einheit) VALUES (?,?) ON CONFLICT(anzeige) DO UPDATE SET einheit = excluded.einheit')
-        .run(anzeige, einheit);
-      db.prepare("SELECT * FROM anfragen WHERE id != ? AND (einheit IS NULL OR einheit = '')").all(z.id).forEach(function (w) {
-        if (anzeigeVon(w) === anzeige) db.prepare('UPDATE anfragen SET einheit = ? WHERE id = ?').run(einheit, w.id);
-      });
-    } else if (anzeige) {
-      db.prepare('DELETE FROM anfragen_anzeigen WHERE anzeige = ?').run(anzeige);
-    }
+    if (anzeige) anzeigeZuordnen(anzeige, einheit, false);
   }
   res.json({ anfrage: zeileLesen(db.prepare('SELECT * FROM anfragen WHERE id = ?').get(z.id)) });
 });
@@ -845,4 +1014,4 @@ app.delete('/api/anfragen/:id', nurAngemeldet, nurVerwalter, function (req, res)
   res.json({ ok: true });
 });
 
-module.exports = { router: app, abgleichen, melden, meldungText, mailText, htmlZuText, aufraeumen, STANDARD_KRITERIEN, KEINE_ANFRAGE, IST_ANFRAGE };
+module.exports = { router: app, abgleichen, melden, meldungText, mailText, mailHtml, htmlZuText, hinweisAus, antwortAdresse, aufraeumen, STANDARD_KRITERIEN, KEINE_ANFRAGE, IST_ANFRAGE };
