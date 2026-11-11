@@ -60,8 +60,25 @@ function eindeutig(liste, dateien) {
     if (!belegt.has(d.eltern)) belegt.set(d.eltern, new Map());
     belegt.get(d.eltern).set(d.name.toLowerCase(), d.id);
   });
-  const anzahl = new Map();
-  liste.forEach(function (z) { if (z.vorschlag) { const k = z.eltern + '|' + z.vorschlag.toLowerCase(); anzahl.set(k, (anzahl.get(k) || 0) + 1); } });
+  const zaehlen = function () {
+    const m = new Map();
+    liste.forEach(function (z) { if (z.vorschlag) { const k = z.eltern + '|' + z.vorschlag.toLowerCase(); m.set(k, (m.get(k) || 0) + 1); } });
+    return m;
+  };
+  // Fotos vom selben Tag am selben Ort: erst die Minute dazu, gibt es die auch mehrfach, die Sekunden
+  let anzahl = zaehlen();
+  liste.forEach(function (z) {
+    if (z.vorschlag && z.uhr && anzahl.get(z.eltern + '|' + z.vorschlag.toLowerCase()) > 1) {
+      z.ohneUhr = z.vorschlag;
+      z.vorschlag = namen.stamm(z.vorschlag) + ' ' + z.uhr + namen.endung(z.vorschlag);
+    }
+  });
+  anzahl = zaehlen();
+  liste.forEach(function (z) {
+    if (z.ohneUhr && z.sek && anzahl.get(z.eltern + '|' + z.vorschlag.toLowerCase()) > 1) {
+      z.vorschlag = namen.stamm(z.ohneUhr) + ' ' + z.sek + namen.endung(z.ohneUhr);
+    }
+  });
   const vergeben = new Map();
   liste.forEach(function (z) {
     if (!z.vorschlag) return;
@@ -70,11 +87,11 @@ function eindeutig(liste, dateien) {
     const frei = function (n) { const l = n.toLowerCase(); return !schon.has(l) && (!hier.has(l) || hier.get(l) === z.id); };
     const e = namen.endung(z.vorschlag);
     let n = z.vorschlag;
-    if (anzahl.get(z.eltern + '|' + n.toLowerCase()) > 1 && z.uhr) n = namen.stamm(n) + ' ' + z.uhr + e;
     const basis = namen.stamm(n);
     for (let i = 2; !frei(n) && i < 1000; i++) n = basis + ' ' + i + e;
     schon.add(n.toLowerCase());
     z.vorschlag = n;
+    delete z.ohneUhr;
   });
 }
 
@@ -93,7 +110,7 @@ function vorschlaege() {
     if (!grund) return;
     if (grund === 'Handyfoto') {
       const f = namen.fotoName(d, zeile.ort);
-      liste.push(Object.assign(zeile, { grund: grund, vorschlag: f.name, uhr: f.uhr, quelle: 'regel' }));
+      liste.push(Object.assign(zeile, { grund: grund, vorschlag: f.name, uhr: f.uhr, sek: f.sek, quelle: 'regel' }));
       return;
     }
     const g = gespeichert.get(d.id);

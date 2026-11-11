@@ -51,10 +51,11 @@ function datumAusName(s) {
   }
   return { datum: '', rest: s };
 }
-// EXIF-Zeit von Google („2025:06:14 12:35:10“) → { datum, uhr }
+// EXIF-Zeit von Google („2025:06:14 12:35:10“) → { datum, uhr, sek } — sek, wenn mehrere Fotos in derselben Minute entstanden
 function aufnahmeZeit(t) {
-  const m = /^(\d{4})[:-](\d{2})[:-](\d{2})[ T](\d{2}):(\d{2})/.exec(String(t || ''));
-  return m ? { datum: m[1] + '-' + m[2] + '-' + m[3], uhr: m[4] + '-' + m[5] } : { datum: '', uhr: '' };
+  const m = /^(\d{4})[:-](\d{2})[:-](\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(String(t || ''));
+  return m ? { datum: m[1] + '-' + m[2] + '-' + m[3], uhr: m[4] + '-' + m[5], sek: m[4] + '-' + m[5] + '-' + (m[6] || '00') }
+    : { datum: '', uhr: '', sek: '' };
 }
 
 const gross = function (s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; };
@@ -99,7 +100,7 @@ function fotoName(d, ort) {
   }
   const wo = [ort, hinweis].filter(Boolean).join(' ');
   const text = (datum ? datum + ' ' : '') + 'Foto' + (wo ? ' ' + wo : '');
-  return { name: text + endung(d.name).toLowerCase(), uhr: z.uhr };
+  return { name: text + endung(d.name).toLowerCase(), uhr: z.uhr, sek: z.sek };
 }
 
 // Fast gleiche Dateien im selben Ordner: gleicher Name ohne „(1)“ / „Kopie“, gleiche Endung

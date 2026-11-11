@@ -30,7 +30,7 @@ test('Datum finden', function () {
   assert.equal(datumAusName('Einzelabrechnung_047051557_2024_0002_0_Louis Ziegler_30_09_2025_1').datum, '2025-09-30');
   assert.equal(datumAusName('koelz_r_2025-05-06_07-54-28').datum, '2025-05-06');
   assert.equal(datumAusName('Rechnung 58 MS Ablesung').datum, '');
-  assert.deepEqual(aufnahmeZeit('2025:06:14 12:35:10'), { datum: '2025-06-14', uhr: '12-35' });
+  assert.deepEqual(aufnahmeZeit('2025:06:14 12:35:10'), { datum: '2025-06-14', uhr: '12-35', sek: '12-35-10' });
 });
 
 test('Ohne Assistent aufräumen', function () {

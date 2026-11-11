@@ -93,6 +93,7 @@ test('Namen aufräumen: vorschlagen, Schalter, umbenennen, rückgängig, Recht z
   g.ordnerNeu('bertha', 'Bertha von Suttna', 'firma');
   g.dateiNeu('foto1', 'IMG_3654.HEIC', 'bertha', 'image/heif', '2025:06:14 12:35:10');
   g.dateiNeu('foto2', 'IMG_3655.HEIC', 'bertha', 'image/heif', '2025:06:14 12:40:02');
+  g.dateiNeu('foto3', 'IMG_3656.HEIC', 'bertha', 'image/heif', '2025:06:14 12:40:41');   // dieselbe Minute wie foto2
   g.dateiNeu('nach', '202605111257_nachmontage_zusammenfassung.pdf', 'bertha');
   g.dateiNeu('grok', 'Test Grok .xlsx', 'bertha', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   g.dateiNeu('l1', 'Liste (1).xlsx', 'bertha', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -132,7 +133,8 @@ test('Namen aufräumen: vorschlagen, Schalter, umbenennen, rückgängig, Recht z
     const nach = {};
     n.liste.forEach(function (z) { nach[z.id] = z; });
     assert.equal(nach.foto1.vorschlag, '2025-06-14 Foto Bertha-von-Suttner-Weg 4 12-35.heic', 'gleicher Tag, gleicher Ort: Uhrzeit hält sie auseinander');
-    assert.equal(nach.foto2.vorschlag, '2025-06-14 Foto Bertha-von-Suttner-Weg 4 12-40.heic');
+    assert.equal(nach.foto2.vorschlag, '2025-06-14 Foto Bertha-von-Suttner-Weg 4 12-40-02.heic', 'dieselbe Minute: dann die Sekunden');
+    assert.equal(nach.foto3.vorschlag, '2025-06-14 Foto Bertha-von-Suttner-Weg 4 12-40-41.heic');
     assert.equal(nach.foto1.grund, 'Handyfoto');
     assert.equal(nach.nach.vorschlag, '2026-05-11 Nachmontage zusammenfassung.pdf');
     assert.equal(nach.grok.vorschlag, 'Test Grok.xlsx');
