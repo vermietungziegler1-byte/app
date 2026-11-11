@@ -1803,6 +1803,13 @@
   #app .anf-profil { font-size: 12.5px; margin-top: 3px; line-height: 1.4; }
   #app .anf-gruende { font-size: 12px; color: var(--muted); margin-top: 2px; line-height: 1.4; }
   #app .anf-gruende.neg { color: var(--sperr); }
+  #app .anf-zitat {
+    font-size: 12.5px; margin-top: 3px; line-height: 1.4; color: var(--muted); font-style: italic;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  #app .anf-volltext { white-space: pre-wrap; }
+  #app .anf-verlauf-eintrag { margin-top: 8px; padding-left: 10px; border-left: 2px solid var(--muted); }
+  #app .anf-verlauf-eintrag small { color: var(--muted); font-size: 11.5px; }
   #app .anf-urteil { flex: none; font-size: 12px; font-weight: 650; color: var(--k); white-space: nowrap; }
   #app .anf-urteilbox {
     padding: 12px 14px; margin: 4px 0 12px; font-size: 13.5px; line-height: 1.45;

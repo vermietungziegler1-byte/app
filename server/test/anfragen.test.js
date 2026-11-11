@@ -175,6 +175,7 @@ function ergebnisFuer(text) {
 
 function fakeAnthropic() {
   const anfragen = [];   // jede Anfrage an /v1/messages: { headers, body }
+  const zustand = { stoerung: 0 };   // ein HTTP-Status (z. B. 529): so lange antwortet der Dienst mit diesem Fehler
   const server = http.createServer(function (req, res) {
     let roh = '';
     req.on('data', function (d) { roh += d; });
@@ -183,6 +184,10 @@ function fakeAnthropic() {
       if (req.method !== 'POST' || req.url !== '/v1/messages') {
         res.statusCode = 404;
         return res.end(JSON.stringify({ type: 'error', error: { type: 'not_found_error', message: 'Not found' } }));
+      }
+      if (zustand.stoerung) {
+        res.statusCode = zustand.stoerung;
+        return res.end(JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } }));
       }
       let body = {};
       try { body = JSON.parse(roh); } catch (e) { body = {}; }
@@ -198,7 +203,7 @@ function fakeAnthropic() {
   });
   return new Promise(function (ok) {
     server.listen(0, '127.0.0.1', function () {
-      ok({ basis: 'http://127.0.0.1:' + server.address().port, anfragen: anfragen, stoppen: function () { server.close(); } });
+      ok(Object.assign(zustand, { basis: 'http://127.0.0.1:' + server.address().port, anfragen: anfragen, stoppen: function () { server.close(); } }));
     });
   });
 }
@@ -494,6 +499,12 @@ test('Benachrichtigung mit versteckter Nachricht: der Kommentar im Kopf der Mail
   assert.doesNotMatch(t, /ObjektID|Objektname/, 'die Nummer steht schon in der ersten Zeile');
   // Ohne Kommentar bleibt es eine bloße Benachrichtigung
   assert.equal(hinweisAus('anfrage@immobilienscout24.de', 'Anfrage zu Ihrem Objekt 1', 'Sie haben eine neue Anfrage erhalten. Nachrichten-Manager', '<p>x</p>').nachricht, '');
+  // Antworten über ImmoScout: die Nachricht sind die Zeilen mit „> “; der Umbruch mitten in „&ouml;“ wird geheilt
+  const { zitierteNachricht } = require('../lib/anfragen');
+  assert.equal(zitierteNachricht('# Sie haben eine neue Nachricht\n\n> Guten Tag, Herr Ziegler,\n> ich arbeite als Qualit&auml;tstechniker, 3.400 &euro; netto.\n'
+    + '> Wir w&uuml;rden uns &uuml;ber die M&\n> ouml;glichkeit freuen.\n> \n> Nikolai Kowtun\n\n[Jetzt antworten](https://example.org)\n\nAnrede: Herr'),
+  'Guten Tag, Herr Ziegler,\nich arbeite als Qualitätstechniker, 3.400 € netto.\nWir würden uns über die Möglichkeit freuen.\n\nNikolai Kowtun');
+  assert.equal(zitierteNachricht('Ohne Zitat.'), '');
 });
 
 test('Stand ändern: merken, absagen, Unsinn abgewiesen', async function () {
@@ -614,5 +625,45 @@ test('Benachrichtigung mit versteckter Nachricht: der Assistent bewertet sie, di
   assert.equal(h.bewertung.punkte, 40);
   assert.match(h.bewertung.antwort, /folgende Angaben:\n- monatliches Haushaltsnettoeinkommen\n- Beruf und Art der Beschäftigung$/);
   assert.match(h.inhalt.original, /Familie Ibrom/, 'der Wortlaut zeigt die Nachricht');
+  assert.equal(h.inhalt.volltext, 'Guten Tag Herr Ziegler,\n\nals junge Familie mit zwei Kindern (3 und 5 Jahre) suchen wir eine Wohnung. '
+    + 'Wir freuen uns ueber einen Besichtigungstermin.\n\nVG\nFamilie Ibrom', 'die Nachricht ganz, in den Worten der Person');
   assert.equal(h.fehler, null);
+});
+
+test('Ist der Assistent gestört, steht die Nachricht trotzdem gleich da — bewertet wird, sobald er wieder kann', async function () {
+  const RELAIS2 = 'sucher.aaaa1111bbbb2222cccc3333dddd4444@nachrichten.immobilienscout24.de';
+  MAILS.hinweis2 = {
+    von: 'anfrage@immobilienscout24.de', betreff: 'Anfrage zu Ihrem Objekt 169648839', wann: JETZT - 600000,
+    text: 'Anfrage zu Objekt 169648839',
+    html: '<html><head>\r\n  <!-- Kontaktanfrage zu Ihrem Objekt 169648839\r\nObjektID: 169648839\r\nObjektname: 169648839\r\n'
+      + 'Text: Guten Tag Herr Ziegler,\r\nwir sind Familie Ibrom und haben grosses Interesse.\r\n -->\r\n</head><body>'
+      + '<p>Sie haben eine neue Anfrage erhalten. Sie können nun direkt über den <a href="https://www.immobilienscout24.de/nachrichten-manager/api/external/reference/169648839/contact-request/aaaa1111bbbb2222cccc3333dddd4444">Nachrichten-Manager</a> antworten.</p>'
+      + '<p>Daten zu Ihrer Immobilie 169648839</p><p>Nachricht Ihrer Interessent:innen</p></body></html>'
+  };
+  const vorher = anthropic.anfragen.length;
+  anthropic.stoerung = 529;
+  let a = await louis.get('/api/anfragen?neu=1');
+  let k = a.json.anfragen.find(function (x) { return x.id === 'hinweis2'; });
+  assert.ok(k, 'die Karte ist da, obwohl der Assistent nicht antwortet');
+  assert.equal(k.inhalt.volltext, 'Guten Tag Herr Ziegler,\nwir sind Familie Ibrom und haben grosses Interesse.');
+  assert.equal(k.inhalt.hinweis, 'nachrichten-manager', 'noch nicht bewertet');
+  assert.equal(k.inhalt.email, RELAIS2);
+  assert.deepEqual(k.bewertung.gruende, ['Die Nachricht ist da, die Bewertung folgt']);
+  assert.match(a.json.fehler, /gestört/);
+  assert.equal(anthropic.anfragen.length, vorher, 'der gestörte Dienst zählt keine Anfrage');
+
+  // Der Dienst kann wieder: beim nächsten Abgleich wird dieselbe Mail bewertet, die Karte bekommt Namen und Urteil
+  anthropic.stoerung = 0;
+  a = await louis.get('/api/anfragen?neu=1');
+  k = a.json.anfragen.find(function (x) { return x.id === 'hinweis2'; });
+  assert.equal(anthropic.anfragen.length, vorher + 1);
+  assert.equal(k.inhalt.name, 'Familie Ibrom');
+  assert.equal(k.inhalt.hinweis, undefined);
+  assert.equal(k.inhalt.volltext, 'Guten Tag Herr Ziegler,\nwir sind Familie Ibrom und haben grosses Interesse.');
+  assert.equal(k.person, RELAIS2);
+  assert.equal(a.json.fehler, null);
+
+  // Antworten über ImmoScout tragen die Nachricht ebenso ganz
+  const renate = a.json.anfragen.find(function (x) { return x.id === 'antwort1'; });
+  assert.equal(renate.inhalt.volltext, 'Guten Morgen Herr Ziegler,\nist die Wohnung noch zu mieten? Wir sind zu zweit, beide berufstätig.\nViele Grüße\nRenate Schäfer');
 });

@@ -6188,7 +6188,7 @@
   // Farbe nach Urteil — ohne Bewertung ist etwas schiefgegangen
   function anfKlasse(a) { return a.bewertung ? (ANF_KLASSE[a.bewertung.urteil] || 'a-unklar') : 'a-fehler'; }
   function anfUrteil(a) {
-    if (anfHinweis(a)) return 'Bei ImmoScout lesen';
+    if (anfHinweis(a)) return a.inhalt.volltext ? 'Wird bewertet' : 'Bei ImmoScout lesen';
     return a.bewertung ? (ANF_URTEIL[a.bewertung.urteil] || 'Unklar') : 'Nicht bewertet';
   }
   function anfName(a) {
@@ -6350,6 +6350,9 @@
         vorher && b && vorher.bewertung.punkte !== b.punkte ? 'vorher ' + vorher.bewertung.punkte + ' Punkte' : ''].filter(Boolean).join(' · ');
       const profil = anfProfil(i);
       const gruende = b ? (b.gruende || []).slice(0, 2).join(' · ') : '';
+      // Der Anfang der Nachricht in den Worten der Person, gleich auf der Karte
+      const zitat = String(i.volltext || '').replace(/\s+/g, ' ').trim();
+      const zitatKurz = zitat.length > 170 ? zitat.slice(0, 170).replace(/\s+\S*$/, '') + ' …' : zitat;
       html += '<div class="anf-karte klickbar ' + anfKlasse(a) + '" data-act="anf-oeffnen" data-id="' + esc(a.id) + '">'
         + '<div class="anf-punkte">' + (anfHinweis(a) ? '…' : (b ? b.punkte : '?')) + '<small>Punkte</small></div>'
         + '<div class="fgrow">'
@@ -6357,6 +6360,7 @@
         + (anfIstInteressent(a) ? (a.status === 'neu' ? 'Interessent · neue Nachricht' : 'Interessent') : esc(a.status)) + '</span></div>'
         + '<div class="anf-meta">' + esc(meta) + '</div>'
         + (profil ? '<div class="anf-profil">' + esc(profil) + '</div>' : '')
+        + (zitatKurz ? '<div class="anf-zitat">„' + esc(zitatKurz) + '“</div>' : '')
         + (gruende ? '<div class="anf-gruende">' + esc(gruende) + '</div>' : '')
         + (a.fehler ? '<div class="anf-gruende neg">' + (b ? 'Neu bewerten fehlgeschlagen (Urteil von vorher): ' : 'Bewertung fehlgeschlagen: ') + esc(a.fehler) + '</div>' : '')
         + '</div>'
@@ -6462,6 +6466,17 @@
             + (x.bewertung ? ' · ' + x.bewertung.punkte + ' Punkte' : '') + '</button>';
         }).join('') + '</div>'
       : '';
+    // Die anderen Nachrichten derselben Person mit ihrem Text, damit der ganze Verlauf ohne Umschalten zu lesen ist.
+    // Bloße Benachrichtigungen ohne Text zählen nicht — ihr „Nachricht“-Feld ist nur der Hinweis auf ImmoScout
+    const verlauf = andere.filter(function (x) {
+      const xi = x.inhalt || {};
+      return xi.volltext || (!anfHinweis(x) && xi.nachricht);
+    }).slice(0, 4).map(function (x) {
+      const xi = x.inhalt || {};
+      return '<div class="anf-verlauf-eintrag"><small>'
+        + esc(new Date(x.wann).toLocaleString('de-DE', { day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' }))
+        + (x.wann > a.wann ? ' · neuer' : ' · früher') + '</small><div class="anf-volltext">' + esc(xi.volltext || xi.nachricht) + '</div></div>';
+    }).join('');
     // Kam die Anfrage als ImmoScout-Benachrichtigung: der Weg in den Nachrichten-Manager, nur auf die ImmoScout-Seite selbst
     const scoutLink = /^https:\/\/www\.immobilienscout24\.de\//.test(i.link || '') ? i.link : '';
     return '<h2>' + esc(i.name || (anfHinweis(a) ? 'Neue Anfrage bei ImmoScout' : 'Anfrage')) + '</h2>'
@@ -6480,13 +6495,20 @@
       + feld('Einkommen', wert(einkommen))
       + feld('Einzug', wert(i.einzug))
       + feld('Kontakt', wert(kontakt))
-      + '<div class="anf-feld anf-nachricht"><strong>Nachricht</strong><div>' + wert(i.nachricht) + '</div></div>'
+      // Die Nachricht in den Worten der Person, ganz und offen; die Kurzfassung des Assistenten darunter
+      + (i.volltext
+          ? '<div class="anf-feld anf-nachricht"><strong>Nachricht</strong><div class="anf-volltext">' + esc(i.volltext) + '</div></div>'
+            + (i.nachricht ? '<div class="anf-feld anf-nachricht"><strong>Kurzfassung</strong><div>' + wert(i.nachricht) + '</div></div>' : '')
+          : '<div class="anf-feld anf-nachricht"><strong>Nachricht</strong><div>' + wert(i.nachricht) + '</div></div>')
+      + (verlauf ? '<div class="anf-feld anf-nachricht"><strong>Weitere Nachrichten dieser Person</strong>' + verlauf + '</div>' : '')
       // Der Wortlaut der Mail (gekürzt), eingeklappt — für Ton und Sorgfalt, ohne das Postfach zu öffnen
       + (i.original ? '<details class="anf-feld anf-nachricht anf-original"><summary>Wortlaut der Mail</summary><pre>' + esc(i.original) + '</pre></details>' : '')
       + '</div>'
       // Bei einer bloßen Benachrichtigung fragt der Vorschlag alles ab — was in der Nachricht bei ImmoScout schon steht, streicht Louis
-      + (anfHinweis(a) ? '<div class="hint">Die Nachricht der Person steht nur bei ImmoScout. Am besten erst dort lesen und in der Antwort '
-          + 'streichen, was sie schon geschrieben hat.</div>' : '')
+      + (anfHinweis(a) ? '<div class="hint">' + (i.volltext
+          ? 'Die Bewertung steht noch aus — „Neu bewerten“ stößt sie an. Bis dahin fragt der Vorschlag alles ab; streichen, was oben schon steht.'
+          : 'Die Nachricht der Person steht nur bei ImmoScout. Am besten erst dort lesen und in der Antwort '
+            + 'streichen, was sie schon geschrieben hat.') + '</div>' : '')
       + f('Antwortvorschlag', '<textarea id="anf-antwort" rows="7" readonly placeholder="Noch kein Vorschlag — erst bewerten">' + esc(antwort) + '</textarea>')
       + '<div class="anf-knoepfe">'
       + (scoutLink ? '<a class="kauf-link" href="' + esc(scoutLink) + '" target="_blank" rel="noopener">Im ImmoScout-Postfach öffnen</a>' : '')

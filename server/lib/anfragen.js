@@ -241,6 +241,21 @@ function hinweisMailText(h) {
   return ['Kontaktanfrage über ImmoScout24 zur Anzeige ' + (h.nr || '?') + (anzeige ? ': ' + anzeige : '')]
     .concat(felder, ['', 'Nachricht der Person:', h.nachricht || '']).join('\n');
 }
+// Die Nachricht in einer Antwort über ImmoScout („Neue Nachricht: … hat Ihnen geantwortet“): die Zeilen mit „> “.
+// ImmoScout bricht nach etwa 76 Zeichen um, auch mitten in „&ouml;“ — solche Brüche werden vor dem Auflösen geheilt
+function zitierteNachricht(text) {
+  const zeilen = String(text || '').split('\n').filter(function (z) { return /^\s*>/.test(z); })
+    .map(function (z) { return z.replace(/^\s*> ?/, ''); });
+  if (!zeilen.length) return '';
+  return entitaetenAufloesen(zeilen.join('\n').replace(/&([a-z#0-9]{0,7})\n([a-z#0-9]{1,7};)/gi, '&$1$2'))
+    .replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n').trim().slice(0, 6000);
+}
+// Die Nachricht der Person in ihren eigenen Worten, wo sie sich sicher aus der Mail lösen lässt: aus dem Kommentar der
+// Benachrichtigung oder aus den zitierten Zeilen einer Antwort über ImmoScout. Sonst leer — dann bleibt der Wortlaut der Mail
+function volltextVon(m) {
+  if (m.hinweis) return m.hinweis.nachricht || '';
+  return RELAIS_ADRESSE.test(adresseAus(m.von)) ? zitierteNachricht(m.text) : '';
+}
 // Was bei einer Benachrichtigung immer fehlt — die Antwort fragt es ab
 const STANDARD_FEHLT = ['Zahl der Erwachsenen und Kinder', 'monatliches Haushaltsnettoeinkommen', 'Beruf und Art der Beschäftigung',
   'Haustiere', 'gewünschter Einzugstermin'];
@@ -264,6 +279,14 @@ function hinweisErgebnis(h) {
     },
     einheitId: ''
   };
+}
+// Die Karte, solange der Assistent eine Benachrichtigung mit Nachricht noch nicht bewertet hat (oder gerade nicht kann):
+// die Nachricht steht schon darauf, Name und Urteil folgen
+function vorlaeufigesErgebnis(h) {
+  const e = hinweisErgebnis(h);
+  e.inhalt.nachricht = '';
+  e.bewertung.gruende = ['Die Nachricht ist da, die Bewertung folgt'];
+  return e;
 }
 // Anzeigen, zu denen Anfragen kamen, mit Titel und Adresse aus den Mails merken — die Übersicht „Inserate“
 function inseratMerken(h, wann) {
@@ -573,6 +596,16 @@ db.prepare(`SELECT id, inhalt FROM anfragen WHERE inhalt LIKE '%"hinweis":"nachr
     .run(JSON.stringify(i), JSON.stringify(neu.bewertung), relais, z.id);
 });
 
+// Antworten über ImmoScout von vor dieser Fassung: die Nachricht der Person aus dem gespeicherten Wortlaut lösen
+db.prepare("SELECT id, von, inhalt FROM anfragen WHERE von LIKE '%@nachrichten.immobilienscout24.de%' AND inhalt NOT LIKE '%volltext%'")
+  .all().forEach(function (z) {
+    let i; try { i = JSON.parse(z.inhalt || '{}'); } catch (e) { return; }
+    const v = RELAIS_ADRESSE.test(adresseAus(z.von)) ? zitierteNachricht(i.original) : '';
+    if (!v) return;
+    i.volltext = v;
+    db.prepare('UPDATE anfragen SET inhalt = ? WHERE id = ?').run(JSON.stringify(i), z.id);
+  });
+
 function zeileLesen(z) {
   const lesen = function (t) { try { return JSON.parse(t || 'null'); } catch (e) { return null; } };
   return {
@@ -605,10 +638,13 @@ function ablegen(id, mail, ergebnis, fehler) {
     if (!inhalt.email && mail.antwortAn) inhalt.email = mail.antwortAn;
     // Der Wortlaut (gekürzt), damit Louis Ton und Sorgfalt selbst beurteilen kann, ohne das Postfach zu öffnen
     inhalt.original = wortlaut;
+    // Und die Nachricht der Person ganz, in ihren eigenen Worten — die Karte zeigt sie offen
+    if (mail.volltext) inhalt.volltext = String(mail.volltext).slice(0, 6000);
   } else if (wortlaut && !db.prepare('SELECT 1 FROM anfragen WHERE id = ?').get(id)) {
     // Fehlerkarte einer neuen Mail: wenigstens der Wortlaut, damit die Karte nicht leer bleibt.
     // Bei einer vorhandenen Zeile bleibt inhalt leer — dann behält COALESCE unten das schon Gelesene
     inhalt = { original: wortlaut };
+    if (mail.volltext) inhalt.volltext = String(mail.volltext).slice(0, 6000);
   }
   let einheit = ergebnis ? ergebnis.einheitId : '';
   if (ergebnis) {
@@ -714,13 +750,20 @@ async function abgleichen() {
       // ohne bleibt es eine Karte mit dem Weg in den Nachrichten-Manager, ohne den Assistenten zu fragen
       const hinweis = hinweisAus(m.von, m.betreff, m.text, mailHtml(mail.payload));
       if (hinweis) m.hinweis = hinweis;
+      m.volltext = volltextVon(m);
       if (hinweis && !hinweis.nachricht) {
         ablegen(id, m, hinweisErgebnis(hinweis), null);
         erledigt.run(id, Date.now());
         neu.push(id);
         continue;
       }
-      if (hinweis) m.text = hinweisMailText(hinweis);
+      if (hinweis) {
+        m.text = hinweisMailText(hinweis);
+        // Die Nachricht steht sofort auf einer Karte, auch wenn der Assistent gerade nicht kann — die Bewertung ersetzt sie
+        if (!db.prepare('SELECT 1 FROM anfragen WHERE id = ?').get(id)) ablegen(id, m, vorlaeufigesErgebnis(hinweis), null);
+      }
+      // Kann der Assistent gerade nicht, wird nur noch abgelegt, was ohne ihn geht; der Rest kommt beim nächsten Lauf dran
+      if (vertagt) continue;
 
       bewertet++;
       let ergebnis = null, fehler = null;
@@ -743,7 +786,7 @@ async function abgleichen() {
             vertagt = grund
               ? grund + ' — die offenen Anfragen werden beim nächsten Abgleich bewertet'
               : e.message + ' — die offenen Anfragen bleiben bis zur Behebung unbewertet';
-            break;
+            continue;   // ohne Ablegen und Abhaken; die übrigen Mails bekommen nur noch Karten, die ohne Assistent gehen
           }
           // Bleibt, was an der Mail selbst liegt (abgelehnt, zu lang, kein lesbares Ergebnis): Fehlerkarte je Mail
           fehler = e.message;
@@ -791,12 +834,17 @@ async function neuBewerten(id) {
   catch (e) { nurFehler.run('Die Mail ließ sich nicht lesen: ' + e.message, id); return zeile(); }
   const hinweis = hinweisAus(m.von, m.betreff, m.text, mailHtml(mail.payload));
   if (hinweis) m.hinweis = hinweis;
+  m.volltext = volltextVon(m);
   if (hinweis && !hinweis.nachricht) {
     // Eine Benachrichtigung ohne Inhalt bleibt eine — der Assistent bekäme nur den Hinweis auf den Nachrichten-Manager
     ablegen(id, m, hinweisErgebnis(hinweis), null);
     return zeile();
   }
-  if (hinweis) m.text = hinweisMailText(hinweis);   // mit versteckter Nachricht: bewerten wie jede Anfrage
+  if (hinweis) {
+    m.text = hinweisMailText(hinweis);   // mit versteckter Nachricht: bewerten wie jede Anfrage
+    // War die Zeile bisher eine bloße Benachrichtigung, steht die Nachricht gleich darauf — auch wenn die Bewertung scheitert
+    if (zeileLesen(z).inhalt.hinweis) ablegen(id, m, vorlaeufigesErgebnis(hinweis), null);
+  }
   let ergebnis = null, fehler = null;
   m.fruehere = fruehereVon(m.von, id, m.wann);
   try { ergebnis = await bewerten(m); }
@@ -1160,4 +1208,4 @@ app.delete('/api/anfragen/:id', nurAngemeldet, nurVerwalter, function (req, res)
   res.json({ ok: true });
 });
 
-module.exports = { router: app, abgleichen, melden, meldungText, mailText, mailHtml, htmlZuText, hinweisAus, versteckteAnfrage, hinweisMailText, antwortAdresse, aufraeumen, STANDARD_KRITERIEN, KEINE_ANFRAGE, IST_ANFRAGE };
+module.exports = { router: app, abgleichen, melden, meldungText, mailText, mailHtml, htmlZuText, hinweisAus, versteckteAnfrage, hinweisMailText, zitierteNachricht, antwortAdresse, aufraeumen, STANDARD_KRITERIEN, KEINE_ANFRAGE, IST_ANFRAGE };
