@@ -1,0 +1,32 @@
+{
+  "name": "ziegler-desktop",
+  "productName": "Ziegler",
+  "version": "1.0.0",
+  "description": "Ziegler Verwaltung als Windows-Programm",
+  "author": "Louis Ziegler",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis --publish never"
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "de.zieglerverwaltung.app",
+    "productName": "Ziegler",
+    "directories": { "output": "dist" },
+    "files": ["main.js", "preload.js", "icon.png"],
+    "win": { "target": "nsis", "icon": "icon.png" },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Ziegler",
+      "artifactName": "Ziegler-Setup-${version}.exe"
+    }
+  }
+}

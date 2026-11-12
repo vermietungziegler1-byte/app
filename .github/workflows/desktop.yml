@@ -1,0 +1,58 @@
+# Baut das Windows-Programm (Ordner desktop/) und stellt die Setup-Datei als Download bereit:
+# https://github.com/vermietungziegler1-byte/app/releases (Eintrag „Ziegler für Windows“).
+# Läuft nur, wenn sich am Programm etwas ändert — die App selbst lädt das Programm vom Server.
+name: Windows-Programm
+
+on:
+  push:
+    branches: [main]
+    paths: ['desktop/**', '.github/workflows/desktop.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bauen:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Pakete
+        run: npm install --no-audit --no-fund
+      - name: Programm prüfen
+        run: |
+          node --check main.js
+          node --check preload.js
+      - name: Setup-Datei bauen
+        run: npx electron-builder --win nsis --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Ziegler-Setup
+          path: desktop/dist/*.exe
+          retention-days: 30
+      - name: Als Download bereitstellen
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V=$(node -p "require('./package.json').version")
+          T="desktop-v$V"
+          if gh release view "$T" >/dev/null 2>&1; then
+            gh release upload "$T" dist/*.exe --clobber
+          else
+            gh release create "$T" dist/*.exe --target "$GITHUB_SHA" --title "Ziegler für Windows $V" \
+              --notes "Setup-Datei herunterladen, doppelklicken, einmal anmelden. Windows warnt beim ersten Start, weil das Programm nicht signiert ist: „Weitere Informationen“ → „Trotzdem ausführen“."
+          fi

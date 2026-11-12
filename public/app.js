@@ -135,11 +135,25 @@
     const name = String(el.getAttribute('data-datei-name') || 'anhang').replace(/[:\r\n]+/g, ' ').replace(/ {2,}/g, ' ').trim() || 'anhang';
     const typ = el.getAttribute('data-datei-typ') || 'application/octet-stream';
     const adresse = new URL(el.getAttribute('data-datei-url'), location.href).href;
+    // Im Windows-Programm (desktop/): das Programm übergibt eine echte Datei — so nimmt sie jedes Programm an, wie aus Outlook
+    if (window.zieglerDesktop && typeof window.zieglerDesktop.ziehen === 'function') {
+      ev.preventDefault();
+      window.zieglerDesktop.ziehen(adresse, name);
+      return;
+    }
     // Nur die Datei mitgeben: Sonst nehmen manche Programme (etwa Claude) lieber den Link als Text — der hilft dort
     // nichts, weil er die Anmeldung braucht. Nur Chrome und Edge (window.chrome) können eine Datei übergeben.
     if (window.chrome) { try { ev.dataTransfer.clearData(); } catch (e) { /* dann eben mit Link */ } }
     try { ev.dataTransfer.setData('DownloadURL', typ + ':' + name + ':' + adresse); } catch (e) { /* Browser kann das nicht */ }
     ev.dataTransfer.effectAllowed = 'copy';
+  });
+  // Im Windows-Programm den Anhang schon beim Drücken der Maustaste holen, damit er beim Ziehen bereitliegt
+  // (nicht beim ZIP-Knopf: der klappt meist nur den Inhalt auf, die ganze ZIP holt erst das Ziehen)
+  document.addEventListener('pointerdown', function (ev) {
+    if (!window.zieglerDesktop || ev.button !== 0) return;
+    const el = ev.target && ev.target.closest ? ev.target.closest('[data-datei-url]') : null;
+    if (!el || el.hasAttribute('data-act')) return;
+    window.zieglerDesktop.vorbereiten(new URL(el.getAttribute('data-datei-url'), location.href).href, el.getAttribute('data-datei-name') || 'anhang');
   });
   // Ein Klick irgendwo daneben schließt ein offenes Ausklappmenü
   document.addEventListener('click', function (ev) {
