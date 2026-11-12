@@ -1187,3 +1187,23 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
   #app .od-zahlen { grid-template-columns: repeat(2, 1fr); }
   #app .od-wo { max-width: 110px; }
 }
+
+/* ZIP-Anhang im Postfach: Inhalt unter der Mail aufklappen, Dateien darin einzeln öffnen */
+#app button.p2-anhang { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 7px 11px; border: 0; border-radius: 10px;
+  background: var(--fuellung); color: var(--ink); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+#app button.p2-anhang b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+#app button.p2-anhang span { color: var(--muted); font-size: 12px; }
+#app button.p2-anhang:hover, #app button.p2-anhang.an { background: var(--fuellung-stark); color: var(--ink); }
+#app .p2-zip { margin-top: 10px; border: .5px solid var(--line); border-radius: 12px; overflow: hidden; }
+#app .p2-zip-eintrag { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding: 10px 12px; border-top: .5px solid var(--line);
+  color: var(--ink); text-decoration: none; font-size: 13.5px; }
+#app .p2-zip-eintrag:first-child { border-top: 0; }
+#app .p2-zip-eintrag b { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#app .p2-zip-eintrag i { flex: 1; min-width: 0; color: var(--muted); font-style: normal; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#app .p2-zip-eintrag span { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+#app a.p2-zip-eintrag:hover { background: var(--fuellung); }
+#app .p2-zip-eintrag.aus { color: var(--muted); }
+#app .p2-zip-hinweis { padding: 10px 12px; font-size: 13px; color: var(--muted); }
+#app .p2-zip-hinweis.rot { color: var(--sperr); }
+#app .p2-zip-laden { display: block; padding: 9px 12px; border-top: .5px solid var(--line); font-size: 12px; color: var(--muted); text-decoration: none; }
+#app .p2-zip-laden:hover { color: var(--ink); background: var(--fuellung); }

@@ -14,7 +14,7 @@
 const express = require('express');
 const { db, holen, einstellung, einstellungSetzen, standInhalt, mitFehler } = require('./kern');
 const { nurAngemeldet, nurVerwalter } = require('./anmeldung');
-const { anhangSenden } = require('./anhang-senden');
+const { anhangAntwort } = require('./anhang-senden');
 const google = require('./google');
 const regeln = require('./dokumente-regeln');
 const ar = require('./anhaenge-regeln');
@@ -472,7 +472,7 @@ app.get('/api/anhaenge/:id/datei', nurAngemeldet, nurVerwalter, mitFehler(async 
   const a = db.prepare('SELECT * FROM anh_dateien WHERE id = ?').get(req.params.id);
   if (!a) throw fehler('Anhang nicht gefunden', 404);
   const d = await quelle().anhangInhalt(a.ordner, a.uid, a.teil, a.name, a.uidvalidity);
-  anhangSenden(res, d.inhalt, d.name || a.name, req.query.ansehen === '1');
+  anhangAntwort(req, res, d.inhalt, d.name || a.name);
 }));
 
 app.post('/api/anhaenge/abgleich', nurAngemeldet, nurVerwalter, function (req, res) {

@@ -14,7 +14,7 @@ const express = require('express');
 const { crypto, path, fs, DATENORDNER, db, einstellung, einstellungSetzen, mitFehler, standInhalt } = require('./kern');
 const { nurAngemeldet, nurVerwalter } = require('./anmeldung');
 const { signaturAus, umlautVarianten, einfacheKriterien } = require('./postfach-text');
-const { anhangSenden } = require('./anhang-senden');
+const { anhangAntwort } = require('./anhang-senden');
 
 let ImapFlow = null, nodemailer = null, MailComposer = null, simpleParser = null;
 try {
@@ -392,17 +392,33 @@ app.get('/api/postfach/mail', nurAngemeldet, nurVerwalter, mitFehler(async funct
   res.json(antwort);
 }));
 
-// Anhang öffnen (mit ansehen=1: PDFs und Fotos im Browser) oder herunterladen — nie als Seite ausgeführt
+// Die zuletzt geöffneten Anhänge ein paar Minuten merken: Wer sich durch die Dateien einer großen ZIP klickt,
+// soll nicht bei jedem Klick die ganze Mail neu vom Mailserver laden müssen
+const anhangMerker = new Map();
+async function anhangGemerkt(schluessel, holen) {
+  const g = anhangMerker.get(schluessel);
+  if (g && Date.now() - g.zeit < 5 * 60 * 1000) return g.a;
+  const a = await holen();
+  anhangMerker.delete(schluessel);
+  anhangMerker.set(schluessel, { zeit: Date.now(), a: a });
+  while (anhangMerker.size > 3) anhangMerker.delete(anhangMerker.keys().next().value);
+  return a;
+}
+
+// Anhang öffnen (mit ansehen=1: PDFs und Fotos im Browser) oder herunterladen — nie als Seite ausgeführt.
+// Bei ZIP-Dateien auch das Inhaltsverzeichnis (zip=1) und einzelne Dateien daraus (eintrag=N)
 app.get('/api/postfach/anhang', nurAngemeldet, nurVerwalter, mitFehler(async function (req, res) {
   const ordner = String(req.query.ordner || 'INBOX');
   const uid = Number(req.query.uid), nr = Number(req.query.nr);
-  const a = await imOrdner(ordner, async function (c) {
-    const g = await mailHolen(c, uid);
-    const x = (g.p.attachments || [])[nr];
-    if (!x) throw fehler('Diesen Anhang gibt es nicht', 404);
-    return x;
+  const a = await anhangGemerkt(ordner + '\n' + uid + '\n' + nr, function () {
+    return imOrdner(ordner, async function (c) {
+      const g = await mailHolen(c, uid);
+      const x = (g.p.attachments || [])[nr];
+      if (!x) throw fehler('Diesen Anhang gibt es nicht', 404);
+      return x;
+    });
   });
-  anhangSenden(res, a.content, a.filename || 'anhang', req.query.ansehen === '1');
+  anhangAntwort(req, res, a.content, a.filename || 'anhang');
 }));
 
 // Löschen, verschieben, gelesen/ungelesen, markieren

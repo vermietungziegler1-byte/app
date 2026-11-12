@@ -6,6 +6,8 @@
 // bekommt nur einen Typ aus der Liste unten und darf nicht selbst raten (nosniff). So läuft eine als „rechnung.pdf“
 // getarnte HTML-Seite nie als Seite dieser App — sie hätte sonst Louis' Anmeldung und damit alle Daten.
 
+const zip = require('./zip-lesen');
+
 const ANZEIGBAR = [
   { typ: 'application/pdf', passt: function (b) { return b.subarray(0, 1024).includes('%PDF'); } },
   { typ: 'image/png', passt: function (b) { return b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])); } },
@@ -40,4 +42,18 @@ function anhangSenden(res, inhalt, name, ansehen) {
   res.end(b);
 }
 
-module.exports = { anzeigeTyp, anhangSenden };
+// Gemeinsame Antwort der Anhang-Adressen. Zusätzlich zu ansehen=1:
+//   zip=1      → bei einer ZIP-Datei das Inhaltsverzeichnis als JSON
+//   eintrag=N  → nur die Datei Nr. N aus der ZIP (mit ansehen=1 wieder im Browser, wenn PDF oder Foto)
+function anhangAntwort(req, res, inhalt, name) {
+  const ansehen = req.query.ansehen === '1';
+  if (req.query.zip === '1') return res.json({ name: name, eintraege: zip.inhalt(inhalt) });
+  if (req.query.eintrag !== undefined) {
+    if (!/^\d{1,5}$/.test(String(req.query.eintrag))) { const e = new Error('Welche Datei aus der ZIP?'); e.status = 400; throw e; }
+    const d = zip.datei(inhalt, Number(req.query.eintrag));
+    return anhangSenden(res, d.inhalt, d.datei, ansehen);
+  }
+  anhangSenden(res, inhalt, name, ansehen);
+}
+
+module.exports = { anzeigeTyp, anhangSenden, anhangAntwort };

@@ -830,6 +830,7 @@
   // =================================================================
   function pfLeer() { return { status: null, laedt: false, ordner: null, fehler: null, pfad: null, listen: {}, gewaehlt: null, mails: {} }; }
   let pf = pfLeer();
+  let pfZip = null;   // aufgeklappte ZIP-Datei: { url, laedt, liste, fehler }
 
   function pfBereit() { return !!(pf.status && pf.status.eingerichtet); }
   function pfStart() {
@@ -7705,6 +7706,27 @@
     if (!anhangAnsehbar(name, typ)) return '<a class="' + klasse + '" href="' + esc(url) + '" download="' + esc(name || 'anhang') + '">' + inhalt + '</a>';
     return '<a class="' + klasse + '" href="' + esc(url + (url.indexOf('?') < 0 ? '?' : '&') + 'ansehen=1') + '" target="_blank" rel="noopener">' + inhalt + '</a>';
   }
+  function anhangIstZip(name, typ) {
+    return /\.zip$/i.test(String(name || '').trim()) || /^application\/(x-)?zip(-compressed)?\b/i.test(String(typ || '').trim());
+  }
+  // Inhalt der aufgeklappten ZIP-Datei, wenn sie zu dieser Mail gehört (praefix = Anhang-Adresse bis „&nr=“)
+  function pfZipHtml(praefix) {
+    if (!pfZip || pfZip.url.indexOf(praefix) !== 0) return '';
+    let h = '<div class="p2-zip">';
+    if (pfZip.laedt) h += '<div class="p2-zip-hinweis">ZIP-Datei wird geöffnet …</div>';
+    else if (pfZip.fehler) h += '<div class="p2-zip-hinweis rot">' + esc(pfZip.fehler) + '</div>';
+    else if (!pfZip.liste.length) h += '<div class="p2-zip-hinweis">Die ZIP-Datei ist leer.</div>';
+    else {
+      h += pfZip.liste.map(function (e) {
+        const teile = String(e.name).split('/');
+        const datei = teile.pop();
+        const zeile = '<b>' + esc(datei) + '</b>' + (teile.length ? '<i>' + esc(teile.join(' › ')) + '</i>' : '') + '<span>' + pfGroesse(e.groesse) + '</span>';
+        if (e.verschluesselt) return '<div class="p2-zip-eintrag aus" title="Mit Passwort geschützt">🔒 ' + zeile + '</div>';
+        return anhangLink(pfZip.url + '&eintrag=' + e.nr, datei, '', 'p2-zip-eintrag', (anhangAnsehbar(datei, '') ? '📄 ' : '⬇ ') + zeile);
+      }).join('');
+    }
+    return h + '<a class="p2-zip-laden" href="' + esc(pfZip.url) + '" download>Ganze ZIP-Datei herunterladen</a></div>';
+  }
   function pfKuerzel(name) {
     return String(name || '').replace(/[^A-Za-zÄÖÜäöüß ]/g, '').split(/\s+/).filter(Boolean).slice(0, 2)
       .map(function (w) { return w.charAt(0).toUpperCase(); }).join('') || '✉';
@@ -7823,9 +7845,15 @@
       + '<div class="p2-adresse">An: ' + esc(m.an.map(pfName).join(', ') || '—') + (m.cc.length ? ' · Cc: ' + esc(m.cc.map(pfName).join(', ')) : '') + '</div></div>'
       + '<div class="p2-datum">' + esc(pfZeit(m.datum, true)) + '</div></div>'
       + (m.anhaenge.length ? '<div class="p2-anhaenge">' + m.anhaenge.map(function (a) {
-          return anhangLink('/api/postfach/anhang?ordner=' + encodeURIComponent(ort) + '&uid=' + m.uid + '&nr=' + a.nr, a.name, a.typ, 'p2-anhang',
-            '📎 <b>' + esc(a.name) + '</b> <span>' + pfGroesse(a.groesse) + '</span>');
-        }).join('') + '</div>' : '')
+          const url = '/api/postfach/anhang?ordner=' + encodeURIComponent(ort) + '&uid=' + m.uid + '&nr=' + a.nr;
+          const text = '<b>' + esc(a.name) + '</b> <span>' + pfGroesse(a.groesse) + '</span>';
+          // ZIP: den Inhalt unter der Mail aufklappen, statt die ganze Datei speichern zu müssen
+          if (anhangIstZip(a.name, a.typ)) {
+            return '<button type="button" class="p2-anhang p2-zipknopf' + (pfZip && pfZip.url === url ? ' an' : '') + '" data-act="pf-zip" data-url="' + esc(url) + '"'
+              + ' title="Inhalt der ZIP-Datei zeigen">🗂 ' + text + '</button>';
+          }
+          return anhangLink(url, a.name, a.typ, 'p2-anhang', '📎 ' + text);
+        }).join('') + '</div>' + pfZipHtml('/api/postfach/anhang?ordner=' + encodeURIComponent(ort) + '&uid=' + m.uid + '&nr=') : '')
       + (frist
           ? '<div class="p2-frist">' + sym('aufgaben', 18)
             + '<div class="p2-frist-text"><b>Frist erkannt: ' + esc(frist.text) + '</b><span>Aufgabe „' + esc(m.betreff) + '“ mit diesem Datum anlegen</span></div>'
@@ -10381,6 +10409,17 @@
     else if (act.indexOf('sig-') === 0) { sigKlick(act, el); }
     else if (act === 'pf-ziel') { modal = { kind: 'pf-ziel' }; render(); }
     else if (act === 'pf-verschieben') { pfAktion('verschieben', el.getAttribute('data-pfad')); }
+    else if (act === 'pf-zip') {
+      const url = el.getAttribute('data-url');
+      if (pfZip && pfZip.url === url) { pfZip = null; render(); return; }   // zweiter Klick klappt wieder zu
+      pfZip = { url: url, laedt: true };
+      render();
+      api(url.replace(/^\/api\//, '') + '&zip=1').then(function (d) {
+        if (pfZip && pfZip.url === url) { pfZip = { url: url, liste: (d && d.eintraege) || [] }; render(); }
+      }).catch(function (e) {
+        if (pfZip && pfZip.url === url) { pfZip = { url: url, fehler: e.message || 'Die ZIP-Datei ließ sich nicht öffnen' }; render(); }
+      });
+    }
     else if (act === 'pf-aufgabe') {
       const m = pf.mails[pfOrt() + '\n' + pf.gewaehlt];
       if (!m || !m.betreff) return;

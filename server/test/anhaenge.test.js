@@ -166,6 +166,10 @@ test('Anhänge: finden, einordnen, korrigieren, in Objekt › 02 Nebenkosten ›
     assert.equal(d.kopf.get('content-type'), 'application/octet-stream');
     assert.match(d.kopf.get('content-disposition'), /^attachment; /);
     assert.equal((await papa.get(pfadDatei + '?ansehen=1')).status, 403);
+    // Ein Inhaltsverzeichnis gibt es nur für ZIP-Dateien
+    d = await louis.get(pfadDatei + '?zip=1');
+    assert.equal(d.status, 422);
+    assert.match(d.json.fehler, /keine ZIP/);
 
     // Louis: das ist eine Nebenkosten-Rechnung (Allgemeinstrom) für 2025
     const k = await louis.put('/api/anhaenge/' + encodeURIComponent(a.id), { art: 'Nebenkosten-Rechnung', kostenart: 'Allgemeinstrom', jahr: '2025',
