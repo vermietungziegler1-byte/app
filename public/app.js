@@ -126,6 +126,18 @@
       query = ''; render();
     }
   });
+  // Anhänge aus Mails als Datei in andere Programme ziehen (Desktop, Explorer, Claude, Word …). Chrome und Edge holen
+  // die Datei beim Loslassen selbst von der Adresse, mit der Anmeldung dieses Browsers („DownloadURL“: Typ:Name:Adresse).
+  // Firefox und Safari kennen das nicht; dort bleibt es beim Klicken.
+  document.addEventListener('dragstart', function (ev) {
+    const el = ev.target && ev.target.closest ? ev.target.closest('[data-datei-url]') : null;
+    if (!el || !ev.dataTransfer) return;
+    const name = String(el.getAttribute('data-datei-name') || 'anhang').replace(/[:\r\n]+/g, ' ').replace(/ {2,}/g, ' ').trim() || 'anhang';
+    const typ = el.getAttribute('data-datei-typ') || 'application/octet-stream';
+    const adresse = new URL(el.getAttribute('data-datei-url'), location.href).href;
+    try { ev.dataTransfer.setData('DownloadURL', typ + ':' + name + ':' + adresse); } catch (e) { /* Browser kann das nicht */ }
+    ev.dataTransfer.effectAllowed = 'copy';
+  });
   // Ein Klick irgendwo daneben schließt ein offenes Ausklappmenü
   document.addEventListener('click', function (ev) {
     if (!tdMenue) return;
@@ -7723,8 +7735,22 @@
       || /\.(pdf|png|jpe?g|gif|webp)$/i.test(String(name || '').trim());
   }
   function anhangLink(url, name, typ, klasse, inhalt) {
-    if (!anhangAnsehbar(name, typ)) return '<a class="' + klasse + '" href="' + esc(url) + '" download="' + esc(name || 'anhang') + '">' + inhalt + '</a>';
-    return '<a class="' + klasse + '" href="' + esc(url + (url.indexOf('?') < 0 ? '?' : '&') + 'ansehen=1') + '" target="_blank" rel="noopener">' + inhalt + '</a>';
+    if (!anhangAnsehbar(name, typ)) return '<a class="' + klasse + '" href="' + esc(url) + '" download="' + esc(name || 'anhang') + '"' + anhangZiehen(url, name, typ) + '>' + inhalt + '</a>';
+    return '<a class="' + klasse + '" href="' + esc(url + (url.indexOf('?') < 0 ? '?' : '&') + 'ansehen=1') + '" target="_blank" rel="noopener"' + anhangZiehen(url, name, typ) + '>' + inhalt + '</a>';
+  }
+  // Attribute, mit denen sich ein Anhang als Datei in andere Programme ziehen lässt (siehe „dragstart“ unten)
+  function anhangZiehen(url, name, typ) {
+    return ' draggable="true" data-datei-url="' + esc(url) + '" data-datei-name="' + esc(name || 'anhang') + '" data-datei-typ="' + esc(anhangDateityp(name, typ)) + '"'
+      + ' title="' + esc((name || 'Anhang') + ' · Klicken zum Öffnen, in ein anderes Programm ziehen zum Ablegen') + '"';
+  }
+  function anhangDateityp(name, typ) {
+    const t = String(typ || '').trim().toLowerCase().split(';')[0];
+    if (/^[a-z]+\/[a-z0-9.+-]+$/.test(t) && t !== 'application/octet-stream') return t;
+    const endung = (/\.([a-z0-9]+)$/i.exec(String(name || '').trim()) || [])[1] || '';
+    return { pdf: 'application/pdf', jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp', heic: 'image/heic',
+      zip: 'application/zip', txt: 'text/plain', csv: 'text/csv', doc: 'application/msword', xls: 'application/vnd.ms-excel',
+      docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }[endung.toLowerCase()] || 'application/octet-stream';
   }
   function anhangIstZip(name, typ) {
     return /\.zip$/i.test(String(name || '').trim()) || /^application\/(x-)?zip(-compressed)?\b/i.test(String(typ || '').trim());
@@ -7870,7 +7896,7 @@
           // ZIP: den Inhalt unter der Mail aufklappen, statt die ganze Datei speichern zu müssen
           if (anhangIstZip(a.name, a.typ)) {
             return '<button type="button" class="p2-anhang p2-zipknopf' + (pfZip && pfZip.url === url ? ' an' : '') + '" data-act="pf-zip" data-url="' + esc(url) + '"'
-              + ' title="Inhalt der ZIP-Datei zeigen">🗂 ' + text + '</button>';
+              + anhangZiehen(url, a.name, a.typ).replace(/ title="[^"]*"/, '') + ' title="Klicken zeigt den Inhalt · ziehen legt die ganze ZIP-Datei ab">🗂 ' + text + '</button>';
           }
           return anhangLink(url, a.name, a.typ, 'p2-anhang', '📎 ' + text);
         }).join('') + '</div>' + pfZipHtml('/api/postfach/anhang?ordner=' + encodeURIComponent(ort) + '&uid=' + m.uid + '&nr=') : '')
