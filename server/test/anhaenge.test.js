@@ -114,7 +114,10 @@ test('Anhänge: finden, einordnen, korrigieren, in Objekt › 02 Nebenkosten ›
     { ordner: 'INBOX', uid: 4, datum: Date.parse('2026-04-10T09:00:00Z'), von_name: 'Gemeinde', von_adresse: 'kasse@gemeinde.example',
       betreff: 'Rechnungen Tribergle 22', text: '', anhaenge: [{ name: 'Rechnung.pdf', typ: 'application/pdf', groesse: 40000, inhalt: '%PDF Wasser' },
         // Manche Absender schreiben als Dateityp nur „pdf“ — Google würde das ablehnen
-        { name: 'Rechnung.pdf', typ: 'pdf', groesse: 41000, inhalt: '%PDF Muell' }] }
+        { name: 'Rechnung.pdf', typ: 'pdf', groesse: 41000, inhalt: '%PDF Muell' }] },
+    // Dieselbe Stromabrechnung noch einmal, weitergeleitet (älter als uid 1): wird nur einmal angeboten
+    { ordner: 'INBOX', uid: 6, datum: Date.parse('2026-02-20T09:00:00Z'), von_name: 'Michael Ziegler', von_adresse: 'michael@familie.example',
+      betreff: 'Fwd: Stromabrechnung 2025 Tribergle 22', text: 'Siehe Anhang', anhaenge: [{ name: 'Rechnung_Strom.pdf', typ: 'application/pdf', groesse: 50000, inhalt: '%PDF Strom' }] }
   ] }));
 
   const server = await serverStarten({ GOOGLE_TOKEN_URL: g.basis + '/token', GMAIL_BASIS: g.basis, GDRIVE_BASIS: g.basis + '/drive',
@@ -144,6 +147,8 @@ test('Anhänge: finden, einordnen, korrigieren, in Objekt › 02 Nebenkosten ›
     assert.equal(r.fehler, null);
     assert.equal(r.liste.length, 3, 'Logo, Newsletter und schon abgelegte Rechnung fallen weg: ' + JSON.stringify(r.liste.map(function (z) { return z.name; })));
     assert.equal(r.zahlen.in_drive, 1, 'gleiche Prüfsumme wie eine Datei in Drive — auch unter anderem Namen');
+    assert.equal(r.zahlen.doppelt, 1, 'die weitergeleitete Stromabrechnung ist derselbe Anhang wie in uid 1');
+    assert.equal(r.liste.filter(function (z) { return z.name === 'Rechnung_Strom.pdf'; }).length, 1);
     let a = r.liste.find(function (z) { return z.name === 'Rechnung_Strom.pdf'; });
     assert.equal(a.name, 'Rechnung_Strom.pdf');
     assert.equal(a.objekt, 't', 'Objekt aus dem Betreff');
@@ -212,12 +217,24 @@ test('Anhänge: finden, einordnen, korrigieren, in Objekt › 02 Nebenkosten ›
     assert.equal((await louis.put('/api/anhaenge/' + encodeURIComponent(a.id), { jahr: '2024' })).status, 409);
     assert.equal((await louis.post('/api/anhaenge/ablegen', { ids: [a.id] })).json.ergebnisse[0].ok, false, 'kein zweites Mal');
 
-    // Die zwei gleichnamigen Rechnungen: jede mit ihrem Inhalt; „03 Rechnungen“ und „2026“ werden einmal angelegt
+    // Die zwei gleichnamigen Rechnungen mit verschiedenem Inhalt: die erste wird abgelegt, die zweite nicht still als
+    // „… 2.pdf“ — Louis soll sie ansehen. Der freie Name steht dann als Vorschlag da; beim zweiten Ablegen geht sie durch.
     r = (await louis.get('/api/anhaenge')).json;
     const zwei = r.liste.filter(function (z) { return z.name === 'Rechnung.pdf'; });
     assert.equal(zwei.length, 2);
+    assert.equal(zwei[0].dateiname, zwei[1].dateiname, 'beide bekommen denselben Namen vorgeschlagen');
     const ab2 = await louis.post('/api/anhaenge/ablegen', { ids: zwei.map(function (z) { return z.id; }) });
-    assert.ok(ab2.json.ergebnisse.every(function (e) { return e.ok; }), JSON.stringify(ab2.json));
+    assert.equal(ab2.json.ergebnisse[0].ok, true, JSON.stringify(ab2.json));
+    assert.equal(ab2.json.ergebnisse[1].ok, false);
+    assert.match(ab2.json.ergebnisse[1].fehler, /Im Ordner liegt schon „.+“, aber mit anderem Inhalt — bitte ansehen/);
+    assert.equal(g.hochgeladen.length, 2, 'die zweite ist noch nicht hochgeladen');
+    r = (await louis.get('/api/anhaenge')).json;
+    const offen = r.liste.find(function (z) { return z.id === zwei[1].id; });
+    assert.equal(offen.dateiname, zwei[1].dateiname.replace(/\.pdf$/, ' 2.pdf'), 'freier Name als Vorschlag');
+    assert.equal(offen.sicherheit, 'niedrig', 'gilt als unsicher und ist damit nicht von selbst angehakt');
+    assert.match(offen.fehler, /bitte ansehen/);
+    const ab3 = await louis.post('/api/anhaenge/ablegen', { ids: [zwei[1].id] });
+    assert.equal(ab3.json.ergebnisse[0].ok, true, JSON.stringify(ab3.json));
     assert.deepEqual(g.hochgeladen.slice(1).map(function (h) { return h.inhalt; }).sort(), ['%PDF Muell', '%PDF Wasser']);
     assert.deepEqual(g.hochgeladen.map(function (h) { return h.typ; }), ['application/pdf', 'application/pdf', 'application/pdf'], 'Dateityp „pdf“ als application/pdf hochgeladen');
     assert.equal(g.angelegt.length, 3, JSON.stringify(g.angelegt));
@@ -229,6 +246,22 @@ test('Anhänge: finden, einordnen, korrigieren, in Objekt › 02 Nebenkosten ›
     r = (await louis.get('/api/anhaenge')).json;
     assert.equal(r.liste.length, 0);
     assert.equal(r.zahlen.abgelegt, 3);
+
+    // Steht ein Anhang zum Ablegen an, dessen Inhalt inzwischen schon in Drive liegt (hier: die Stromabrechnung,
+    // die eben abgelegt wurde): nicht noch einmal hochladen, sondern als „lag schon in Drive“ abhaken
+    const Database = require('better-sqlite3');
+    const roh = new Database(path.join(server.daten, 'vermietung.db'));
+    roh.prepare(`INSERT INTO anh_dateien (id, ordner, uid, uidvalidity, teil, nr, datum, von, betreff, mailtext, name, typ, groesse, status, objekt, art, jahr, dateiname, erstellt)
+      VALUES ('kopie', 'INBOX', 1, '', '2', 0, ?, 'Stadtwerke', 'Kopie', '', 'Rechnung_Strom.pdf', 'application/pdf', 50000, 'vorschlag', 't', 'Rechnung', '2026',
+      'Ganz anderer Name.pdf', ?)`).run(Date.now(), Date.now());
+    roh.close();
+    const hochVorher = g.hochgeladen.length;
+    const ab4 = await louis.post('/api/anhaenge/ablegen', { ids: ['kopie'] });
+    assert.equal(ab4.json.ergebnisse[0].ok, true, JSON.stringify(ab4.json));
+    assert.equal(ab4.json.ergebnisse[0].schonDa, true);
+    assert.equal(ab4.json.ergebnisse[0].name, '2026-03-03 Stromabrechnung 2025 Allgemeinstrom.pdf', 'die vorhandene Datei wird genannt');
+    assert.equal(g.hochgeladen.length, hochVorher, 'nichts doppelt hochgeladen');
+    assert.equal((await louis.get('/api/anhaenge')).json.zahlen.in_drive, 2);
   } finally {
     await server.stoppen();
     g.stoppen();

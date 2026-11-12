@@ -1509,6 +1509,7 @@
       }).join('') + '</div><input type="search" id="anh-q" placeholder="Suchen" value="' + esc(anh.suche) + '" autocomplete="off"></div>';
     h += '<div class="legal">' + (z0.neu ? (d.assistent ? 'Der Assistent liest noch ' + z0.neu + ' Anhänge (heute ' + d.heute + ' von ' + d.grenze + ') — das läuft im Hintergrund. ' : '') : '')
       + (z0.in_drive ? z0.in_drive + ' Anhänge liegen schon in Google Drive. ' : '') + (z0.abgelegt ? z0.abgelegt + ' hat die App schon abgelegt. ' : '')
+      + (z0.doppelt ? z0.doppelt + (z0.doppelt === 1 ? ' Anhang kam' : ' Anhänge kamen') + ' in mehreren Mails und ' + (z0.doppelt === 1 ? 'wird' : 'werden') + ' nur einmal angeboten. ' : '')
       + 'Mails bleiben ungelesen, im Postfach wird nichts gelöscht.</div>';
     if (!sichtbar.length) {
       h += '<div class="empty-note">' + (alle.length ? 'Nichts passt zu diesem Filter.' : (d.laeuft || z0.neu ? 'Die App sucht gerade nach Anhängen …' : 'Keine Anhänge mehr, die abzulegen wären.')) + '</div>';
@@ -10654,7 +10655,7 @@
               try { await api('anhaenge/' + encodeURIComponent(z.id), { method: 'PUT', body: { dateiname: anh.namen[z.id] } }); } catch (e) { /* bleibt beim Vorschlag */ }
             }
           }
-          let fertig = 0;
+          let fertig = 0, schonDa = 0;
           const fehler = [];
           for (let i = 0; i < liste.length; i += 10) {
             anh.arbeit = 'Lege ab … ' + i + ' von ' + liste.length;
@@ -10662,7 +10663,10 @@
             try {
               const a = await api('anhaenge/ablegen', { method: 'POST', body: { ids: liste.slice(i, i + 10).map(function (z) { return z.id; }) } });
               (a.ergebnisse || []).forEach(function (e) {
-                if (e.ok) { fertig++; delete anh.namen[e.id]; } else fehler.push(e);
+                if (e.ok) { if (e.schonDa) schonDa++; else fertig++; delete anh.namen[e.id]; return; }
+                fehler.push(e);
+                // Gleicher Name, anderer Inhalt: nicht mehr angehakt, damit Louis sie erst ansieht; der neue Name kommt vom Server
+                if (e.id && /liegt schon/.test(e.fehler || '')) { anh.ab[e.id] = true; delete anh.an[e.id]; delete anh.namen[e.id]; }
               });
               if ((a.ergebnisse || []).some(function (e) { return /bearbeiten erlauben/.test(e.fehler || ''); })) break;
             } catch (e) {
@@ -10673,7 +10677,7 @@
           anh.arbeit = '';
           await anhLaden();
           od.dateien = null;   // die Dokumente beim Objekt neu holen
-          toast(fertig + ' abgelegt' + (fehler.length ? ' · ' + fehler.length + ' nicht' + (fehler[0].name ? ', z. B. „' + fehler[0].name + '“' : '') + ': ' + (fehler[0].fehler || '') : ''));
+          toast(fertig + ' abgelegt' + (schonDa ? ' · ' + schonDa + ' lag' + (schonDa === 1 ? '' : 'en') + ' schon in Drive' : '') + (fehler.length ? ' · ' + fehler.length + ' nicht' + (fehler[0].name ? ', z. B. „' + fehler[0].name + '“' : '') + ': ' + (fehler[0].fehler || '') : ''));
           if (modal && modal.kind === 'anh') anhNeuZeichnen();
         });
     }

@@ -46,8 +46,10 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS anh_dateien_status ON anh_dateien (status);
 `);
+// Prüfsumme des Anhangs: derselbe Anhang in mehreren Mails (Erinnerung, Weiterleitung, Antwort) wird nur einmal angeboten
+try { db.exec('ALTER TABLE anh_dateien ADD COLUMN md5 TEXT'); } catch (e) { /* gibt es schon */ }
 // status: neu (noch nicht eingeordnet) · vorschlag (wartet auf Louis) · ablegen (wird gerade abgelegt) · in_drive (lag schon in
-// Drive, gleiche Prüfsumme) · abgelegt · ignoriert · fremd
+// Drive, gleiche Prüfsumme) · doppelt (gleicher Anhang wie ein anderer, der schon angeboten wird) · abgelegt · ignoriert · fremd
 // Ist der Server mitten im Ablegen neu gestartet: diese wieder zum Ablegen anbieten
 db.prepare("UPDATE anh_dateien SET status = 'vorschlag' WHERE status = 'ablegen'").run();
 
@@ -182,6 +184,12 @@ async function einordnen(q) {
   const inDrive = new Map(db.prepare("SELECT md5, id FROM dok_dateien WHERE md5 IS NOT NULL AND md5 <> ''").all().map(function (r) { return [r.md5, r.id]; }));
   const schonDa = db.prepare("UPDATE anh_dateien SET status = 'in_drive', drive_id = ? WHERE id = ? AND status = 'neu'");
   const merkeFehler = db.prepare('UPDATE anh_dateien SET fehler = ? WHERE id = ?');
+  const merkeSumme = db.prepare('UPDATE anh_dateien SET md5 = ? WHERE id = ?');
+  // Derselbe Anhang in einer anderen Mail (Erinnerung mit der Rechnung „nochmal im Anhang“, Weiterleitung, Antwort):
+  // schon abgelegt → erledigt; wird gerade angeboten → dieser hier ist doppelt und wird nicht noch einmal gezeigt
+  const zwilling = db.prepare("SELECT id, drive_id FROM anh_dateien WHERE md5 = ? AND id <> ? AND status IN ('vorschlag', 'ablegen', 'abgelegt', 'in_drive') "
+    + 'ORDER BY drive_id IS NULL, datum DESC LIMIT 1');
+  const alsDoppelt = db.prepare("UPDATE anh_dateien SET status = 'doppelt', fehler = ? WHERE id = ? AND status = 'neu'");
   const zeilen = db.prepare("SELECT * FROM anh_dateien WHERE status = 'neu' ORDER BY datum DESC LIMIT ?").all(mitAssistent ? LESEN_JE_LAUF : 200);
   for (const a of zeilen) {
     if (mitAssistent && tageszaehler(0) >= LESEN_JE_TAG) break;   // Tageslimit: morgen weiter
@@ -190,7 +198,14 @@ async function einordnen(q) {
       try { inhalt = (await q.anhangInhalt(a.ordner, a.uid, a.teil, a.name, a.uidvalidity)).inhalt; }
       catch (x) { merkeFehler.run(String(x.message).slice(0, 300), a.id); }
     }
-    if (inhalt && inDrive.has(pruefsumme(inhalt))) { schonDa.run(inDrive.get(pruefsumme(inhalt)), a.id); continue; }
+    if (inhalt) {
+      const summe = pruefsumme(inhalt);
+      merkeSumme.run(summe, a.id);
+      if (inDrive.has(summe)) { schonDa.run(inDrive.get(summe), a.id); continue; }
+      const z = zwilling.get(summe, a.id);
+      if (z && z.drive_id) { schonDa.run(z.drive_id, a.id); continue; }
+      if (z) { alsDoppelt.run('Gleicher Anhang wie ' + z.id, a.id); continue; }
+    }
     if (!mitAssistent) { mitRegeln(a, wb); continue; }
     let r;
     try { r = await lesen(a, s, inhalt); }
@@ -351,16 +366,30 @@ async function ablegen(a, b, wb) {
   const z = await ziel(a, b, wb, true);
   if (!z.id) throw fehler(z.fehlt || 'Kein Zielordner', 409);
   const d = await quelle().anhangInhalt(a.ordner, a.uid, a.teil, a.name, a.uidvalidity);
-  // Gleicher Name im Zielordner? Dann eine Nummer dazu
-  const e = namen.endung(a.dateiname || a.name), basis = namen.stamm(a.dateiname || a.name);
-  let name = a.dateiname || a.name;
+  // Liegt genau diese Datei schon in Drive — egal in welchem Ordner, egal unter welchem Namen? Dann nicht noch einmal.
+  // (Auch was die App gerade eben abgelegt hat, steht mit Prüfsumme in der Dokumentliste.)
+  const summe = pruefsumme(d.inhalt);
+  const vorhanden = db.prepare('SELECT id, name, pfad FROM dok_dateien WHERE md5 = ? LIMIT 1').get(summe);
+  if (vorhanden) {
+    db.prepare("UPDATE anh_dateien SET status = 'in_drive', drive_id = ?, md5 = ?, fehler = NULL WHERE id = ?").run(vorhanden.id, summe, a.id);
+    return { schonDa: true, pfad: vorhanden.pfad, name: vorhanden.name };
+  }
+  // Gleicher Name im Zielordner, aber anderer Inhalt: vielleicht eine neue Fassung, vielleicht ein anderes Schreiben.
+  // Nicht still „ 2“ anhängen — Louis soll sich das ansehen. Der freie Name steht dann als Vorschlag da.
+  const name = a.dateiname || a.name;
   const belegt = db.prepare('SELECT 1 FROM dok_dateien WHERE eltern = ? AND lower(name) = lower(?)');
-  for (let i = 2; belegt.get(z.id, name) && i < 1000; i++) name = basis + ' ' + i + e;
+  if (belegt.get(z.id, name)) {
+    const e = namen.endung(name), basis = namen.stamm(name);
+    let frei = name;
+    for (let i = 2; belegt.get(z.id, frei) && i < 1000; i++) frei = basis + ' ' + i + e;
+    db.prepare("UPDATE anh_dateien SET dateiname = ?, sicherheit = 'niedrig', quelle = 'assistent', md5 = ? WHERE id = ?").run(frei, summe, a.id);
+    throw fehler('Im Ordner liegt schon „' + name + '“, aber mit anderem Inhalt — bitte ansehen. Stimmt es, als „' + frei + '“ ablegen.', 409);
+  }
   const f = await hochladen(name, ar.mimeTyp(name, d.typ || a.typ), d.inhalt, z.id);
   const jetzt = Date.now();
   db.prepare(`INSERT OR REPLACE INTO dok_dateien (id, name, pfad, eltern, mime, groesse, geaendert, url, objekt, einheit, art, titel, datum, quelle,
-    status, erstmals, lauf, aufnahme) VALUES (@id, @name, @pfad, @eltern, @mime, @groesse, @geaendert, @url, @objekt, @einheit, @art, '', '', 'ablage',
-    'zugeordnet', @jetzt, @jetzt, '')`).run({ id: f.id, name: f.name || name, pfad: z.pfad, eltern: z.id, mime: f.mimeType || d.typ || '',
+    status, erstmals, lauf, aufnahme, md5) VALUES (@id, @name, @pfad, @eltern, @mime, @groesse, @geaendert, @url, @objekt, @einheit, @art, '', '', 'ablage',
+    'zugeordnet', @jetzt, @jetzt, '', @md5)`).run({ id: f.id, name: f.name || name, pfad: z.pfad, eltern: z.id, mime: f.mimeType || d.typ || '', md5: summe,
     groesse: Number(f.size) || d.inhalt.length, geaendert: Date.parse(f.modifiedTime || '') || jetzt,
     url: f.webViewLink || ('https://drive.google.com/file/d/' + f.id + '/view'), objekt: a.objekt, einheit: a.einheit || '', art: ar.dokArt(a.art), jetzt: jetzt });
   db.prepare('INSERT OR REPLACE INTO dok_meta (id, jahr, kostenart, betrag, herkunft) VALUES (?, ?, ?, ?, ?)')
@@ -398,7 +427,7 @@ app.get('/api/anhaenge', nurAngemeldet, nurVerwalter, async function (req, res) 
     postfach: q.postfachBereit(), drive: intern.googleVerbunden() && intern.darfLesen() && !!intern.auswahl(), bearbeiten: google.darfBearbeiten(),
     assistent: !!einstellung('anthropic_token'), heute: tageszaehler(0), grenze: LESEN_JE_TAG,
     laeuft: stand.laeuft, zuletzt: stand.zuletzt || null, fehler: stand.fehler,
-    zahlen: { neu: zahl('neu'), vorschlag: zahl('vorschlag'), in_drive: zahl('in_drive'), abgelegt: zahl('abgelegt'), fremd: zahl('fremd'), ignoriert: zahl('ignoriert') },
+    zahlen: { neu: zahl('neu'), vorschlag: zahl('vorschlag'), in_drive: zahl('in_drive'), doppelt: zahl('doppelt'), abgelegt: zahl('abgelegt'), fremd: zahl('fremd'), ignoriert: zahl('ignoriert') },
     kostenarten: ar.KOSTENARTEN, arten: ar.ARTEN, liste: liste
   });
 });
@@ -457,7 +486,7 @@ async function ablageLauf(ids) {
     const a = db.prepare('SELECT * FROM anh_dateien WHERE id = ?').get(id);
     try {
       const r = await ablegen(a, b, wb);
-      ergebnisse.push({ id: id, ok: true, pfad: r.pfad, name: r.name });
+      ergebnisse.push({ id: id, ok: true, pfad: r.pfad, name: r.name, schonDa: !!r.schonDa });
     } catch (x) {
       zurueck.run(String(x.message).slice(0, 300), id);
       ergebnisse.push({ id: id, ok: false, fehler: x.message, name: a.dateiname || a.name });
