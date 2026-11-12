@@ -202,6 +202,22 @@ const wartend = new Map();   // ticket → { nutzer, bis, versuche }
 const TICKET_MS = 5 * 60 * 1000;
 const HERAUSGEBER = 'Ziegler Verwaltung';
 
+// Welche Fassung der Oberfläche der Server gerade ausliefert: die Dateien mit Prüfsumme aus index.html. Die Oberfläche
+// vergleicht das mit dem, was sie selbst geladen hat, und bietet „Neu laden“ an, sobald etwas Neues eingespielt ist.
+const INDEX = require('path').join(__dirname, '..', '..', 'public', 'index.html');
+let fassungMerker = { zeit: -1, wert: '' };
+function appFassung() {
+  try {
+    const fs = require('fs');
+    const zeit = fs.statSync(INDEX).mtimeMs;
+    if (zeit !== fassungMerker.zeit) {
+      const html = fs.readFileSync(INDEX, 'utf8');
+      fassungMerker = { zeit: zeit, wert: (html.match(/[a-z]+\.(?:css|js)\?v=[0-9a-f]+/g) || []).sort().join(' ') };
+    }
+    return fassungMerker.wert;
+  } catch (e) { return ''; }
+}
+
 // ---------------- Schnittstellen ----------------
 app.get('/api/status', function (req, res) {
   const s = sitzungLesen(keksLesen(req, 'sid'));
@@ -211,7 +227,8 @@ app.get('/api/status', function (req, res) {
     angemeldet: !!s,
     nutzer: s ? s.nutzer : null,
     rolle: s ? rolleVon(s.nutzer) : null,
-    zweiterFaktor: !!(n && n.zweiter_aktiv)
+    zweiterFaktor: !!(n && n.zweiter_aktiv),
+    fassung: appFassung()
   });
 });
 

@@ -33,6 +33,10 @@ test('Einrichten: erster Zugang wird Verwalter, danach ist Einrichten gesperrt',
   a = await louis.get('/api/status');
   assert.equal(a.json.angemeldet, true);
   assert.equal(a.json.rolle, 'verwalter');
+  // Die ausgelieferte Fassung (Dateien mit Prüfsumme aus index.html): daran merkt die Oberfläche, dass sie neu laden sollte
+  const html = fs.readFileSync(path.join(__dirname, '..', '..', 'public', 'index.html'), 'utf8');
+  assert.equal(a.json.fassung, html.match(/[a-z]+\.(?:css|js)\?v=[0-9a-f]+/g).sort().join(' '));
+  assert.match(a.json.fassung, /app\.js\?v=[0-9a-f]{10}/);
 
   a = await papa.post('/api/setup', { name: 'dieb', passwort: 'geheim123' });
   assert.equal(a.status, 403);

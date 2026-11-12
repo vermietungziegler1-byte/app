@@ -11541,6 +11541,44 @@
     }).catch(function () { /* ohne Service Worker läuft die App normal weiter */ });
   }
 
+  // ---- Neue Fassung eingespielt? ----
+  // Alle fünf Minuten und beim Zurückkommen ins Fenster fragt die App den Server, welche Fassung er ausliefert. Ist es
+  // eine neuere als die geladene, erscheint unten „Neu laden“ — von selbst lädt sie nicht neu, damit nichts Getipptes verloren geht.
+  function eigeneFassung() {
+    return Array.prototype.map.call(document.querySelectorAll('script[src], link[rel="stylesheet"][href]'), function (e) {
+      const m = /[a-z]+\.(?:css|js)\?v=[0-9a-f]+/.exec(e.getAttribute('src') || e.getAttribute('href') || '');
+      return m ? m[0] : '';
+    }).filter(Boolean).sort().join(' ');
+  }
+  const FASSUNG = eigeneFassung();
+  let fassungGeprueft = 0, fassungGemeldet = '';
+  function fassungPruefen() {
+    if (!FASSUNG || Date.now() - fassungGeprueft < 50 * 1000) return;
+    fassungGeprueft = Date.now();
+    apiRoh('status').then(function (st) {
+      if (st && st.fassung && st.fassung !== FASSUNG && st.fassung !== fassungGemeldet) neueFassungZeigen(st.fassung);
+    }).catch(function () { /* Server gerade nicht erreichbar (etwa mitten im Einspielen) — beim nächsten Mal */ });
+  }
+  function neueFassungZeigen(fassung) {
+    fassungGemeldet = fassung;
+    if (document.querySelector('.neue-fassung')) return;
+    const el = document.createElement('div');
+    el.className = 'neue-fassung';
+    el.setAttribute('role', 'status');
+    el.innerHTML = '<span>Eine neue Version der App ist eingespielt.</span>'
+      + '<button type="button" class="nf-laden">Neu laden</button><button type="button" class="nf-weg" title="Später" aria-label="Später">✕</button>';
+    el.querySelector('.nf-laden').addEventListener('click', function () { location.reload(); });
+    el.querySelector('.nf-weg').addEventListener('click', function () { el.remove(); });
+    document.body.appendChild(el);
+  }
+  setInterval(fassungPruefen, 5 * 60 * 1000);
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') fassungPruefen(); });
+  window.addEventListener('focus', fassungPruefen);
+  // Im Windows-Programm lädt F5 neu wie im Browser (Strg+R ging dort schon)
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'F5' && window.zieglerDesktop) { ev.preventDefault(); location.reload(); }
+  });
+
   // Die Uhr im Tagesplan: die Jetzt-Linie wandert mit, Verstrichenes wird rot,
   // und um Mitternacht klappt die Seite auf den neuen Tag um.
   let kalUhrTag = null;
