@@ -999,42 +999,79 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
    ================================================================== */
 #app .od-leer { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 14px 0; color: var(--muted); font-size: 14px; max-width: 560px; }
 #app .od-klein { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-#app .od-banner { display: flex; align-items: center; gap: 10px; margin: 10px 0 4px; padding: 10px 14px; border-radius: 12px; background: var(--glas); font-size: 13px; }
-#app .od-banner b { font-weight: 600; }
-#app .od-leiste { display: flex; align-items: center; gap: 10px; margin: 12px 0 6px; flex-wrap: wrap; }
-#app .od-leiste input[type="search"] { flex: 0 0 240px; padding: 7px 11px; border-radius: 9px; border: 1px solid transparent; background: var(--fuellung); color: var(--ink); font-size: 13px; }
-#app .od-chips { display: flex; gap: 6px; overflow-x: auto; flex: 1; min-width: 0; scrollbar-width: none; }
-#app .od-chips::-webkit-scrollbar { display: none; }
-#app button.od-chip { flex: none; white-space: nowrap; padding: 5px 11px; border-radius: 999px; background: var(--fuellung); color: var(--ink); font-size: 12.5px; font-weight: 600; min-height: 0; }
-#app button.od-chip span { color: var(--muted); font-weight: 500; }
-#app button.od-chip.an { background: var(--messing); color: #fff; }
-#app button.od-chip.an span { color: rgba(255, 255, 255, .8); }
-#app .od-raster { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 20px; margin-top: 8px; align-items: start; }
-#app .od-raster:has(.od-pruefen) { grid-template-columns: 180px minmax(0, 1fr) 290px; }
-#app .od-arten { display: flex; flex-direction: column; gap: 1px; }
-#app button.od-artknopf {
-  display: flex; justify-content: space-between; gap: 8px; padding: 6px 10px; border-radius: 8px; text-align: left;
-  background: transparent; color: var(--ink); font-size: 13.5px; font-weight: 500; min-height: 0;
+/* Beim Objekt: oben Suche, Wohnung und Anzahl; links die Arten in einem Kasten wie bei „Zahlen“;
+   rechts eine Tabelle wie bei „Einheiten“ (Kopfzeile, Streifen, Spalten für Art, Wohnung, Datum, Betrag) */
+#app .od-leiste { display: flex; align-items: center; gap: 10px; margin: 14px 0 12px; flex-wrap: wrap; }
+#app .od-leiste input[type="search"] {
+  flex: 1 1 240px; max-width: 360px; padding: 8px 12px; border-radius: 10px; border: 1px solid transparent;
+  background: var(--fuellung); color: var(--ink); font-size: 13.5px;
 }
-#app button.od-artknopf span { color: var(--muted); font-size: 12px; }
+#app .od-leiste select.od-wahl {
+  flex: 0 1 300px; min-width: 0; width: auto; padding: 8px 30px 8px 12px; border-radius: 10px; border: 1px solid transparent;
+  background-color: var(--fuellung); color: var(--ink); font-size: 13.5px; font-weight: 500;
+}
+#app .od-stand { margin-left: auto; font-size: 12.5px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+#app .od-panel { background: var(--putz); border: 1px solid var(--line-soft); border-radius: 10px; padding: 12px 14px; }
+#app .od-panel h3 { margin: 0 0 8px; font-size: 10px; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); font-weight: 700; }
+#app .od-raster { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 18px; align-items: start; }
+#app .od-arten { display: flex; flex-direction: column; gap: 1px; padding: 12px 6px 6px; }
+#app .od-arten h3 { padding: 0 8px; }
+#app button.od-artknopf {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border-radius: 7px; text-align: left;
+  background: transparent; color: var(--ink); font-size: 13px; font-weight: 500; min-height: 0;
+}
+#app button.od-artknopf .od-art-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#app button.od-artknopf .od-zahl { flex: none; min-width: 26px; text-align: right; color: var(--muted); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
 #app button.od-artknopf:hover { background: var(--fuellung); color: var(--ink); }
-#app button.od-artknopf.an { background: var(--fuellung-stark); font-weight: 600; }
-#app .od-liste { min-width: 0; }
+#app button.od-artknopf.an { background: var(--glas); color: var(--messing); font-weight: 650; }
+#app button.od-artknopf.an .od-zahl { color: var(--messing); }
+#app button.od-artknopf.neu .od-art-name::before {
+  content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%; background: var(--messing); vertical-align: 1px;
+}
+#app .od-liste { min-width: 0; container-type: inline-size; }
+#app .od-tafel { --od-spalten: 24px minmax(0, 1fr) 142px 150px 82px 88px; }
+#app .od-tafel.ohne-betrag { --od-spalten: 24px minmax(0, 1fr) 142px 150px 82px; }
+#app .od-tafel.ohne-betrag .od-betrag { display: none; }
+#app .od-kopf {
+  display: grid; grid-template-columns: var(--od-spalten); gap: 12px; padding: 2px 46px 8px 10px; border-bottom: 1px solid var(--line);
+  font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); font-weight: 700; white-space: nowrap;
+}
+#app .od-tafel.ohne-aendern .od-kopf { padding-right: 10px; }
+#app .od-kopf .r { text-align: right; }
+/* Jahr als Zwischenzeile: „2026 · 38 Dateien · 32.778 € aus 18 Belegen“ */
+#app .od-jahr { display: flex; align-items: baseline; gap: 10px; padding: 18px 10px 7px; border-bottom: 1px solid var(--line); }
+#app .od-tafel > .od-jahr:first-of-type { padding-top: 12px; }
+#app .od-jahr b { font-size: 14px; font-weight: 700; }
+#app .od-jahr span { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 #app .od-zeile { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--line-soft); }
-#app .od-link { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 9px 4px; color: var(--ink); text-decoration: none; border-radius: 8px; }
-#app .od-link:hover { background: var(--fuellung); }
+#app .od-block > .od-zeile:nth-child(even) { background: var(--putz); }
+#app .od-zeile:hover, #app .od-block > .od-zeile:nth-child(even):hover { background: var(--glas); }
+#app .od-link { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 8px 10px; color: var(--ink); text-decoration: none; }
+#app .od-tafel .od-link { display: grid; grid-template-columns: var(--od-spalten); }
 #app .od-ic {
-  width: 32px; height: 38px; border-radius: 6px; flex: none; display: flex; align-items: flex-end; justify-content: center;
-  padding-bottom: 4px; box-sizing: border-box; color: #fff; font-size: 8.5px; font-weight: 700; letter-spacing: .02em;
+  width: 24px; height: 29px; border-radius: 5px; flex: none; display: flex; align-items: flex-end; justify-content: center;
+  padding-bottom: 3px; box-sizing: border-box; color: #fff; font-size: 7px; font-weight: 700; letter-spacing: .02em;
 }
 #app .od-ic.od-pdf { background: linear-gradient(180deg, #ff6b5e, #e5392c); }
 #app .od-ic.od-text { background: linear-gradient(180deg, #4f8cff, #2a63e0); }
 #app .od-ic.od-tabelle { background: linear-gradient(180deg, #3fc16b, #1f9a49); }
 #app .od-ic.od-bild { background: linear-gradient(180deg, #5ed37a, #2fa850); }
-#app .od-inhalt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-#app .od-name { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#app .od-inhalt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+#app .od-name { display: flex; align-items: center; min-width: 0; font-weight: 600; font-size: 13.5px; }
+#app .od-name-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#app .od-name .od-neu { flex: none; }
 #app .od-meta { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#app .od-art { display: inline-block; padding: 0 7px; margin-right: 6px; border-radius: 5px; font-size: 11px; font-weight: 600; background: var(--fuellung); color: var(--ink); }
+#app .od-sp { display: none; }
+#app .od-tafel .od-sp { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+#app .od-tafel .od-kurz, #app .od-tafel .od-meta.ohne-zusatz { display: none; }
+#app .od-wo { color: var(--ink); }
+#app .od-wo.leer { color: var(--muted); }
+#app .od-wo small { display: block; color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; }
+#app .od-tafel .od-datum, #app .od-tafel .od-betrag { text-align: right; font-variant-numeric: tabular-nums; }
+#app .od-tafel .od-datum { color: var(--muted); }
+#app .od-tafel .od-betrag { font-weight: 550; }
+#app .od-art { display: inline-block; padding: 1px 7px; margin-right: 6px; border-radius: 5px; font-size: 11px; font-weight: 600; background: var(--fuellung); color: var(--ink); }
+#app .od-sp-art .od-art { margin-right: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
 #app .od-art-mietvertrag, #app .od-art-kaution, #app .od-art-kndigung, #app .od-art-selbstauskunft { background: rgba(191, 90, 242, .18); color: #bf5af2; }
 #app .od-art-nebenkosten { background: rgba(48, 209, 88, .18); color: #28a745; }
 #app .od-art-rechnung, #app .od-art-angebot { background: rgba(255, 159, 10, .18); color: #e08600; }
@@ -1042,28 +1079,36 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 #app .od-art-vertrag { background: rgba(94, 92, 230, .18); color: #5e5ce6; }
 #app .od-art-steuer { background: rgba(255, 69, 58, .14); color: #e5392c; }
 #app .od-art-nebenkostenrechnung { background: rgba(48, 209, 88, .26); color: #1f9a49; }
-/* Dokumente beim Objekt nach Jahr: „Nebenkosten-Rechnungen 2025 · 12 Dateien · 4.380,00 €“ */
-#app .od-jahr { display: flex; align-items: baseline; gap: 10px; padding: 14px 4px 6px; border-bottom: 1px solid var(--line-soft); }
-#app .od-jahr b { font-size: 15px; font-weight: 700; }
-#app .od-jahr span { font-size: 12.5px; color: var(--muted); }
-#app .od-neu { margin-left: 6px; padding: 0 6px; border-radius: 5px; background: var(--td-rot); color: #fff; font-size: 10px; font-weight: 700; vertical-align: 1px; }
-#app .od-wo { flex: none; text-align: right; font-size: 12.5px; color: var(--ink); white-space: nowrap; max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
-#app .od-wo small { display: block; color: var(--muted); font-size: 11.5px; }
-#app button.od-aendern { flex: none; opacity: 0; transition: opacity .12s; }
-#app .od-zeile:hover button.od-aendern { opacity: 1; }
+#app .od-art-schriftverkehr { background: rgba(100, 210, 255, .16); color: #0a9ed6; }
+#app .od-neu {
+  margin-left: 7px; padding: 1px 5px; border-radius: 4px; background: var(--glas); color: var(--messing);
+  font-size: 9.5px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; vertical-align: 1px;
+}
+#app button.od-aendern { flex: none; width: 34px; padding-left: 0; padding-right: 0; margin-right: 6px; font-size: 14px; opacity: 0; transition: opacity .12s; }
+#app .od-zeile:hover button.od-aendern, #app button.od-aendern:focus-visible { opacity: 1; }
 @media (hover: none) { #app button.od-aendern { opacity: .8; } }
-#app .od-pruefen { background: var(--surface); border-radius: 14px; padding: 12px 14px; }
-#app .od-pruefen h4 { margin: 0 0 2px; font-size: 15px; font-weight: 700; }
+/* Schmale Liste (oder kein Platz neben den Arten): Art, Wohnung, Datum und Betrag in die Zeile unter dem Namen */
+@container (max-width: 760px) {
+  #app .od-kopf { display: none; }
+  #app .od-tafel .od-link { display: flex; }
+  #app .od-tafel .od-sp { display: none; }
+  #app .od-tafel .od-kurz { display: inline; }
+  #app .od-tafel .od-meta.ohne-zusatz { display: block; }
+}
+/* „Bitte kurz prüfen“ als eigener Kasten über der Tabelle, die Vorschläge nebeneinander */
+#app .od-pruefen { margin-bottom: 14px; border-color: rgba(255, 159, 10, .4); }
+#app .od-pruefen h3 { color: #e08600; }
 #app .od-hinweis { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
-#app .od-pk { padding: 10px 0; border-top: 1px solid var(--line-soft); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-#app .od-pk-name { width: 100%; display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; min-width: 0; }
+#app .od-pk-raster { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; margin-top: 10px; }
+#app .od-pk { padding: 10px 12px; border-radius: 9px; background: var(--surface); border: 1px solid var(--line-soft); display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+#app .od-pk-name { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; min-width: 0; }
 #app .od-pk-name a { color: var(--ink); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#app .od-pk-name .od-ic { width: 22px; height: 26px; font-size: 6.5px; padding-bottom: 2px; }
-#app .od-pk-vorschlag { width: 100%; font-size: 12.5px; color: var(--muted); }
+#app .od-pk-name .od-ic { width: 20px; height: 24px; font-size: 6px; padding-bottom: 2px; }
+#app .od-pk-vorschlag { font-size: 12.5px; color: var(--muted); }
 #app .od-pk-vorschlag b { color: var(--ink); font-weight: 600; }
+#app .od-pk-knoepfe { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
 #app .od-gruppe { margin: 10px 0 2px; font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
 #app .od-liste.klein .od-link { padding: 6px 2px; }
-#app .od-liste.klein .od-ic { width: 26px; height: 31px; font-size: 7px; }
 #app .od-schritte { margin: 8px 0 14px; padding-left: 20px; font-size: 14px; line-height: 1.55; }
 #app .od-schritte li { margin-bottom: 8px; }
 /* Ordnerwahl: eine gruppierte Liste mit Häkchen, Unterordner eingerückt */
@@ -1178,14 +1223,24 @@ html:has(#app[data-theme="dark"]) body { background: #000; }
 #app .od-datei .tiny-link { color: var(--messing); font-weight: 600; text-decoration: none; font-size: 13px; }
 #app .od-merken { display: flex; gap: 8px; align-items: flex-start; font-size: 13.5px; margin: 6px 0 4px; }
 #app .od-merken small { display: block; color: var(--muted); font-size: 12px; }
+/* Mittlere Breite und Handy: Arten als waagrechte Leiste über der Tabelle, damit die Tabelle die ganze Breite bekommt */
+@media (max-width: 1180px) {
+  #app .od-raster { grid-template-columns: 1fr; gap: 10px; }
+  #app .od-arten { flex-direction: row; overflow-x: auto; gap: 6px; padding: 0 0 2px; background: none; border: 0; border-radius: 0; scrollbar-width: none; }
+  #app .od-arten::-webkit-scrollbar { display: none; }
+  #app .od-arten h3 { display: none; }
+  #app button.od-artknopf { flex: none; width: auto; border-radius: 999px; background: var(--fuellung); padding: 6px 12px; font-size: 12.5px; }
+  #app button.od-artknopf .od-art-name { overflow: visible; }
+  #app button.od-artknopf .od-zahl { min-width: 0; }
+}
 @media (max-width: 900px) {
-  #app .od-raster, #app .od-raster:has(.od-pruefen) { grid-template-columns: 1fr; }
-  #app .od-arten { flex-direction: row; overflow-x: auto; gap: 6px; scrollbar-width: none; }
-  #app button.od-artknopf { flex: none; border-radius: 999px; background: var(--fuellung); padding: 5px 11px; font-size: 12.5px; }
-  #app .od-pruefen { order: -1; }
-  #app .od-leiste input[type="search"] { flex: 1 1 100%; }
+  /* Handy: Suche und Wohnung untereinander, die Prüf-Vorschläge nebeneinander zum Wischen */
+  #app .od-leiste input[type="search"] { flex: 1 1 100%; max-width: none; }
+  #app .od-leiste select.od-wahl { flex: 1 1 auto; }
+  #app .od-pk-raster { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; gap: 8px; margin: 8px -14px 0; padding: 0 14px 2px; scrollbar-width: none; }
+  #app .od-pk-raster::-webkit-scrollbar { display: none; }
+  #app .od-pk { flex: 0 0 84%; scroll-snap-align: start; }
   #app .od-zahlen { grid-template-columns: repeat(2, 1fr); }
-  #app .od-wo { max-width: 110px; }
 }
 
 /* ZIP-Anhang im Postfach: Inhalt unter der Mail aufklappen, Dateien darin einzeln öffnen */

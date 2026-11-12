@@ -1210,18 +1210,28 @@
     return d.geaendert ? new Date(d.geaendert).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '';
   }
   function odNeu(d) { return d.gesehen && Date.now() - d.gesehen < 2 * 86400000; }
-  // Eine Zeile: Antippen öffnet die Datei in Google Drive, „Ändern“ ordnet neu zu
+  // Eine Zeile: Antippen öffnet die Datei in Google Drive, „Ändern“ ordnet neu zu.
+  // Beim Objekt stehen Art, Wohnung, Datum und Betrag in eigenen Spalten (wie die Tabelle der Einheiten);
+  // im Fenster der Wohnung und in schmalen Ansichten kommt dasselbe kurz in die Zeile unter dem Namen.
   function odZeileHtml(d, mitWo) {
     const wo = odEinheitName(d.objekt, d.einheit);
+    const art = '<span class="od-art od-art-' + esc(String(d.art || 'Sonstiges').toLowerCase().replace(/[^a-z]/g, '')) + '">' + esc(d.art || 'Sonstiges') + '</span>';
+    const woText = wo.einheit || 'Ganzes Objekt';
+    const datum = odDatum(d);
+    const betrag = d.betrag ? money(d.betrag) : '';
+    const zusatz = [d.kostenart, d.titel ? d.name : ''].filter(Boolean).join(' · ');
+    const kurz = [mitWo ? woText : '', datum, betrag].filter(Boolean).join(' · ');
     return '<div class="od-zeile">'
-      + '<a class="od-link" href="' + esc(d.url) + '" target="_blank" rel="noopener">' + odSymbol(d)
-      + '<span class="od-inhalt"><span class="od-name">' + esc(d.titel || d.name) + (odNeu(d) ? '<span class="od-neu">NEU</span>' : '') + '</span>'
-      + '<span class="od-meta"><span class="od-art od-art-' + esc(String(d.art || 'Sonstiges').toLowerCase().replace(/[^a-z]/g, '')) + '">' + esc(d.art || 'Sonstiges') + '</span>'
-      + (d.kostenart ? esc(d.kostenart) + ' · ' : '') + (d.betrag ? esc(money(d.betrag)) + ' · ' : '')
-      + esc(odDatum(d)) + (d.titel ? ' · ' + esc(d.name) : '') + ' · ' + esc(d.pfad || '/') + '</span></span>'
-      + (mitWo ? '<span class="od-wo">' + esc(wo.einheit || 'ganzes Objekt') + (wo.mieter ? '<small>' + esc(wo.mieter) + '</small>' : '') + '</span>' : '')
+      + '<a class="od-link" href="' + esc(d.url) + '" target="_blank" rel="noopener" title="' + esc((d.pfad || '/') + ' · in Google Drive öffnen') + '">'
+      + odSymbol(d)
+      + '<span class="od-inhalt"><span class="od-name"><span class="od-name-text">' + esc(d.titel || d.name) + '</span>' + (odNeu(d) ? '<span class="od-neu">neu</span>' : '') + '</span>'
+      + '<span class="od-meta' + (zusatz ? '' : ' ohne-zusatz') + '"><span class="od-kurz">' + art + esc(kurz) + (kurz && zusatz ? ' · ' : '') + '</span>' + esc(zusatz) + '</span></span>'
+      + '<span class="od-sp od-sp-art">' + art + '</span>'
+      + (mitWo ? '<span class="od-sp od-wo' + (wo.einheit ? '' : ' leer') + '">' + esc(woText) + (wo.mieter ? '<small>' + esc(wo.mieter) + '</small>' : '') + '</span>' : '')
+      + '<span class="od-sp od-datum">' + esc(datum) + '</span>'
+      + '<span class="od-sp od-betrag">' + esc(betrag) + '</span>'
       + '</a>'
-      + (nutzerRolle === 'verwalter' ? '<button class="tiny ghost od-aendern" data-act="od-aendern" data-id="' + esc(d.id) + '" title="Anders zuordnen">Ändern</button>' : '')
+      + (nutzerRolle === 'verwalter' ? '<button class="tiny ghost od-aendern" data-act="od-aendern" data-id="' + esc(d.id) + '" title="Anders zuordnen" aria-label="Anders zuordnen">✎</button>' : '')
       + '</div>';
   }
   function odVorschlagHtml(d) {
@@ -1230,9 +1240,9 @@
       + '<div class="od-pk-vorschlag">' + (d.objekt
           ? 'Sieht aus wie <b>' + esc(d.titel || d.art || 'Dokument') + '</b> für <b>' + esc(wo.einheit ? wo.einheit + (wo.mieter ? ' · ' + wo.mieter : '') : wo.objekt) + '</b>'
           : 'Wozu gehört diese Datei?') + '</div>'
-      + (d.objekt ? '<button class="tiny primary" data-act="od-ok" data-id="' + esc(d.id) + '">Stimmt</button>' : '')
+      + '<div class="od-pk-knoepfe">' + (d.objekt ? '<button class="tiny primary" data-act="od-ok" data-id="' + esc(d.id) + '">Stimmt</button>' : '')
       + '<button class="tiny" data-act="od-aendern" data-id="' + esc(d.id) + '">' + (d.objekt ? 'Ändern' : 'Zuordnen') + '</button>'
-      + '<button class="tiny ghost" data-act="od-weg" data-id="' + esc(d.id) + '">Gehört zu keinem</button></div>';
+      + '<button class="tiny ghost" data-act="od-weg" data-id="' + esc(d.id) + '">Gehört zu keinem</button></div></div>';
   }
 
   // Nach Jahr gruppiert (neueste oben, ohne Jahr unten), mit Anzahl und Summe der erkannten Beträge —
@@ -1240,7 +1250,8 @@
   function odNachJahr(liste, art) {
     const jahre = {}, reihe = [];
     liste.forEach(function (d) { const j = d.jahr || ''; if (!jahre[j]) { jahre[j] = []; reihe.push(j); } jahre[j].push(d); });
-    if (reihe.length <= 1 && !art) return liste.map(function (d) { return odZeileHtml(d, true); }).join('');
+    const block = function (ds) { return '<div class="od-block">' + ds.map(function (d) { return odZeileHtml(d, true); }).join('') + '</div>'; };
+    if (reihe.length <= 1 && !art) return block(liste);
     reihe.sort(function (x, y) { if (!x) return 1; if (!y) return -1; return y.localeCompare(x); });
     return reihe.map(function (j) {
       const ds = jahre[j];
@@ -1248,12 +1259,12 @@
       const summe = mitBetrag.reduce(function (s, d) { return s + Number(d.betrag); }, 0);
       return '<div class="od-jahr"><b>' + esc((art ? odArtLabel(art) + ' ' : '') + (j || 'ohne Jahr')) + '</b><span>'
         + ds.length + (ds.length === 1 ? ' Datei' : ' Dateien')
-        + (mitBetrag.length ? ' · ' + esc(money(summe)) + (mitBetrag.length < ds.length ? ' (bei ' + mitBetrag.length + ' erkannt)' : '') : '')
-        + '</span></div>' + ds.map(function (d) { return odZeileHtml(d, true); }).join('');
+        + (mitBetrag.length ? ' · ' + esc(money(summe)) + (mitBetrag.length < ds.length ? ' aus ' + mitBetrag.length + (mitBetrag.length === 1 ? ' Beleg' : ' Belegen') : '') : '')
+        + '</span></div>' + block(ds);
     }).join('');
   }
 
-  // Reiter „Dokumente“ beim Objekt
+  // Reiter „Dokumente“ beim Objekt: oben Suche und Wohnung, links die Arten, rechts die Tabelle
   function odObjektHtml(o) {
     odSicherstellen();
     if (!od.status) return '<div class="empty-note">wird geladen …</div>';
@@ -1269,35 +1280,44 @@
     const imFilter = alle.filter(function (d) { return !f || (f === '#objekt' ? !d.einheit : d.einheit === f); });
     const arten = {};
     imFilter.forEach(function (d) { arten[d.art || 'Sonstiges'] = (arten[d.art || 'Sonstiges'] || 0) + 1; });
-    const liste = imFilter.filter(function (d) { return !a || (d.art || 'Sonstiges') === a; })
-      .filter(function (d) { return !q || (d.name + ' ' + (d.titel || '') + ' ' + d.pfad + ' ' + (d.art || '')).toLowerCase().indexOf(q) !== -1; });
-    const neu = alle.filter(odNeu).length;
+    const neu = imFilter.filter(odNeu);
+    const liste = imFilter.filter(function (d) { return !a || (a === '#neu' ? odNeu(d) : (d.art || 'Sonstiges') === a); })
+      .filter(function (d) { return !q || (d.name + ' ' + (d.titel || '') + ' ' + d.pfad + ' ' + (d.art || '') + ' ' + (d.kostenart || '')).toLowerCase().indexOf(q) !== -1; });
+    const mitBetrag = liste.some(function (d) { return d.betrag; });
     const proEinheit = {};
     alle.forEach(function (d) { if (d.einheit) proEinheit[d.einheit] = (proEinheit[d.einheit] || 0) + 1; });
-    const chip = function (wert, name, zahl) {
-      return '<button class="od-chip' + (f === wert ? ' an' : '') + '" data-act="od-filter" data-id="' + o.id + '" data-wert="' + esc(wert) + '">'
-        + esc(name) + (zahl ? ' <span>' + zahl + '</span>' : '') + '</button>';
+    const option = function (wert, name, zahl) {
+      return '<option value="' + esc(wert) + '"' + (f === wert ? ' selected' : '') + '>' + esc(name) + ' · ' + zahl + '</option>';
     };
-    let h = '';
-    if (neu || pruefen.length) {
-      h += '<div class="od-banner">☁︎ <span>' + (neu ? '<b>' + neu + (neu === 1 ? ' neue Datei' : ' neue Dateien') + '</b> aus Google Drive in den letzten zwei Tagen' : '')
-        + (neu && pruefen.length ? ' · ' : '') + (pruefen.length ? pruefen.length + ' bitte kurz prüfen' : '') + '</span></div>';
-    }
-    h += '<div class="od-leiste"><input type="search" id="od-q-' + o.id + '" data-od-suche="' + o.id + '" placeholder="In Dokumenten suchen" value="' + esc(od.suche[o.id] || '') + '" autocomplete="off">'
-      + '<div class="od-chips">' + chip('', 'Alle', alle.length) + chip('#objekt', 'Ganzes Objekt', alle.filter(function (d) { return !d.einheit; }).length)
-      + o.units.filter(function (x) { return proEinheit[x.id]; }).map(function (x) { return chip(x.id, x.name + (x.tenant ? ' · ' + x.tenant.split(',')[0] : ''), proEinheit[x.id]); }).join('')
-      + '</div></div>';
-    h += '<div class="od-raster">'
-      + '<div class="od-arten">' + ['', ].concat(OD_ARTEN.filter(function (k) { return arten[k]; })).map(function (k) {
-          return '<button class="od-artknopf' + (a === k ? ' an' : '') + '" data-act="od-art" data-id="' + o.id + '" data-wert="' + esc(k) + '">'
-            + esc(k ? odArtLabel(k) : 'Alle Arten') + '<span>' + (k ? arten[k] : imFilter.length) + '</span></button>';
-        }).join('') + '</div>'
-      + '<div class="od-liste">' + (liste.length ? odNachJahr(liste, a)
-          : '<div class="empty-note">' + (alle.length ? 'Keine Datei passt zu diesem Filter.' : 'Noch keine Datei diesem Objekt zugeordnet. Neue Dateien in Google Drive tauchen hier nach ein paar Minuten auf.') + '</div>')
-      + '</div>'
-      + (pruefen.length ? '<div class="od-pruefen"><h4>Bitte kurz prüfen</h4><div class="od-hinweis">Hier war sich die App nicht sicher. '
-          + 'Ein Tipp genügt — sie merkt sich das für den Ordner.</div>' + pruefen.slice(0, 12).map(odVorschlagHtml).join('') + '</div>' : '')
+    const knopf = function (wert, name, zahl, extra) {
+      return '<button class="od-artknopf' + (a === wert ? ' an' : '') + (extra ? ' ' + extra : '') + '" data-act="od-art" data-id="' + o.id + '" data-wert="' + esc(wert) + '" title="' + esc(name) + '">'
+        + '<span class="od-art-name">' + esc(name) + '</span><span class="od-zahl">' + zahl + '</span></button>';
+    };
+    let h = '<div class="od-leiste">'
+      + '<input type="search" id="od-q-' + o.id + '" data-od-suche="' + o.id + '" placeholder="In Dokumenten suchen" value="' + esc(od.suche[o.id] || '') + '" autocomplete="off">'
+      + '<select class="od-wahl" data-od-wohnung="' + o.id + '" aria-label="Wohnung">'
+      + option('', 'Alle Wohnungen', alle.length) + option('#objekt', 'Nur ganzes Objekt', alle.filter(function (d) { return !d.einheit; }).length)
+      + o.units.filter(function (x) { return proEinheit[x.id] || f === x.id; }).map(function (x) {
+          return option(x.id, x.name + (x.tenant ? ' · ' + x.tenant.split(',')[0] : ''), proEinheit[x.id] || 0);
+        }).join('') + '</select>'
+      + '<span class="od-stand">' + (liste.length === alle.length ? alle.length + ' Dateien' : liste.length + ' von ' + alle.length + ' Dateien') + '</span>'
       + '</div>';
+    if (pruefen.length) {
+      h += '<div class="od-panel od-pruefen"><h3>Bitte kurz prüfen · ' + pruefen.length + '</h3>'
+        + '<div class="od-hinweis">Hier war sich die App nicht sicher. Ein Klick genügt — sie merkt sich das für den Ordner.</div>'
+        + '<div class="od-pk-raster">' + pruefen.slice(0, 12).map(odVorschlagHtml).join('') + '</div>'
+        + (pruefen.length > 12 ? '<div class="od-hinweis">… und ' + (pruefen.length - 12) + ' weitere</div>' : '') + '</div>';
+    }
+    h += '<div class="od-raster">'
+      + '<div class="od-panel od-arten"><h3>Arten</h3>' + knopf('', 'Alle Arten', imFilter.length)
+      + (neu.length || a === '#neu' ? knopf('#neu', 'Neu seit vorgestern', neu.length, 'neu') : '')
+      + OD_ARTEN.filter(function (k) { return arten[k] || a === k; }).map(function (k) { return knopf(k, odArtLabel(k), arten[k] || 0); }).join('') + '</div>'
+      + '<div class="od-liste">' + (liste.length
+          ? '<div class="od-tafel' + (nutzerRolle === 'verwalter' ? '' : ' ohne-aendern') + (mitBetrag ? '' : ' ohne-betrag')
+            + '"><div class="od-kopf"><span></span><span>Datei</span><span>Art</span><span>Wohnung</span><span class="r">Datum</span>'
+            + (mitBetrag ? '<span class="r">Betrag</span>' : '') + '</div>' + odNachJahr(liste, a === '#neu' ? '' : a) + '</div>'
+          : '<div class="empty-note">' + (alle.length ? 'Keine Datei passt zu diesem Filter.' : 'Noch keine Datei diesem Objekt zugeordnet. Neue Dateien in Google Drive tauchen hier nach ein paar Minuten auf.') + '</div>')
+      + '</div></div>';
     return h;
   }
 
@@ -9679,6 +9699,9 @@
     // Dokumente beim Objekt: Suche beim Tippen; im Zuordnen-Fenster lädt die Wahl des Objekts dessen Wohnungen
     root.querySelectorAll('[data-od-suche]').forEach(function (feld) {
       feld.addEventListener('input', function () { od.suche[feld.getAttribute('data-od-suche')] = feld.value; render(); });
+    });
+    root.querySelectorAll('[data-od-wohnung]').forEach(function (wahl) {
+      wahl.addEventListener('change', function () { od.filter[wahl.getAttribute('data-od-wohnung')] = wahl.value; render(); });
     });
     const odo = root.querySelector('#od-objekt');
     if (odo) odo.addEventListener('change', function () { modal.objekt = odo.value; modal.einheit = ''; modal.art = val('od-art'); render(); });
