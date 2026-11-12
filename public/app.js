@@ -135,6 +135,9 @@
     const name = String(el.getAttribute('data-datei-name') || 'anhang').replace(/[:\r\n]+/g, ' ').replace(/ {2,}/g, ' ').trim() || 'anhang';
     const typ = el.getAttribute('data-datei-typ') || 'application/octet-stream';
     const adresse = new URL(el.getAttribute('data-datei-url'), location.href).href;
+    // Nur die Datei mitgeben: Sonst nehmen manche Programme (etwa Claude) lieber den Link als Text — der hilft dort
+    // nichts, weil er die Anmeldung braucht. Nur Chrome und Edge (window.chrome) können eine Datei übergeben.
+    if (window.chrome) { try { ev.dataTransfer.clearData(); } catch (e) { /* dann eben mit Link */ } }
     try { ev.dataTransfer.setData('DownloadURL', typ + ':' + name + ':' + adresse); } catch (e) { /* Browser kann das nicht */ }
     ev.dataTransfer.effectAllowed = 'copy';
   });
